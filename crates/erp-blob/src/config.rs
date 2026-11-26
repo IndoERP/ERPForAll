@@ -160,6 +160,8 @@ pub struct AttachmentConfig {
     pub stores: BTreeMap<String, StoreConfig>,
     /// Limits and timings.
     pub limits: AttachmentLimits,
+    accel_prefixes: BTreeMap<String, String>,
+    presigned: BTreeMap<String, crate::object::PresignDownloads>,
 }
 
 #[derive(Deserialize)]
@@ -205,6 +207,10 @@ struct RawStore {
     endpoint: Option<String>,
     prefix: Option<String>,
     path_style: Option<bool>,
+    x_accel_prefix: Option<String>,
+    presign_downloads: Option<bool>,
+    presign_min_bytes: Option<u64>,
+    presign_ttl_secs: Option<u64>,
 }
 
 fn bounded<T: PartialOrd + std::fmt::Display + Copy>(
@@ -269,6 +275,8 @@ impl AttachmentConfig {
             .write_store
             .ok_or_else(|| BlobError::config("attachments.write_store is not set"))?;
         let mut stores = BTreeMap::new();
+        let mut accel_prefixes = BTreeMap::<String, String>::new();
+        let mut presigned = BTreeMap::new();
         for (id, store) in raw.stores.unwrap_or_default() {
             if id.is_empty()
                 || id.len() > 64
@@ -278,6 +286,46 @@ impl AttachmentConfig {
             {
                 return Err(BlobError::config(format!(
                     "attachments.stores.{id}: a store id is 1 to 64 letters, digits, '_' or '-'"
+                )));
+            }
+            if let Some(prefix) = store.x_accel_prefix {
+                if store.kind != "local" || !crate::download::checked_prefix(&prefix) {
+                    return Err(BlobError::config(format!(
+                        "attachments.stores.{id}.x_accel_prefix requires a local store and a safe internal URI prefix with a trailing slash"
+                    )));
+                }
+                if accel_prefixes
+                    .values()
+                    .any(|used| used.starts_with(&prefix) || prefix.starts_with(used))
+                {
+                    return Err(BlobError::config(
+                        "attachment stores must use distinct, non-overlapping internal URI prefixes",
+                    ));
+                }
+                accel_prefixes.insert(id.clone(), prefix);
+            }
+            if store.presign_downloads == Some(true) {
+                if store.kind != "s3" {
+                    return Err(BlobError::config(format!(
+                        "attachments.stores.{id}.presign_downloads requires an S3 store"
+                    )));
+                }
+                let minimum = bounded(
+                    "presign_min_bytes",
+                    store.presign_min_bytes.unwrap_or(8 * 1024 * 1024),
+                    1,
+                    i64::MAX as u64,
+                )?;
+                let ttl = bounded(
+                    "presign_ttl_secs",
+                    store.presign_ttl_secs.unwrap_or(60),
+                    1,
+                    300,
+                )?;
+                presigned.insert(id.clone(), crate::object::PresignDownloads { minimum, ttl });
+            } else if store.presign_min_bytes.is_some() || store.presign_ttl_secs.is_some() {
+                return Err(BlobError::config(format!(
+                    "attachments.stores.{id}: presign limits require presign_downloads = true"
                 )));
             }
             let parsed = match store.kind.as_str() {
@@ -303,13 +351,14 @@ impl AttachmentConfig {
                     };
                     let endpoint = store.endpoint.filter(|e| !e.is_empty());
                     if let Some(endpoint) = &endpoint {
-                        let lower = endpoint.to_ascii_lowercase();
-                        let loopback = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-                            .iter()
-                            .any(|p| lower.starts_with(p));
-                        if !(lower.starts_with("https://") || loopback) {
+                        let Some((_, local_http)) = crate::object::endpoint_url(endpoint) else {
                             return Err(BlobError::config(format!(
                                 "attachments.stores.{id}.endpoint must be https; plain http is allowed only for a loopback address"
+                            )));
+                        };
+                        if local_http && presigned.contains_key(&id) {
+                            return Err(BlobError::config(format!(
+                                "attachments.stores.{id}: presigned S3 downloads require an HTTPS store endpoint"
                             )));
                         }
                     }
@@ -397,6 +446,8 @@ impl AttachmentConfig {
             write_store,
             stores,
             limits,
+            accel_prefixes,
+            presigned,
         })
     }
 }
@@ -455,16 +506,20 @@ impl AttachmentRuntime {
                     path,
                     shared_filesystem,
                 } => {
-                    stores.insert(id.clone(), Arc::new(LocalStore::open(path.clone()).await?));
+                    let mut local = LocalStore::open(path.clone()).await?;
+                    local.set_accel_prefix(config.accel_prefixes.get(id).cloned());
+                    stores.insert(id.clone(), Arc::new(local));
                     if !shared_filesystem {
                         unshared_local.push(id.clone());
                     }
                 }
                 StoreConfig::S3(settings) => {
-                    stores.insert(
-                        id.clone(),
-                        Arc::new(crate::object::ObjectBackend::s3(settings).await?),
-                    );
+                    let remote = crate::object::ObjectBackend::open_s3(
+                        settings,
+                        config.presigned.get(id).copied(),
+                    )
+                    .await?;
+                    stores.insert(id.clone(), Arc::new(remote));
                 }
             }
         }

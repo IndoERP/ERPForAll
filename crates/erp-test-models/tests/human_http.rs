@@ -360,18 +360,22 @@ fn fixture() -> Fixture {
         serde_json::to_vec(&serde_json::json!({"schema":1,"assets":entries})).unwrap(),
     )
     .unwrap();
-    let bundle = erp_addon_web::assets::assembly::assemble(
-        &[],
-        &erp_addon_web::assets::assembly::AssemblyOptions::new(
-            "fixture",
-            "elang-1",
-            "en_US",
-            "main",
-            erp_sdk::ui_compiler::CompileOptions::new(erp_sdk::ui_compiler::BuildMode::Prod),
+    static BUNDLE: std::sync::OnceLock<erp_addon_web::assets::assembly::AssembledBundle> =
+        std::sync::OnceLock::new();
+    let bundle = BUNDLE.get_or_init(|| {
+        erp_addon_web::assets::assembly::assemble(
+            &[],
+            &erp_addon_web::assets::assembly::AssemblyOptions::new(
+                "fixture",
+                "elang-1",
+                "en_US",
+                "main",
+                erp_sdk::ui_compiler::CompileOptions::new(erp_sdk::ui_compiler::BuildMode::Prod),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .unwrap();
+        .unwrap()
+    });
     let mut generation =
         erp_server::assets::AssetGeneration::new("elang-1", bundle.key().to_owned()).unwrap();
     for blob in bundle.blobs() {
@@ -835,6 +839,133 @@ async fn login_page_prefs(router: &axum::Router) -> (String, String) {
     (prefs, dto["csrf"].as_str().unwrap().to_owned())
 }
 
+/// Exercise the composed login hooks through the browser entry point, including
+/// concurrent sign-in, server-directed cookie rotation, logout and role revocation.
+#[tokio::test]
+async fn composed_login_rotates_logs_out_and_revokes_on_membership_change_over_http() {
+    use erp_orm::IntoPolicyProvider as _;
+    use erp_security::auth::{AuthConfig, HashPoolConfig};
+    let policy = Arc::new(ProductionPolicy {
+        setup: erp_orm::StaticPolicy::AllowAll
+            .into_policy_provider()
+            .unwrap(),
+        source: std::sync::OnceLock::new(),
+    });
+    let builder = || {
+        erp_testkit::Harness::builder([
+            &erp_addon_base::ADDON,
+            &erp_data::model_data::ADDON,
+            &erp_test_models::test_login_selection::ADDON,
+            &erp_test_models::test_login_selection::credential_override::ADDON,
+        ])
+        .with_decls([erp_data::ir_model_data_decl()])
+        .require_core_tables(erp_security::auth::core_tables())
+        .identify_transactions()
+    };
+    let registry = builder().registry_only().unwrap();
+    let h = builder()
+        .policy(Arc::clone(&policy) as Arc<dyn erp_orm::PolicyProvider>)
+        .resolver(erp_security::resolver::Resolver::for_registry(&registry).unwrap())
+        .build()
+        .await
+        .unwrap();
+    support::prepare(&h).await;
+    let uid = support::user_with_password(&h, "http-canonical", "correct").await;
+    let mut setup = h.begin().await.unwrap();
+    setup
+        .execute(
+            "UPDATE res_users SET alias='http-alias' WHERE id=$1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    setup.commit().await.unwrap();
+    let pool = erp_orm::pool::create_pool(h.db().config(), 2).unwrap();
+    policy.install(
+        erp_security::source::PolicySource::build(Arc::clone(h.registry()), pool)
+            .await
+            .unwrap(),
+    );
+    let auth = Arc::new(
+        erp_security::auth::test_support::login_selection_auth(
+            h.orm().clone(),
+            AuthConfig::DEFAULT,
+            support::own_pool(HashPoolConfig::DEFAULT),
+        )
+        .await
+        .unwrap(),
+    );
+    let fixture = fixture();
+    let app = published_app(&fixture, &auth);
+    let (prefs, token) = login_page_prefs(&app).await;
+    let signin = || {
+        Request::builder()
+            .method("POST")
+            .uri("/erp/login")
+            .header("x-erp-proxy-token", PROXY_TOKEN)
+            .header("cookie", prefs.as_str())
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(format!(
+                "db=test&login=alias%3Ahttp-alias&password=correct&csrf_token={token}"
+            )))
+            .unwrap()
+    };
+    let (one, two) = tokio::join!(send(&app, signin()), send(&app, signin()));
+    assert_eq!(one.0, StatusCode::SEE_OTHER);
+    assert_eq!(two.0, StatusCode::SEE_OTHER);
+    let first = oauth_cookie(&one.1).unwrap();
+    let second = oauth_cookie(&two.1).unwrap();
+    assert!(first != second);
+    assert_eq!(
+        support::count(
+            &h,
+            "erp_session WHERE data->>'fixture.canonical_login'='http-canonical'"
+        )
+        .await,
+        2
+    );
+    let mut setup = h.begin().await.unwrap();
+    setup
+        .execute(
+            "UPDATE erp_session SET created_at=now()-interval '4 hours' WHERE user_id=$1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    setup.commit().await.unwrap();
+    let (status, rotated, _) = send(&app, get("/erp/login_successful", Some(&first))).await;
+    assert_eq!(status, StatusCode::OK);
+    let new = oauth_cookie(&rotated).unwrap();
+    assert!(new != first);
+    let (status, headers, _) = send(&app, logout(&format!("{prefs}; {new}"), &token, None)).await;
+    assert_logout_cleanup(status, &headers);
+    assert_eq!(
+        support::count(&h, &format!("erp_session WHERE user_id={uid}")).await,
+        1
+    );
+    assert_ne!(
+        send(&app, get("/erp/login_successful", Some(&new))).await.0,
+        StatusCode::OK
+    );
+    let mut revoke = h.begin().await.unwrap();
+    let group =
+        support::named_group(&mut revoke, "test.http_membership", "Changed membership").await;
+    revoke
+        .execute(
+            "INSERT INTO res_groups_users_rel(uid,gid) VALUES ($1,$2)",
+            &[&uid, &group],
+        )
+        .await
+        .unwrap();
+    revoke.commit().await.unwrap();
+    assert_ne!(
+        send(&app, get("/erp/login_successful", Some(&second)))
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
 /// The fixture application with its published assets, login open, on a fresh router.
 fn published_app(fixture: &Fixture, auth: &Arc<erp_security::auth::Auth>) -> axum::Router {
     let app = Arc::new(
@@ -1080,4 +1211,548 @@ async fn login_redirect_vectors_on_served_post() {
             "{input}"
         );
     }
+}
+
+struct OidcReply {
+    nonce: String,
+    challenge: String,
+    subject: String,
+    acr: String,
+    email: String,
+}
+
+struct OidcFixture {
+    issuer: String,
+    secret: String,
+    key: ring::signature::Ed25519KeyPair,
+    replies: std::sync::Mutex<std::collections::HashMap<String, OidcReply>>,
+    exchanges: std::sync::atomic::AtomicUsize,
+}
+
+impl OidcFixture {
+    async fn start() -> (Arc<Self>, tokio::task::JoinHandle<()>) {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ring::{
+            rand::{SecureRandom, SystemRandom},
+            signature::Ed25519KeyPair,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let random = SystemRandom::new();
+        let mut secret = [0; 32];
+        random.fill(&mut secret).unwrap();
+        let generated = Ed25519KeyPair::generate_pkcs8(&random).unwrap();
+        let fixture = Arc::new(Self {
+            issuer: format!("http://{}", listener.local_addr().unwrap()),
+            secret: URL_SAFE_NO_PAD.encode(secret),
+            key: Ed25519KeyPair::from_pkcs8(generated.as_ref()).unwrap(),
+            replies: std::sync::Mutex::default(),
+            exchanges: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let router = axum::Router::new()
+            .route("/token", axum::routing::post(oidc_token))
+            .with_state(Arc::clone(&fixture));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (fixture, task)
+    }
+
+    fn config(&self, provision: Option<i64>) -> Fixture {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ring::signature::KeyPair;
+        use std::io::Write;
+        let mut fixture = fixture();
+        let dir = fixture._dir.path();
+        let secret = dir.join("oidc-client");
+        fs::write(&secret, &self.secret).unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(dir.join("oidc-jwks.json"), serde_json::json!({
+            "keys":[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"test","x":URL_SAFE_NO_PAD.encode(self.key.public_key().as_ref())}]
+        }).to_string()).unwrap();
+        let mut path = fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("server.toml"))
+            .unwrap();
+        writeln!(path, "[external_identity]\nclient_secret_file='oidc-client'\nsigning_keys_file='oidc-jwks.json'\n[external_identity.provider]\nissuer='{0}'\nauthorization_endpoint='{0}/authorize'\ntoken_endpoint='{0}/token'\nclient_id='client'\nlabel='Fixture Identity'\nrequired_acr='fixture-mfa'", self.issuer).unwrap();
+        if let Some(company) = provision {
+            writeln!(path, "[external_identity.provider.provisioning]\ncompany_id={company}\nemail_domain='example.test'").unwrap();
+        }
+        fixture.config = Arc::new(ServerConfig::load(&dir.join("server.toml")).unwrap());
+        fixture
+    }
+
+    fn callback(
+        &self,
+        location: &str,
+        code: &str,
+        subject: &str,
+        acr: &str,
+        email: &str,
+    ) -> String {
+        let location = url::Url::parse(location).unwrap();
+        assert_eq!(location.origin().ascii_serialization(), self.issuer);
+        let query: std::collections::HashMap<_, _> = location.query_pairs().into_owned().collect();
+        assert_eq!(
+            query["redirect_uri"],
+            "https://erp.example.test/erp/login/external/callback"
+        );
+        assert_eq!(query["code_challenge_method"], "S256");
+        assert_eq!(query["acr_values"], "fixture-mfa");
+        self.replies.lock().unwrap().insert(
+            code.into(),
+            OidcReply {
+                nonce: query["nonce"].clone(),
+                challenge: query["code_challenge"].clone(),
+                subject: subject.into(),
+                acr: acr.into(),
+                email: email.into(),
+            },
+        );
+        format!(
+            "/erp/login/external/callback?code={code}&state={}&iss={}",
+            query["state"],
+            form_value(&self.issuer)
+        )
+    }
+}
+
+async fn oidc_token(
+    axum::extract::State(fixture): axum::extract::State<Arc<OidcFixture>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use base64::{
+        Engine,
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    };
+    use ring::digest::{SHA256, digest};
+    fixture
+        .exchanges
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+        .into_owned()
+        .collect();
+    let authorization = format!(
+        "Basic {}",
+        STANDARD.encode(format!("client:{}", fixture.secret))
+    );
+    assert!(
+        headers["authorization"] == authorization,
+        "provider did not receive valid client authentication"
+    );
+    assert_eq!(
+        params["redirect_uri"],
+        "https://erp.example.test/erp/login/external/callback"
+    );
+    assert_eq!(params["grant_type"], "authorization_code");
+    let Some(reply) = fixture.replies.lock().unwrap().remove(&params["code"]) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(digest(&SHA256, params["code_verifier"].as_bytes()).as_ref()),
+        reply.challenge
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","kid":"test","alg":"EdDSA"}"#);
+    let claims = URL_SAFE_NO_PAD.encode(serde_json::json!({"iss": fixture.issuer, "sub":reply.subject,"aud":"client",
+        "iat":now,"exp":now+300,"nonce":reply.nonce,"acr":reply.acr,"email":reply.email,"email_verified":true}).to_string());
+    let signed = format!("{header}.{claims}");
+    let signature = URL_SAFE_NO_PAD.encode(fixture.key.sign(signed.as_bytes()).as_ref());
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({"id_token":format!("{signed}.{signature}")}).to_string(),
+    )
+        .into_response()
+}
+
+fn oidc_post(path: &str, cookie: &str, body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("x-erp-proxy-token", PROXY_TOKEN)
+        .header("cookie", cookie)
+        .header("origin", "https://erp.example.test")
+        .header("accept", "application/json")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn oidc_start(app: &axum::Router, cookie: &str, token: &str, link: bool) -> String {
+    let post = format!(
+        "csrf_token={}{}",
+        form_value(token),
+        if link { "&link=1" } else { "" }
+    );
+    let (status, headers, body) = send(app, oidc_post("/erp/login/external", cookie, post)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "no-store");
+    serde_json::from_str::<serde_json::Value>(&body).unwrap()["location"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn oauth_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .find(|value| value.starts_with("session_id="))
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn external_web_login_links_explicitly_checks_mfa_and_revokes_sessions() {
+    use erp_security::auth::{ClientAddr, LoginRequest};
+    let world = production_policy_world().await;
+    let (issuer, task) = OidcFixture::start().await;
+    let fixture = issuer.config(None);
+    let auth = Arc::new(world.auth);
+    let app = published_app(&fixture, &auth);
+    let (prefs, csrf) = login_page_prefs(&app).await;
+    let (_, _, html) = send(&app, get("/erp/login", Some(&prefs))).await;
+    assert!(html.contains("Fixture Identity"));
+    let regular = base_group(&world.h, "group_user").await;
+    let system = base_group(&world.h, "group_system").await;
+    let user = user_in_groups(
+        &world.h,
+        "person@example.test",
+        "fixture-password",
+        &[regular],
+    )
+    .await;
+    let mut tx = world.h.begin().await.unwrap();
+    tx.env()
+        .records("res.users")
+        .unwrap()
+        .browse([user])
+        .unwrap()
+        .write_values(
+            &mut tx,
+            &std::collections::BTreeMap::from([(
+                "email".to_owned(),
+                support::s("person@example.test"),
+            )]),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let admin = user_in_groups(
+        &world.h,
+        "oidc-admin",
+        "fixture-password",
+        &[regular, system],
+    )
+    .await;
+    let password_login = |login: &str| {
+        auth.authenticate(LoginRequest::new(
+            login,
+            "fixture-password",
+            ClientAddr::Known("127.0.0.2".parse().unwrap()),
+        ))
+    };
+    let user_login = password_login("person@example.test").await.unwrap();
+    let admin_login = password_login("oidc-admin").await.unwrap();
+    assert_eq!(admin_login.uid().get(), admin);
+    let with_native = format!(
+        "{prefs}; session_id=test.{}",
+        user_login.session().secret().to_cookie().as_str()
+    );
+    let with_admin = format!(
+        "{prefs}; session_id=test.{}",
+        admin_login.session().secret().to_cookie().as_str()
+    );
+
+    let unlinked = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &unlinked,
+        "unlinked",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+    assert_eq!(headers["location"], "/erp/login?external_error=1");
+    let (_, _, body) = send(&app, get("/erp/login?external_error=1", Some(&prefs))).await;
+    assert!(body.contains("External sign-in was refused"));
+
+    let wrong_account = oidc_start(&app, &with_native, &csrf, true).await;
+    let callback = issuer.callback(
+        &wrong_account,
+        "wrong-account",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (_, headers, _) = send(&app, get(&callback, Some(&with_admin))).await;
+    assert!(oauth_cookie(&headers).is_none());
+
+    let linking = oidc_start(&app, &with_native, &csrf, true).await;
+    let callback = issuer.callback(
+        &linking,
+        "linking",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (status, _, _) = send(&app, get(&callback, Some(&with_native))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let weak = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &weak,
+        "weak-factor",
+        "linked-subject",
+        "password",
+        "person@example.test",
+    );
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+
+    let authenticating = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &authenticating,
+        "authenticate",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (other_prefs, _) = login_page_prefs(&app).await;
+    let (_, headers, _) = send(&app, get(&callback, Some(&other_prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+    let (status, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let external = oauth_cookie(&headers).unwrap();
+    let session =
+        erp_security::auth::SessionSecret::from_cookie(external.split_once('.').unwrap().1)
+            .unwrap();
+    let mut begun = auth
+        .begin_session(&session, erp_security::auth::CredentialOptions::new())
+        .await
+        .unwrap();
+    assert_eq!(begun.session.user().get(), user);
+    begun.tx.rollback().await.unwrap();
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+
+    let (status, _, _) = send(
+        &app,
+        oidc_post(
+            "/erp/session/external/revoke",
+            &with_native,
+            format!("csrf_token={}", form_value(&csrf)),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        auth.begin_session(&session, erp_security::auth::CredentialOptions::new())
+            .await
+            .is_err()
+    );
+    let revoked = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &revoked,
+        "revoked",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+
+    let policy = format!("csrf_token={}&enabled=false", form_value(&csrf));
+    let (status, _, _) = send(
+        &app,
+        oidc_post(
+            "/erp/session/external/provider",
+            &with_native,
+            policy.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let relink = oidc_start(&app, &with_native, &csrf, true).await;
+    let callback = issuer.callback(
+        &relink,
+        "relink",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (status, headers, _) = send(&app, get(&callback, Some(&with_native))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let external = oauth_cookie(&headers).unwrap();
+    let session =
+        erp_security::auth::SessionSecret::from_cookie(external.split_once('.').unwrap().1)
+            .unwrap();
+    let pending = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &pending,
+        "disabled",
+        "linked-subject",
+        "fixture-mfa",
+        "person@example.test",
+    );
+    let (status, _, _) = send(
+        &app,
+        oidc_post("/erp/session/external/provider", &with_admin, policy),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        auth.begin_session(&session, erp_security::auth::CredentialOptions::new())
+            .await
+            .is_err()
+    );
+    let exchanges = issuer.exchanges.load(std::sync::atomic::Ordering::Relaxed);
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+    assert_eq!(
+        issuer.exchanges.load(std::sync::atomic::Ordering::Relaxed),
+        exchanges
+    );
+    let (_, _, html) = send(&app, get("/erp/login", Some(&prefs))).await;
+    assert!(!html.contains("Fixture Identity"));
+    let (status, _, _) = send(
+        &app,
+        oidc_post(
+            "/erp/session/external/provider",
+            &with_admin,
+            format!("csrf_token={}&enabled=true", form_value(&csrf)),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        auth.begin_session(&session, erp_security::auth::CredentialOptions::new())
+            .await
+            .is_err()
+    );
+    let mut tx = world.h.begin().await.unwrap();
+    tx.execute(
+        "INSERT INTO ir_config_parameter (key,value) VALUES ('database.neutralized','true')",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (_, _, html) = send(&app, get("/erp/login", Some(&prefs))).await;
+    assert!(!html.contains("Fixture Identity"));
+    let (status, headers, _) = send(
+        &app,
+        oidc_post(
+            "/erp/login/external",
+            &prefs,
+            format!("csrf_token={}", form_value(&csrf)),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key("location"));
+    task.abort();
+    world.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn external_web_login_provisions_only_the_configured_portal_company() {
+    let world = production_policy_world().await;
+    let portal = base_group(&world.h, "group_portal").await;
+    let mut setup = world.h.begin().await.unwrap();
+    let currency = erp_testkit::fixtures::seed_currency_in(&mut setup)
+        .await
+        .unwrap();
+    let rows = setup
+        .query(
+            "INSERT INTO res_company (tz, name, currency_id, active) VALUES
+                ('UTC', 'Unrelated company', $1, true), ('UTC', 'OIDC portal company', $1, true)
+            RETURNING name, id::int8",
+            &[&currency],
+        )
+        .await
+        .unwrap();
+    let company: i64 = rows
+        .iter()
+        .find(|row| row.get::<_, &str>(0) == "OIDC portal company")
+        .unwrap()
+        .get(1);
+    setup.commit().await.unwrap();
+    let (issuer, task) = OidcFixture::start().await;
+    let fixture = issuer.config(Some(company));
+    let auth = Arc::new(world.auth);
+    let app = published_app(&fixture, &auth);
+    let (prefs, csrf) = login_page_prefs(&app).await;
+    let rejected = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &rejected,
+        "wrong-domain",
+        "outsider",
+        "fixture-mfa",
+        "outsider@other.test",
+    );
+    let (_, headers, _) = send(&app, get(&callback, Some(&prefs))).await;
+    assert!(oauth_cookie(&headers).is_none());
+
+    let pending = oidc_start(&app, &prefs, &csrf, false).await;
+    let callback = issuer.callback(
+        &pending,
+        "provision",
+        "new-subject",
+        "fixture-mfa",
+        "portal@example.test",
+    );
+    let (status, headers, body) = send(&app, get(&callback, Some(&prefs))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    assert_eq!(headers["location"], "/erp/login_successful");
+    let external = oauth_cookie(&headers).unwrap();
+    let secret =
+        erp_security::auth::SessionSecret::from_cookie(external.split_once('.').unwrap().1)
+            .unwrap();
+    let mut begun = auth
+        .begin_session(&secret, erp_security::auth::CredentialOptions::new())
+        .await
+        .unwrap();
+    let uid = begun.session.user().get();
+    begun.tx.rollback().await.unwrap();
+    let mut tx = world.h.begin().await.unwrap();
+    let rows = tx
+        .query(
+            "SELECT company_id, share, COALESCE(password,'')='',
+                ARRAY(SELECT cid::int8 FROM res_company_users_rel WHERE user_id=u.id ORDER BY cid),
+                ARRAY(SELECT gid::int8 FROM res_groups_users_rel WHERE uid=u.id ORDER BY gid)
+            FROM res_users u WHERE id=$1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            rows[0].get::<_, i64>(0),
+            rows[0].get::<_, bool>(1),
+            rows[0].get::<_, bool>(2),
+            rows[0].get::<_, Vec<i64>>(3),
+            rows[0].get::<_, Vec<i64>>(4),
+        ),
+        (company, true, true, vec![company], vec![portal]),
+    );
+    let rows = tx
+        .query(
+            "SELECT subject, user_id FROM erp_external_identity WHERE issuer=$1",
+            &[&issuer.issuer],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, String>(0), "new-subject");
+    assert_eq!(rows[0].get::<_, i64>(1), uid);
+    tx.rollback().await.unwrap();
+    task.abort();
+    world.h.cleanup().await.unwrap();
 }

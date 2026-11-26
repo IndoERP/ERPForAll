@@ -163,8 +163,14 @@ fn read(path: &Path, limit: usize) -> Result<Vec<u8>, AssetError> {
     Ok(bytes)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        value.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        value.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    value
 }
 
 /// Gzip level, mtime and Brotli quality/window of tenant assembly

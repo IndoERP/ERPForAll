@@ -16,7 +16,8 @@
 //! sequential calls would end with. Static field defaults fill the fields a row leaves out;
 //! a field whose default is computed (a default function, a `default_<field>` context key) must
 //! be given explicitly, since the defaults would be evaluated before the statement knows which
-//! rows are new. Pending writes are flushed first.
+//! rows are new. Pending writes are flushed first. Monetary inputs are rounded with a supplied
+//! stored currency. Conflict updates must keep the amount and its currency paired.
 //!
 //! Access ('s `create` and `write` shapes, design §3.5): the engine is prepared (policy and
 //! principal current, a policy-source model flushes and marks the transaction like `create` does),
@@ -52,11 +53,11 @@ use erp_sql::upsert::{ConflictAction, KeyColumn, SetAction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio_postgres::types::ToSql;
 
-use crate::Transaction;
 use crate::access::Operation;
 use crate::dispatch::{BoxFuture, ImplKind, MethodFn, MethodImpl, Super, call_method};
 use crate::records::{Field, Inherits, Model, RecordSet, Records, Token};
 use crate::vals::{RawVals, Vals};
+use crate::{CompanyId, Transaction};
 
 // ---- API ------------------------------------------------------------------------------------
 
@@ -646,6 +647,12 @@ fn writable_column<'s>(spec: &'s ModelSpec, name: &str) -> Result<&'s FieldSpec>
             ),
         ));
     }
+    if field.company_dependent && matches!(field.ty, FieldType::Many2one { .. }) {
+        return Err(upsert_error(
+            spec,
+            format!("company-dependent relation '{name}' requires create or write"),
+        ));
+    }
     // `create` drops a caller value of a readonly precomputed field (COMP §4.9), and a stored
     // computed field without `precompute` is precomputed by default; the upsert
     // refuses any readonly stored computed or related field without an inverse instead of storing
@@ -774,6 +781,18 @@ fn plan<'s>(spec: &'s ModelSpec, call: &UpsertCall) -> Result<Plan<'s>> {
     let mut accumulate = Vec::new();
     for (name, floor) in call.accumulate() {
         let field = check(name)?;
+        if matches!(field.ty, FieldType::Monetary { .. }) {
+            return Err(upsert_error(
+                spec,
+                format!("accumulating monetary field '{name}' is unsupported"),
+            ));
+        }
+        if field.company_dependent {
+            return Err(upsert_error(
+                spec,
+                format!("accumulating company-dependent field '{name}' is unsupported"),
+            ));
+        }
         if !matches!(
             field.ty,
             FieldType::Integer | FieldType::Float { .. } | FieldType::Monetary { .. }
@@ -797,6 +816,34 @@ fn plan<'s>(spec: &'s ModelSpec, call: &UpsertCall) -> Result<Plan<'s>> {
             Some(cell) => Some(validate_cell(fref(spec, field), &field.ty, cell.clone())?),
         };
         accumulate.push((field.id, floor));
+    }
+    for amount in spec.column_fields() {
+        let FieldType::Monetary { currency_field } = &amount.ty else {
+            continue;
+        };
+        let Some(currency) = currency_field.as_deref().and_then(|name| spec.field(name)) else {
+            continue;
+        };
+        let updating_amount = update.contains(&amount.id);
+        let updating_currency = update.contains(&currency.id);
+        if amount.company_dependent && updating_currency {
+            return Err(upsert_error(
+                spec,
+                format!(
+                    "the currency '{}' of company-dependent amount '{}' cannot change on conflict",
+                    currency.name, amount.name
+                ),
+            ));
+        }
+        if updating_amount != updating_currency && !key.fields.contains(&currency.id) {
+            return Err(upsert_error(
+                spec,
+                format!(
+                    "updating monetary field '{}' requires updating its currency '{}' in the same upsert or including it in the business key",
+                    amount.name, currency.name
+                ),
+            ));
+        }
     }
     Ok(Plan {
         key,
@@ -1098,6 +1145,7 @@ fn prepare(
     for field in spec.column_fields() {
         if field.magic
             || field.inherited.is_some()
+            || field.company_dependent
             || !field.required
             || field.is_computed()
             || matches!(field.ty, FieldType::RowVersion | FieldType::Id)
@@ -1186,6 +1234,8 @@ struct Shape {
     uid: bool,
     /// Floors, bound after the uid, in plan order of the floored fields.
     floors: Vec<Cell>,
+    /// Company key for conflict overwrites, bound after any floors.
+    company: Option<CompanyId>,
     /// Fields whose old values the statement returns (write hooks, inverses of many2one updates).
     old_fields: Vec<FieldId>,
     /// Fields whose stored new values the statement returns: the accumulated fields (plan
@@ -1199,6 +1249,186 @@ fn column_type(spec: &ModelSpec, field: FieldId) -> Result<ColumnType> {
     let fs = spec.field_by_id(field);
     fs.column()
         .ok_or_else(|| upsert_error(spec, format!("field '{}' has no column", fs.name)))
+}
+
+async fn encode_properties(
+    tx: &mut Transaction,
+    records: &Records,
+    batch: &mut Batch,
+) -> Result<Option<CompanyId>> {
+    let spec = records.spec();
+    let env = records.env();
+    let fields: Vec<_> = spec
+        .column_fields()
+        .filter(|field| {
+            field.company_dependent
+                && field.inherited.is_none()
+                && (field.required || batch.column_of[field.id.index()].is_some())
+        })
+        .collect();
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    let company = tx.companies(env).await?.first().copied();
+    if company.is_some() {
+        tx.prepare_properties(env, spec).await?;
+    }
+    for field in fields {
+        let column = batch.column_of[field.id.index()];
+        let Some(company) = company else {
+            if column.is_some() {
+                return Err(Error::validation(
+                    "company-dependent fields require a current company",
+                ));
+            }
+            crate::company_dependent_runtime::check_required(spec, field, &Cell::Null)?;
+            continue;
+        };
+        let (_, fallback) = tx.property_context(env, spec.id, field.id)?;
+        let Some(column) = column else {
+            crate::company_dependent_runtime::check_required(spec, field, &fallback)?;
+            continue;
+        };
+        writable_column(spec, field.name)?;
+        for (row, given) in batch.rows.iter_mut().zip(&batch.given) {
+            // `prepare` pads absent cells with NULL. A missing input with no static
+            // default inherits the fallback, whereas an explicit null suppresses it.
+            let scalar = if !given[field.id.index()] && field.default.is_none() {
+                &fallback
+            } else {
+                &row[column]
+            };
+            crate::company_dependent_runtime::check_required(spec, field, scalar)?;
+            row[column] = crate::company_dependent::apply(
+                &field.ty,
+                &Cell::Null,
+                company,
+                scalar,
+                &fallback,
+            )?;
+        }
+    }
+    Ok(company)
+}
+
+async fn normalize_amounts(
+    tx: &mut Transaction,
+    records: &Records,
+    batch: &mut Batch,
+) -> Result<()> {
+    let spec = records.spec();
+    let mut fields = Vec::new();
+    for id in &batch.columns {
+        let amount = spec.field_by_id(*id);
+        let FieldType::Monetary { currency_field } = &amount.ty else {
+            continue;
+        };
+        let currency = currency_field
+            .as_deref()
+            .and_then(|name| spec.field(name))
+            .ok_or_else(|| {
+                upsert_error(
+                    spec,
+                    format!("monetary field '{}' has no currency field", amount.name),
+                )
+            })?;
+        if currency.inherited.is_some()
+            || currency.company_dependent
+            || currency.is_computed()
+            || !currency.has_column()
+            || !matches!(currency.ty, FieldType::Many2one { .. })
+        {
+            return Err(upsert_error(
+                spec,
+                format!(
+                    "monetary field '{}' requires a direct stored currency for upsert",
+                    amount.name
+                ),
+            ));
+        }
+        let amount_column = batch.column_of[id.index()].ok_or_else(|| {
+            upsert_error(
+                spec,
+                format!("monetary field '{}' has no staged value", amount.name),
+            )
+        })?;
+        let currency_column = batch.column_of[currency.id.index()];
+        for row in &batch.rows {
+            if matches!(&row[amount_column], Cell::Decimal(value) if !value.is_zero())
+                && !currency_column
+                    .is_some_and(|column| matches!(row[column], Cell::Id(id) if id > 0))
+            {
+                return Err(Error::validation(format!(
+                    "upsert on '{}': a nonzero '{}' requires a persisted currency in '{}'",
+                    spec.name, amount.name, currency.name
+                )));
+            }
+        }
+        fields.push(*id);
+    }
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let budget = crate::monetary::StagingBudget::new(batch.rows.len());
+    budget.check_records()?;
+    let slots = crate::monetary::staging_slots(spec, tx.shared.graph.model(spec.id), &fields);
+    let mut rows: Vec<Vec<Option<Cell>>> = batch
+        .rows
+        .iter()
+        .map(|row| {
+            slots
+                .iter()
+                .map(|slot| batch.column_of[slot.index()].map(|column| row[column].clone()))
+                .collect()
+        })
+        .collect();
+    crate::monetary::normalize(
+        tx,
+        records.env(),
+        crate::monetary::Stage {
+            initial: false,
+            spec,
+            ids: None,
+            fields: &slots,
+            rows: &mut rows,
+            included: None,
+            budget: &budget,
+            precharged: None,
+            kind: crate::monetary::StageKind::Direct,
+        },
+        &fields,
+        false,
+        true,
+    )
+    .await?;
+    for field in fields {
+        let slot = slots
+            .binary_search(&field)
+            .map_err(|_| upsert_error(spec, "missing monetary staging slot"))?;
+        let column = batch.column_of[field.index()]
+            .ok_or_else(|| upsert_error(spec, "missing monetary batch column"))?;
+        for (row, staged) in batch.rows.iter_mut().zip(&mut rows) {
+            row[column] = staged[slot]
+                .take()
+                .ok_or_else(|| upsert_error(spec, "missing staged monetary amount"))?;
+        }
+    }
+    Ok(())
+}
+
+fn logical_property_cell(
+    tx: &Transaction,
+    records: &Records,
+    field: FieldId,
+    cell: Cell,
+) -> Result<Cell> {
+    let spec = records.spec();
+    let field = spec.field_by_id(field);
+    if !field.company_dependent {
+        return Ok(cell);
+    }
+    let (company, fallback) = tx.property_context(records.env(), spec.id, field.id)?;
+    crate::company_dependent::project(&field.ty, &cell, company, &fallback)
 }
 
 /// Column `index` of a returned row as the cache value of `field`: an encrypted field's envelope is
@@ -1216,7 +1446,13 @@ fn decode_column<R: crate::transaction::raw_row::CellSource + ?Sized>(
     }
 }
 
-fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> Result<Shape> {
+fn shape(
+    tx: &Transaction,
+    spec: &ModelSpec,
+    plan: &Plan<'_>,
+    batch: &Batch,
+    company: Option<CompanyId>,
+) -> Result<Shape> {
     let mut columns: Vec<(&str, ColumnType)> = Vec::with_capacity(batch.columns.len());
     for f in &batch.columns {
         columns.push((spec.field_by_id(*f).name, column_type(spec, *f)?));
@@ -1258,8 +1494,27 @@ fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> 
         insert_exprs.push((erp_registry::ROW_VERSION, "1"));
     }
     let mut sets: Vec<(&str, SetAction)> = Vec::new();
+    let company_param = next
+        + plan
+            .accumulate
+            .iter()
+            .filter(|(_, floor)| floor.is_some())
+            .count();
     for f in &plan.update {
-        sets.push((spec.field_by_id(*f).name, SetAction::Overwrite));
+        let field = spec.field_by_id(*f);
+        let action = if field.company_dependent {
+            if company.is_none() {
+                return Err(Error::validation(
+                    "company-dependent fields require a current company",
+                ));
+            }
+            SetAction::CompanyOverwrite {
+                company: company_param,
+            }
+        } else {
+            SetAction::Overwrite
+        };
+        sets.push((field.name, action));
     }
     let mut floors = Vec::new();
     for (f, floor) in &plan.accumulate {
@@ -1333,7 +1588,10 @@ fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> 
     // stored (normalised) new values of the tracked columns this upsert overwrites
     // (r1 M2): taken from RETURNING, as the write path does
     for f in &plan.update {
-        if spec.tracked.contains(f) && spec.field_by_id(*f).has_column() && !new_fields.contains(f)
+        let field = spec.field_by_id(*f);
+        if (field.company_dependent || spec.tracked.contains(f))
+            && field.has_column()
+            && !new_fields.contains(f)
         {
             returning.push((spec.field_by_id(*f).name, column_type(spec, *f)?));
             new_fields.push(*f);
@@ -1399,6 +1657,11 @@ fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> 
         key,
         uid,
         floors,
+        company: company.filter(|_| {
+            plan.update
+                .iter()
+                .any(|f| spec.field_by_id(*f).company_dependent)
+        }),
         old_fields,
         new_fields,
         changed_fields,
@@ -1667,6 +1930,9 @@ async fn run_statement(
     for floor in &shape.floors {
         params.push(scalar_param(spec, floor)?);
     }
+    if let Some(company) = shape.company {
+        params.push(Box::new(company.to_string()));
+    }
     let refs: Vec<&(dyn ToSql + Sync)> = params
         .iter()
         .map(|p| p.as_ref() as &(dyn ToSql + Sync))
@@ -1819,6 +2085,21 @@ async fn apply(
         .chain(plan.accumulate.iter().map(|(f, _)| *f))
         .collect();
 
+    // Validate the complete merged maps, including other companies' existing entries, before
+    // placing any returned map in the cache. An invalid map rolls back the whole batch.
+    for (_, row) in &updated {
+        for (field, cell) in shape
+            .new_fields
+            .iter()
+            .skip(plan.accumulate.len())
+            .zip(&row.stored)
+        {
+            if spec.field_by_id(*field).company_dependent {
+                logical_property_cell(tx, records, *field, cell.clone())?;
+            }
+        }
+    }
+
     // the cache equals what a fetch would return
     {
         let cache = tx.cache.model_mut(model);
@@ -1881,7 +2162,23 @@ async fn apply(
                             ));
                         };
                         let storage = spec.field_by_id(*f).storage();
-                        cache.set(*f, storage, o.id, batch.rows[m][c].clone(), false)?;
+                        let value = if spec.field_by_id(*f).company_dependent {
+                            let at = shape
+                                .new_fields
+                                .iter()
+                                .skip(plan.accumulate.len())
+                                .position(|field| field == f)
+                                .ok_or_else(|| {
+                                    upsert_error(
+                                        spec,
+                                        "company-dependent update omitted its stored map",
+                                    )
+                                })?;
+                            o.stored[at].clone()
+                        } else {
+                            batch.rows[m][c].clone()
+                        };
+                        cache.set(*f, storage, o.id, value, false)?;
                     }
                     for ((f, _), cell) in plan.accumulate.iter().zip(&o.accumulated) {
                         let storage = spec.field_by_id(*f).storage();
@@ -2060,7 +2357,10 @@ async fn apply(
                             ));
                         }
                     };
-                    values.push((old, new));
+                    values.push((
+                        logical_property_cell(tx, records, *f, old)?,
+                        logical_property_cell(tx, records, *f, new)?,
+                    ));
                 }
                 rows.push((o.id, values));
             }
@@ -2101,6 +2401,20 @@ async fn apply(
                     };
                     let new = match plan.accumulate.iter().position(|(x, _)| x == f) {
                         Some(i) => o.accumulated[i].clone(),
+                        None if spec.field_by_id(*f).company_dependent => {
+                            let at = shape
+                                .new_fields
+                                .iter()
+                                .skip(plan.accumulate.len())
+                                .position(|field| field == f)
+                                .ok_or_else(|| {
+                                    upsert_error(
+                                        spec,
+                                        "company-dependent hook omitted its stored map",
+                                    )
+                                })?;
+                            o.stored[at].clone()
+                        }
                         None => match batch.column_of[f.index()] {
                             Some(c) => batch.rows[*m][c].clone(),
                             None => {
@@ -2114,7 +2428,10 @@ async fn apply(
                             }
                         },
                     };
-                    values.push((old, new));
+                    values.push((
+                        logical_property_cell(tx, records, *f, old)?,
+                        logical_property_cell(tx, records, *f, new)?,
+                    ));
                 }
                 rows.push(crate::version::WrittenRow::new(o.id, values));
             }
@@ -2298,24 +2615,6 @@ async fn upsert_records_inner(
     let model = records.model_id();
     let registry = Arc::clone(env.registry());
     let spec = registry.model_by_id(model);
-    if let Some(field) = spec.fields.iter().find(|field| field.company_dependent) {
-        return Err(crate::company_dependent_runtime::unsupported(
-            spec.name,
-            field.name,
-            "upsert",
-            crate::company_dependent_runtime::Owner::Upsert,
-        ));
-    }
-    if spec
-        .fields
-        .iter()
-        .any(|field| matches!(field.ty, FieldType::Monetary { .. }))
-    {
-        return Err(upsert_error(
-            spec,
-            "monetary fields are not supported until a later release",
-        ));
-    }
     let plan = plan(spec, &call)?;
     if call.rows.is_empty() {
         return Ok(UpsertResult::default());
@@ -2385,7 +2684,7 @@ async fn upsert_chunks(
     }) {
         tx.ensure_image_policy(spec).await?;
     }
-    let batch = prepare(tx, records, plan, &rows)?;
+    let mut batch = prepare(tx, records, plan, &rows)?;
     // Upsert is both create and write: input keys/values and conflict targets obey the
     // same field mask as ordinary assignments (/023).
     tx.check_field_names(
@@ -2431,6 +2730,8 @@ async fn upsert_chunks(
     tx.begin_capture_operation(records, relevant).await?;
     // pending writes and recomputations reach the database before the statement reads the rows
     tx.flush().await?;
+    normalize_amounts(tx, records, &mut batch).await?;
+    let company = encode_properties(tx, records, &mut batch).await?;
     let write_rule = crate::search::record_restriction(tx, records, Operation::Write)
         .await?
         .filter(|rule| rule.constant != Some(true));
@@ -2443,7 +2744,7 @@ async fn upsert_chunks(
     )
     .await?;
     let prechecked = write_rule.is_some() || !matches!(read, Readable::All);
-    let shape = shape(tx, spec, plan, &batch)?;
+    let shape = shape(tx, spec, plan, &batch, company)?;
     let mut outcomes: Vec<Option<UpsertedRow>> = vec![None; batch.rows.len()];
     for members in batch.order.chunks(tx.config().insert_batch.max(1)) {
         if prechecked {
@@ -2459,6 +2760,10 @@ async fn upsert_chunks(
         // rows were inserted or written: the memoized record checks whose predicates read this
         // model are stale
         tx.access_written(model, None);
+        tx.property_inputs_written(
+            model,
+            out.iter().any(|row| row.outcome == UpsertOutcome::Inserted),
+        );
         // the statement ran: whatever fails from here on poisons the transaction, whichever way
         // the caller reaches us (review SF-S5)
         after_statement(tx, records, plan, &batch, &shape, members, &out).await?;

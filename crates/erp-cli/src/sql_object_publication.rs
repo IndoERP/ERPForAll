@@ -29,6 +29,14 @@ pub(crate) fn restricted_tables(registry: &Registry) -> Vec<String> {
             SqlObjectKind::TableGrant(grant) => Some(grant.model().table().to_owned()),
             _ => None,
         })
+        .chain(
+            [
+                "erp_record_protection.binding",
+                "erp_record_protection.owner",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -79,6 +87,33 @@ pub(crate) async fn grant_ordinary(
         ));
     }
     tx.batch(&sql).await?;
+    // Only the loader may set or release protection. Mail's compatibility guard has read-only
+    // access to the owner ledger; deleting a business record runs its foreign keys without
+    // granting the request role any access to the protection bindings.
+    let protected = tx
+        .query(
+            "SELECT relname::text FROM pg_catalog.pg_class \
+             WHERE oid = pg_catalog.to_regclass('public.\"erp_record_protection.owner\"') \
+             OR oid IN (SELECT relid FROM pg_catalog.pg_partition_tree(\
+                 pg_catalog.to_regclass('public.\"erp_record_protection.binding\"')))",
+            &[],
+        )
+        .await?;
+    let role = erp_sql::quote(role);
+    let mut grants = String::new();
+    for row in protected {
+        let name: String = row.try_get(0).map_err(|source| {
+            erp_fields::Error::db("invalid record protection grant state").with_source(source)
+        })?;
+        let table = format!("public.{}", erp_sql::quote(&name));
+        grants.push_str(&format!("REVOKE ALL ON {table} FROM PUBLIC, {role};"));
+        if name == "erp_record_protection.owner" {
+            grants.push_str(&format!("GRANT SELECT ON {table} TO {role};"));
+        }
+    }
+    if !grants.is_empty() {
+        tx.batch(&grants).await?;
+    }
     Ok(())
 }
 

@@ -14,6 +14,7 @@ import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
 import { MessageServices } from "./messages.js";
 import { noContentHelp } from "./message-widgets.js";
+import { openApproval, waitForApproval } from "./approval.js";
 import { ErrorDialog } from "./error-dialog.js";
 import { ClientErrorReporter, type ReportKind } from "./client-report.js";
 import { MobileDrawer } from "./mobile-drawer.js";
@@ -390,7 +391,7 @@ export class HumanApp {
       if (this.expired || this.lifetime.signal.aborted) return;
       this.panelRecovery.observe(event, options);
       this.messages.network.observe(event, options);
-    });
+    }, id => waitForApproval(this.messages.dialogs, this.rpc, id, this.lifetime.signal));
     this.listenForMenuIntent();
     initializeAttachmentPolicy(this.rpc, bootstrap["attachment_limits"], bootstrap["rpc_body_bytes"]);
 
@@ -1007,6 +1008,15 @@ export class HumanApp {
       open();
     });
 
+    const approvalBtn = el("button", "Review approval", "user-menu-row");
+    approvalBtn.type = "button";
+    approvalBtn.prepend(icon("badge-check"));
+    approvalBtn.addEventListener("click", () => {
+      this.userDropdownOpen = false;
+      userDropdown.classList.remove("open");
+      openApproval(this.messages.dialogs, this.rpc, this.lifetime.signal);
+    });
+
     const customUserMenuContainer = el("div", undefined, "user-dropdown-custom-items");
     const userMenuEnv: UserMenuEnvironment = {
       userName: this.userName,
@@ -1041,7 +1051,7 @@ export class HumanApp {
       this.openCommandPalette();
     });
     const divider = (): HTMLElement => { const rule = el("div", undefined, "user-menu-divider"); rule.setAttribute("role", "separator"); return rule; };
-    userDropdown.append(userInfo, divider(), shortcutsBtn, preferencesBtn, customUserMenuContainer, divider(), logoutForm);
+    userDropdown.append(userInfo, divider(), shortcutsBtn, preferencesBtn, approvalBtn, customUserMenuContainer, divider(), logoutForm);
     for (const row of userDropdown.querySelectorAll<HTMLElement>(".user-menu-row")) row.setAttribute("role", "menuitem");
     userDropdown.setAttribute("role", "menu");
     userDropdown.addEventListener("keydown", (e: KeyboardEvent) => {

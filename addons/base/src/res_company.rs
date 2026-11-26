@@ -529,7 +529,7 @@ impl ResCompany {
 
     /// Open direct branches, including archived records, with ordinary caller access.
     #[method]
-    #[rpc(effect = read)]
+    #[rpc(effect = read, assistant = offer)]
     async fn action_all_company_branches(
         this: &RecordSet<ResCompany>,
         tx: &mut Transaction,

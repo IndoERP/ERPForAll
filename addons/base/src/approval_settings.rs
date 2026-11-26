@@ -83,12 +83,34 @@ pub async fn max_approvers(tx: &mut Transaction) -> Result<usize> {
 /// skew under REPEATABLE READ; this no-op UPDATE forces stale writers to serialize/retry.
 /// It does not change the Settings CAS revision or invent a Settings audit event.
 pub(crate) async fn lock_policy_edit(tx: &mut Transaction) -> Result<()> {
-    tx.execute("INSERT INTO ir_config_setting_scope(identity,revision) VALUES ('global','0') ON CONFLICT(identity) DO NOTHING", &[]).await?;
+    ensure_policy_fence(tx).await?;
     tx.execute(
         "UPDATE ir_config_setting_scope SET revision=revision WHERE identity='global'",
         &[],
     )
     .await?;
+    Ok(())
+}
+
+/// Serialize the final password-policy decision with policy and global settings changes.
+pub(crate) async fn lock_policy_read(tx: &mut Transaction) -> Result<()> {
+    ensure_policy_fence(tx).await?;
+    let rows = tx
+        .query(
+            "SELECT id FROM ir_config_setting_scope WHERE identity='global' FOR SHARE",
+            &[],
+        )
+        .await?;
+    if rows.len() != 1 {
+        return Err(Error::invariant(
+            "The global approval policy fence is missing.",
+        ));
+    }
+    Ok(())
+}
+
+async fn ensure_policy_fence(tx: &mut Transaction) -> Result<()> {
+    tx.execute("INSERT INTO ir_config_setting_scope(identity,revision) VALUES ('global','0') ON CONFLICT(identity) DO NOTHING", &[]).await?;
     Ok(())
 }
 

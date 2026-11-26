@@ -97,8 +97,7 @@ pub enum TriggerCoalesce {
     PerRecord,
 }
 
-/// An outbox event that enqueues a job of its kind (4). Declaring one is refused at
-/// registry publication until the consumer exists.
+/// An outbox event that enqueues a trusted System job of its kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OutboxTrigger {
@@ -180,7 +179,7 @@ pub struct JobKindDecl {
     pub isolation: KindIsolation,
     /// Most running jobs of this kind per database, divided among live workers.
     pub max_concurrency: Option<NonZeroU32>,
-    /// Outbox events that enqueue this kind (refused until).
+    /// Outbox events that enqueue this kind.
     pub triggers: &'static [OutboxTrigger],
     /// An elevated kind runs as an elevated principal against stores or owner state and may run
     /// only on an isolated maintenance runner. A runner built with
@@ -286,7 +285,7 @@ impl JobKindDecl {
         self
     }
 
-    /// Outbox triggers (refused at publication until).
+    /// Outbox events that enqueue the kind.
     #[must_use]
     pub const fn triggers(mut self, triggers: &'static [OutboxTrigger]) -> Self {
         self.triggers = triggers;
@@ -470,12 +469,7 @@ pub fn validate(kinds: &[&JobKindDecl], required: &[&JobKindRequirement]) -> Res
                 decl.addon
             )));
         }
-        if !decl.triggers.is_empty() {
-            return Err(Error::programming(format!(
-                "job kind '{name}' declares outbox triggers, which need the trigger consumer of \
-                 task a later release (not delivered yet)"
-            )));
-        }
+        super::trigger::validate(decl)?;
         if decl.isolation == KindIsolation::ReadCommitted
             && decl.timeouts != TimeoutClass::Maintenance
         {
@@ -620,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn outbox_triggers_are_refused_until_the_consumer_task() {
+    fn outbox_triggers_require_a_system_kind() {
         static TRIGGERS: [OutboxTrigger; 1] = [OutboxTrigger::new(
             "res.partner",
             &["write"],
@@ -630,8 +624,7 @@ mod tests {
         let error = check(&[decl("stock", "stock.recount").triggers(&TRIGGERS)]).unwrap_err();
         assert_eq!(
             error.message(),
-            "job kind 'stock.recount' declares outbox triggers, which need the trigger consumer \
-             of task a later release (not delivered yet)"
+            "job kind 'stock.recount' requires the System principal for outbox delivery"
         );
     }
 
@@ -725,7 +718,10 @@ mod tests {
                 decl("a", "a.b").principal(PrincipalPolicy::System),
                 "System principal",
             ),
-            (decl("a", "a.b").triggers(&TRIGGERS), "a later release"),
+            (
+                decl("a", "a.b").triggers(&TRIGGERS),
+                "requires the System principal",
+            ),
             (
                 decl("a", "a.b").isolation(KindIsolation::ReadCommitted),
                 "READ COMMITTED",

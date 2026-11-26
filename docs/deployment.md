@@ -62,6 +62,175 @@ role, and a `NOLOGIN` maintenance role. Notes for a real deployment:
 Secret files must be regular files with mode 600, not symbolic links. In `direct` mode `bind` must be a loopback
 address and the proxy keys must be absent.
 
+### Attachment downloads
+
+A signed-in user or an unrestricted RPC API key can fetch an attachment at
+`/erp/content/<attachment-id>`. A stored binary field is available at
+`/erp/content/<model>/<id>/<field>`. For example, requesting `res.partner/<id>/image_128`
+returns the stored thumbnail. Field downloads admit up to 8 MiB per value. Use an attachment
+for larger files. Record rules, company scope and field permissions apply before conditional
+or range headers are evaluated. GET and HEAD expose the same strong ETag for the same bytes.
+
+A signed-in administrator can issue a read-only link with `ir.attachment.erp_share_content`.
+Pass the attachment ID, `public_read`, and a `lifetime_seconds` from 1 to 604800. Each scoped
+link replaces its predecessor. For a public URL, first set the attachment's `public` flag and
+then issue a public grant. Changing the bytes or parent, expiry, loss of the issuer's access,
+and `erp_revoke_content` end access. Keep query strings out of reverse-proxy access logs.
+
+An attachment URL pointing to another binary on the configured public origin returns a
+307 after both records pass the caller's access checks. The target enforces its own access
+checks on every request. The same ETag, range and download headers apply to inline and
+externally stored blobs.
+
+The following optional settings belong in the server configuration. The values shown are
+the defaults. The idle timer measures a stalled store read. Connection age and drain
+limits also apply when a client stops reading.
+
+```toml
+[startup_limits]
+"limits.stream_deadline_secs" = 600
+"limits.stream_idle_secs" = 60
+"limits.streams_per_user" = 4
+```
+
+The structured `erp::attachment` events publish process totals under
+`attachment_missing_total` for missing objects, `attachment_read_failed_total` for lookup,
+open and stream failures, and `attachment_limit_exhausted_total` for admission or time limits.
+The `limit` field identifies the exhausted budget. Counters restart with the process.
+
+Each active GET holds one user slot on the serving node. Exceeding the user limit returns
+HTTP 429 and `Retry-After`. The node's attachment store retains its own stream limit.
+HEAD and successful conditional requests complete without taking a user slot.
+
+#### Optional storage handoff
+
+For a local attachment store served by Nginx, set a distinct internal URI prefix per
+store. Use the same folder for the store path and the proxy alias.
+
+```toml
+[attachments.stores.main]
+kind = "local"
+path = "/var/lib/erp/attachments"
+x_accel_prefix = "/_erp_attachment/main/"
+```
+
+```nginx
+location ^~ /_erp_attachment/main/ {
+    internal;
+    alias /var/lib/erp/attachments/;
+    disable_symlinks on;
+    etag off;
+    if_modified_since off;
+    add_header ETag $upstream_http_etag always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Content-Security-Policy "default-src 'none'; sandbox" always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
+    add_header Referrer-Policy no-referrer always;
+}
+```
+
+Allow the proxy process to traverse the store directories and read the content files. Keep
+the ERP listener behind the authenticated reverse proxy and leave `X-Accel-Redirect`
+processing enabled. Nginx forwards the application's selected content type and disposition
+and derives the byte length from the file. Apply transfer concurrency and timeout limits at
+the proxy for these transfers. [Nginx internal locations](https://nginx.org/en/docs/http/ngx_http_core_module.html#internal)
+[Nginx upstream header processing](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ignore_headers)
+
+For an HTTPS S3-compatible store, set `presign_downloads = true` in its store table to
+allow a session or bearer read to receive a temporary 302 redirect for an eligible file.
+`presign_min_bytes` defaults to 8388608. `presign_ttl_secs` defaults to 60 and accepts
+1 through 300. Startup must successfully write and remove a probe object and verify
+that the store enforces the signed media type, attachment disposition, and `no-store`
+cache policy. Treat the signed URL as a credential until it expires and keep `Location`
+and query strings out of proxy logs. After a redirect has been issued, its separate
+expiry governs access at the object store.
+
+Both handoffs are off by default. Eligibility requires a readable stored blob and an
+unconditional full GET. The application continues to handle HEAD, ranges, validators,
+inline content and binary fields. Scoped links and public reads stream through ERP
+or use the internal proxy so their grant checks apply on every external request.
+This release rejects encryption and non-off scanner modes at startup.
+
+### Assistant connections
+
+Request a delegated key at `POST /erp/session/api-key` with `"audience":"mcp"` and
+the ordinary API-key issuance fields. Use the resulting bearer key at `POST /erp/mcp`.
+The endpoint supports MCP initialization, tool listing and tool calls. Each request uses
+the delegated user's current company and model access. Only methods explicitly declared
+as assistant tools can be called. Eligible mutations go through the installed approval
+policy. The owner can revoke the delegation through the existing API-key management method.
+
+### Signed provider callbacks
+
+A server can accept provider deliveries at `POST /erp/callback/<binding>`. Configure each
+binding on the nodes that serve it. Use a dedicated integration user with the ERP permissions
+and company access the target needs. Issue a normal RPC API key for that user and keep it on
+the server. Give the provider only the separate signing key and the signature contract.
+
+```toml
+[callbacks.delivery-status]
+model = "my.integration"
+method = "record_delivery"
+signing_key_file = "credentials/delivery-signing.key"
+api_key_file = "credentials/delivery-erp.key"
+```
+
+Both files are mode `0600` regular files, and relative paths are resolved alongside the server
+configuration. The signing file holds 32 random bytes encoded as unpadded base64url. The ERP key
+file holds the issued key as text. Each binding fixes one public RPC method with a `write` effect.
+The credential, ORM access checks and approval policy are evaluated in the usual RPC transaction.
+The request accepts JSON-2 arguments and record IDs, with the integration user's default company
+context. Send `Content-Type: application/json` and at most 64 KiB of uncompressed body.
+
+`Idempotency-Key` is a delivery UUID. `X-ERP-Callback-Timestamp` is Unix seconds within five minutes
+of the server clock. `X-ERP-Callback-Signature` is `v1=` followed by an unpadded base64url HMAC-SHA256
+tag. Compute it over the following UTF-8 lines, with one newline after every line, then append the
+exact HTTP body bytes. Use the configured public origin with no trailing slash and the lower-case
+UUID representation.
+
+```text
+erp-callback-v1
+<public origin>
+<database name>
+<binding>
+<model>
+<method>
+<timestamp>
+<delivery UUID>
+```
+
+Successful delivery and replay return HTTP 204. Reuse the UUID when retrying a delivery and sign
+with a fresh timestamp. The RPC idempotency windows govern replay of acknowledgements and
+retention of delivery claims. Renaming a binding or replacing its ERP API key starts a new
+idempotency scope, so coordinate those changes with the provider's retry window. The audit trail
+uses the `inbound_callback` origin and records the acting integration user. HTTP refusals use
+fixed messages, and the idempotency store holds only a fixed acknowledgement after success.
+
+### Audit roles and upkeep
+
+Configure `audit_reader_database_url_file` with a distinct PostgreSQL login when the deployment
+uses the audit reader. `erp db publish-grants` grants this login read access through the audit
+parent table. The runtime role appends evidence, and the owner role maintains the partition window
+with `erp audit maintain --config <server.toml>`. Audit partitions remain attached by default.
+
+Set the top-level `audit_retention_days` to an integer from 1 to 3650 to archive complete older
+UTC days. The fixed owner task runs at 02:00 UTC and archives at most one eligible partition per
+pass. `erp audit retain --config <server.toml>` runs one additional pass. Archival stores the
+partition and its count and digest in the private `erp_audit_archive` schema. Chain verification
+includes the archived rows. When the audit chain is initialized, provide the external anchor
+inventory through `audit_witness_file` so the owner can verify chain coverage before archiving.
+
+Use `erp audit hold --config <server.toml> --day YYYY-MM-DD` to keep a day attached. Add
+`--release` to lift the hold. `erp audit restore --config <server.toml> --day YYYY-MM-DD`
+checks the archived rows against their manifest, restores the partition for the audit reader,
+and places it on hold.
+
+Audit rows record the subject and the actor that authorized the call. Browser sessions act as
+their authenticated user. API-key calls record the key identity. Delegated agent keys also record
+the delegating user. A
+reviewed approval still executes under the original requester's authority. The receipt links
+to the execution operation, and the decision is a separate call by the eligible reviewer.
+
 ## Encrypted fields
 
 A `char` or `text` field declared `encrypted = true` (`#[field(char, encrypted = true)]`) is stored encrypted: its
@@ -328,3 +497,35 @@ written after the backup.
 - The server listens on loopback behind a TLS proxy; the proxy token is long and random.
 - The service runs as an unprivileged user.
 - Backups are tested by restoring them.
+
+### OpenID Connect sign-in
+
+Register the ERPForAll callback `<public_origin>/erp/login/external/callback` at the identity provider as an exact redirect URI. Enable authorization codes with `S256` PKCE and `client_secret_basic`. Configure one provider per database. Pin the issuer, endpoints and signing keys on each serving node. The server accepts HTTPS endpoints and loopback HTTP for local testing. Keep the client secret in a private mode-600 file. The signing key file is a public JWKS containing RSA (`RS256`) or Ed25519 (`EdDSA`) signing keys with unique key IDs.
+
+```toml
+[external_identity]
+client_secret_file = "oidc-client-secret"
+signing_keys_file = "oidc-signing-keys.json"
+
+[external_identity.provider]
+issuer = "https://id.example.com"
+authorization_endpoint = "https://id.example.com/authorize"
+token_endpoint = "https://id.example.com/token"
+client_id = "erpforall"
+label = "Company identity"
+required_acr = "urn:example:mfa"
+```
+
+Set `required_acr` to the identity provider's exact signed assurance claim for MFA. Omit it to use the provider's own sign-in policy. Apply compatible provider configuration to every node before serving traffic. To rotate signing keys, stage the new public key alongside the current one on each node before the provider begins signing with the new key.
+
+Sign in to an existing ERP account and open `/erp/login` to connect the provider to that account. Connecting requires both a current ERP session and a fresh provider sign-in. Existing accounts are identified by the linked issuer and subject. Email is used for eligibility only when you opt into provisioning. The following configuration permits new portal accounts for verified addresses in one domain and grants access to one company.
+
+```toml
+[external_identity.provider.provisioning]
+company_id = 1
+email_domain = "example.com"
+```
+
+Use **Disconnect** on the sign-in page to revoke your linked identities and the sessions issued through that provider. A user with the Settings administrator group can post `enabled=false` with the current session and login-page `csrf_token` to `/erp/session/external/provider`. Disabling the provider removes pending sign-in requests and revokes provider-issued sessions. Post `enabled=true` to reopen sign-in. Disable the provider before removing its configuration from the serving nodes if you need to revoke existing provider sessions at the same time.
+
+`erp db neutralize` clears external sign-in challenges and account links from the copy. A neutralized database keeps external sign-in disabled even if an issuer is configured at server startup.

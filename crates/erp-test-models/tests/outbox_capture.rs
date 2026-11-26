@@ -21,6 +21,50 @@ const EVENTFUL: &str = "test.capture";
 const PLAIN: &str = "test.capture.plain";
 const TABLE: &str = "\"erp_event\".\"ir_event_outbox\"";
 
+mod computed_relation {
+    use erp_sdk::prelude::*;
+
+    pub static ADDON: erp_registry::AddonDescriptor = erp_registry::AddonDescriptor {
+        name: "test_capture_computed",
+        depends: &["base"],
+        exact_only: false,
+    };
+
+    #[model(
+        name = "test.capture.computed",
+        addon = "test_capture_computed",
+        eventful = true
+    )]
+    pub struct Computed {
+        #[field(many2one, comodel = "test.capture.plain")]
+        pub source_id: Option<RecId>,
+        #[field(
+            many2many,
+            comodel = "test.capture.plain",
+            compute = "_compute_targets",
+            store,
+            precompute = false
+        )]
+        pub target_ids: Vec<RecId>,
+    }
+
+    #[methods(Computed, addon = "test_capture_computed")]
+    impl Computed {
+        #[compute(depends = ["source_id"])]
+        fn _compute_targets(batch: &mut Batch<'_, Computed>) -> Result<()> {
+            for index in batch.indices() {
+                let source = batch.get(index, Computed::SOURCE_ID)?;
+                batch.set(
+                    index,
+                    Computed::TARGET_IDS,
+                    source.into_iter().collect::<Vec<_>>(),
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn harness() -> Harness {
     let fields = const { &[FieldDecl::char("name"), FieldDecl::integer("number")] };
     let h = Harness::builder([&base_users::ADDON, &ADDON])
@@ -74,6 +118,83 @@ fn inserts(tx: &Transaction) -> usize {
         .iter()
         .filter(|s| s.starts_with("INSERT INTO \"erp_event\".\"ir_event_outbox\""))
         .count()
+}
+
+#[tokio::test]
+async fn stored_computed_many2many_uses_the_source_writer_origin() {
+    let h = Harness::builder([&base_users::ADDON, &computed_relation::ADDON])
+        .with_decls([ModelDecl::new(computed_relation::ADDON.name, PLAIN)
+            .fields(const { &[FieldDecl::char("name")] })])
+        .build()
+        .await
+        .unwrap();
+    let mut tx = begin(&h).await;
+    tx.install_event_schema().await.unwrap();
+    let sources = tx
+        .env()
+        .records(PLAIN)
+        .unwrap()
+        .create(&mut tx, vec![RawVals::new(), RawVals::new()])
+        .await
+        .unwrap()
+        .ids();
+    let owner = tx
+        .env()
+        .records("test.capture.computed")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![RawVals::new().set_cell("source_id", Cell::Id(sources[0]))],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    tx.commit().await.unwrap();
+
+    let mut tx = begin(&h).await;
+    let records = tx
+        .env()
+        .records("test.capture.computed")
+        .unwrap()
+        .browse([owner])
+        .unwrap();
+    records
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("source_id", Cell::Id(sources[1])),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut check = h.begin().await.unwrap();
+    let current = check
+        .env()
+        .records("test.capture.computed")
+        .unwrap()
+        .browse([owner])
+        .unwrap();
+    assert_eq!(
+        current
+            .related(&mut check, "target_ids")
+            .await
+            .unwrap()
+            .ids(),
+        [sources[1]]
+    );
+    let rows = check.query(&format!("SELECT field_names, operation_id::text FROM {TABLE} WHERE model='test.capture.computed' AND kind='write' ORDER BY id DESC LIMIT 2"), &[]).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<_, &str>(1), rows[1].get::<_, &str>(1));
+    assert!(rows.iter().any(|row| {
+        row.get::<_, Vec<String>>(0)
+            .contains(&"target_ids".to_owned())
+    }));
+    assert!(rows.iter().any(|row| {
+        row.get::<_, Vec<String>>(0)
+            .contains(&"source_id".to_owned())
+    }));
+    check.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
 }
 
 #[tokio::test]
@@ -374,7 +495,7 @@ async fn cancelled_finalization_cannot_drop_events_and_then_commit_business_rows
 }
 
 #[tokio::test]
-async fn non_eventful_unlink_cannot_indirectly_change_eventful_rows() {
+async fn non_eventful_unlink_captures_direct_and_transitive_effects() {
     use erp_fields::OnDelete;
     for transitive in [false, true] {
         for action in [OnDelete::Cascade, OnDelete::SetNull] {
@@ -433,7 +554,8 @@ async fn non_eventful_unlink_cannot_indirectly_change_eventful_rows() {
                     .unwrap()
                     .ids()[0];
             }
-            tx.env()
+            let child = tx
+                .env()
                 .records(EVENTFUL)
                 .unwrap()
                 .create(
@@ -441,7 +563,8 @@ async fn non_eventful_unlink_cannot_indirectly_change_eventful_rows() {
                     vec![RawVals::new().set_cell("root_id", Cell::Id(parent))],
                 )
                 .await
-                .unwrap();
+                .unwrap()
+                .ids()[0];
             tx.commit().await.unwrap();
             // New transaction and empty record cache; no compute dependents exist in this fixture.
             let mut tx = begin(&h).await;
@@ -451,25 +574,37 @@ async fn non_eventful_unlink_cannot_indirectly_change_eventful_rows() {
                 .unwrap()
                 .browse(roots.ids())
                 .unwrap();
-            let error = roots.unlink(&mut tx).await.unwrap_err();
-            assert_eq!(error.kind(), ErrorKind::Programming);
-            assert_eq!(
-                error.message(),
-                "outbox: eventful unlink capture for model 'test.capture' is not implemented until S7-S9"
-            );
+            roots.unlink(&mut tx).await.unwrap();
             tx.commit().await.unwrap();
             let mut check = h.begin().await.unwrap();
-            assert_eq!(count(&mut check, "test_capture_plain").await, 1);
-            assert_eq!(count(&mut check, "test_capture").await, 1);
-            assert_eq!(count(&mut check, TABLE).await, 1);
-            assert_eq!(
-                check
-                    .query("SELECT root_id FROM test_capture", &[])
-                    .await
-                    .unwrap()[0]
-                    .get::<_, i64>(0),
-                parent
-            );
+            assert_eq!(count(&mut check, "test_capture_plain").await, 0);
+            let survivors = check
+                .query("SELECT root_id FROM test_capture", &[])
+                .await
+                .unwrap();
+            let events = check
+                .query(
+                    &format!(
+                        "SELECT kind, model, record_ids::text, field_names FROM {TABLE} ORDER BY id"
+                    ),
+                    &[],
+                )
+                .await
+                .unwrap();
+            assert_eq!(events.len(), 2);
+            let effect = &events[1];
+            let (kind, fields) = if action == OnDelete::Cascade {
+                assert!(survivors.is_empty());
+                ("unlink", Vec::new())
+            } else {
+                assert_eq!(survivors.len(), 1);
+                assert_eq!(survivors[0].get::<_, Option<i64>>(0), None);
+                ("write", vec!["root_id"])
+            };
+            assert_eq!(effect.get::<_, &str>(0), kind);
+            assert_eq!(effect.get::<_, &str>(1), EVENTFUL);
+            assert_eq!(effect.get::<_, String>(2), format!("[{child}]"));
+            assert_eq!(effect.get::<_, Vec<String>>(3), fields);
             check.rollback().await.unwrap();
             h.cleanup().await.unwrap();
         }
@@ -489,7 +624,7 @@ fn relation_default_value() -> erp_fields::Value {
 }
 
 #[tokio::test]
-async fn resolved_relation_defaults_cannot_bypass_create_preflight() {
+async fn resolved_relation_defaults_capture_the_insert_and_inverse_change() {
     for field_default in [false, true] {
         let mut lines = FieldDecl::one2many("lines", PLAIN, "owner_id");
         if field_default {
@@ -521,24 +656,103 @@ async fn resolved_relation_defaults_cannot_bypass_create_preflight() {
         if !field_default {
             records = records.with_context([("default_lines", relation_default_value())]);
         }
-        let error = records
-            .create(&mut tx, vec![RawVals::new()])
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Programming);
-        assert_eq!(
-            error.message(),
-            "outbox: eventful relation capture for model 'test.capture' is not implemented until S7-S9"
-        );
-        assert!(!tx.captured().iter().any(|s| s.starts_with("INSERT")));
-        tx.rollback().await.unwrap();
+        let created = records.create(&mut tx, vec![RawVals::new()]).await.unwrap();
+        tx.commit().await.unwrap();
         let mut check = h.begin().await.unwrap();
-        assert_eq!(count(&mut check, "test_capture").await, 0);
-        assert_eq!(count(&mut check, "test_capture_plain").await, 0);
-        assert_eq!(count(&mut check, TABLE).await, 0);
+        assert_eq!(count(&mut check, "test_capture").await, 1);
+        assert_eq!(count(&mut check, "test_capture_plain").await, 1);
+        let events = check
+            .query(
+                &format!("SELECT kind, record_ids::text, field_names FROM {TABLE} ORDER BY id"),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].get::<_, &str>(0), "create");
+        assert_eq!(events[1].get::<_, &str>(0), "write");
+        assert_eq!(
+            events[1].get::<_, &str>(1),
+            format!("[{}]", created.ids()[0])
+        );
+        assert_eq!(events[1].get::<_, Vec<String>>(2), ["lines"]);
         check.rollback().await.unwrap();
         h.cleanup().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn many2many_capture_observes_actual_pair_changes_on_both_sides() {
+    use erp_orm::Command;
+    let h = Harness::builder([&base_users::ADDON, &ADDON])
+        .with_decls([
+            ModelDecl::new("test_capture", EVENTFUL)
+                .eventful(true)
+                .fields(
+                    const {
+                        &[
+                            FieldDecl::char("name"),
+                            FieldDecl::many2many("tags", PLAIN).relation(
+                                "capture_cross_rel",
+                                "owner_id",
+                                "tag_id",
+                            ),
+                        ]
+                    },
+                ),
+            ModelDecl::new("test_capture", PLAIN).eventful(true).fields(
+                const {
+                    &[
+                        FieldDecl::char("name"),
+                        FieldDecl::many2many("owners", EVENTFUL).relation(
+                            "capture_cross_rel",
+                            "tag_id",
+                            "owner_id",
+                        ),
+                    ]
+                },
+            ),
+        ])
+        .build()
+        .await
+        .unwrap();
+    let mut tx = begin(&h).await;
+    tx.install_event_schema().await.unwrap();
+    tx.commit().await.unwrap();
+    let parent = tx
+        .env()
+        .records(EVENTFUL)
+        .unwrap()
+        .create(&mut tx, vec![RawVals::new()])
+        .await
+        .unwrap();
+    let tag = tx
+        .env()
+        .records(PLAIN)
+        .unwrap()
+        .create(&mut tx, vec![RawVals::new()])
+        .await
+        .unwrap();
+    let tag_id = tag.rec_ids()[0];
+    for _ in 0..2 {
+        parent
+            .write(
+                &mut tx,
+                RawVals::new().set_commands("tags", vec![Command::link(tag_id)]),
+            )
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let mut check = h.begin().await.unwrap();
+    let events = check.query(&format!("SELECT model, field_names FROM {TABLE} WHERE kind='write' AND field_names && ARRAY['tags','owners'] ORDER BY id"), &[]).await.unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].get::<_, &str>(0), EVENTFUL);
+    assert_eq!(events[0].get::<_, Vec<String>>(1), ["tags"]);
+    assert_eq!(events[1].get::<_, &str>(0), PLAIN);
+    assert_eq!(events[1].get::<_, Vec<String>>(1), ["owners"]);
+    check.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
 }
 
 #[tokio::test]

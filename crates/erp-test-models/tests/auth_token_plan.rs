@@ -68,6 +68,29 @@ async fn try_world(
     (h, auth)
 }
 
+#[tokio::test]
+async fn final_registry_hook_refuses_an_invalid_token_plan_before_publication() {
+    let h = harness(false).await;
+    let _serial = SCENARIO.lock().await;
+    test_token::set_scenario("unknown");
+    let mut tx = h.begin().await.unwrap();
+    let users = tx.env().records("res.users").unwrap();
+    let rejected = users
+        .call::<(), ()>(&mut tx, "_register_hook", ())
+        .await
+        .unwrap_err();
+    assert!(rejected.message().contains("no_such_field"));
+    tx.rollback().await.unwrap();
+    test_token::set_scenario("ok");
+    let mut retry = h.begin().await.unwrap();
+    let users = retry.env().records("res.users").unwrap();
+    users
+        .call::<(), ()>(&mut retry, "_register_hook", ())
+        .await
+        .unwrap();
+    retry.commit().await.unwrap();
+}
+
 /// A world whose plan is `scenario`'s (which must be accepted).
 async fn token_world(scenario: &'static str, more: bool) -> World {
     token_world_with(scenario, more, HashPoolConfig::DEFAULT).await
@@ -480,8 +503,77 @@ fn refused(result: Result<Auth, Error>, kind: ErrorKind, message: &str) {
 
 /// failure shapes and the combination with custom login selection are separate tests)
 #[tokio::test]
+async fn relation_membership_changes_end_sessions() {
+    let w = token_world("relation", false).await;
+    let bob = user_with_password(&w.h, "bob", "pw").await;
+    let alice = user_with_password(&w.h, "alice", "pw").await;
+    let initial = cookie(&login(&w.auth, "bob", "pw").await.unwrap());
+    sql(
+        &w.h,
+        &format!("INSERT INTO test_token_item (user_id) VALUES ({alice})"),
+    )
+    .await;
+    assert_eq!(check_user(&w.auth, &initial).await.unwrap(), bob);
+    sql(
+        &w.h,
+        &format!("INSERT INTO test_token_item (user_id) VALUES ({bob}), ({bob})"),
+    )
+    .await;
+    gone(&w.auth, &initial, "membership added").await;
+    let fresh = cookie(&login(&w.auth, "bob", "pw").await.unwrap());
+    sql(
+        &w.h,
+        &format!("UPDATE test_token_item SET label='changed' WHERE user_id={bob}"),
+    )
+    .await;
+    assert_eq!(check_user(&w.auth, &fresh).await.unwrap(), bob);
+    sql(
+        &w.h,
+        &format!("UPDATE test_token_item SET user_id={alice} WHERE user_id={bob}"),
+    )
+    .await;
+    gone(&w.auth, &fresh, "members reassigned").await;
+    sql(
+        &w.h,
+        &format!("INSERT INTO test_token_item (user_id) SELECT {bob} FROM generate_series(1,1025)"),
+    )
+    .await;
+    assert!(
+        matches!(login(&w.auth, "bob", "pw").await, Err(erp_security::auth::LoginError::Failed(error)) if error.kind() == ErrorKind::Validation)
+    );
+}
+
+#[tokio::test]
+async fn many2many_token_tracks_the_membership_set() {
+    let w = token_world("groups", false).await;
+    let uid = user_with_password(&w.h, "member", "pw").await;
+    let mut tx = w.h.begin().await.unwrap();
+    let first = named_group(&mut tx, "test.first", "First").await;
+    let second = named_group(&mut tx, "test.second", "Second").await;
+    tx.commit().await.unwrap();
+    let initial = cookie(&login(&w.auth, "member", "pw").await.unwrap());
+    sql(
+        &w.h,
+        &format!(
+            "INSERT INTO res_groups_users_rel(uid,gid) VALUES ({uid},{second}),({uid},{first})"
+        ),
+    )
+    .await;
+    gone(&w.auth, &initial, "group membership added").await;
+    let current = cookie(&login(&w.auth, "member", "pw").await.unwrap());
+    sql(&w.h, &format!("DELETE FROM res_groups_users_rel WHERE uid={uid} AND gid IN ({first},{second}); INSERT INTO res_groups_users_rel(uid,gid) VALUES ({uid},{first}),({uid},{second})")).await;
+    assert_eq!(check_user(&w.auth, &current).await.unwrap(), uid);
+    sql(
+        &w.h,
+        &format!("DELETE FROM res_groups_users_rel WHERE uid={uid} AND gid={second}"),
+    )
+    .await;
+    gone(&w.auth, &current, "group membership removed").await;
+}
+
+#[tokio::test]
 async fn an_invalid_field_in_the_plan_refuses_the_service() {
-    let cases: [(&'static str, ErrorKind, &str); 5] = [
+    let cases: [(&'static str, ErrorKind, &str); 4] = [
         (
             "unknown",
             ErrorKind::Programming,
@@ -491,11 +583,6 @@ async fn an_invalid_field_in_the_plan_refuses_the_service() {
             "unstored",
             ErrorKind::Programming,
             "_get_session_token_fields: res.users.tok_calc is not stored, only stored columns can be part of the token",
-        ),
-        (
-            "relation",
-            ErrorKind::Programming,
-            "_get_session_token_fields: res.users.tok_rel is a relation field, relation contributions are not supported until a later release",
         ),
         (
             "datetime",
@@ -566,9 +653,8 @@ async fn a_failing_panicking_or_querying_hook_refuses_the_service() {
     }
 }
 
-/// refused with its own named follow-up)
 #[tokio::test]
-async fn custom_selection_with_added_fields_is_refused() {
+async fn custom_selection_binds_session_to_added_fields() {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_data::model_data::ADDON,
@@ -581,18 +667,31 @@ async fn custom_selection_with_added_fields_is_refused() {
     .await
     .expect("harness");
     prepare(&h).await;
-    let _serial = SCENARIO.lock().await;
-    test_token::set_scenario("ok");
-    let result = test_support::login_selection_auth(
-        h.orm().clone(),
-        AuthConfig::DEFAULT,
-        own_pool(HashPoolConfig::DEFAULT),
-    )
-    .await;
-    refused(
-        result,
-        ErrorKind::Programming,
-        "custom login selection combined with a session token plan that adds fields is unsupported until a later release",
+    let auth = {
+        let _serial = SCENARIO.lock().await;
+        test_token::set_scenario("ok");
+        test_support::login_selection_auth(
+            h.orm().clone(),
+            AuthConfig::DEFAULT,
+            own_pool(HashPoolConfig::DEFAULT),
+        )
+        .await
+        .unwrap()
+    };
+    let uid = user_with_password(&h, "operator", "pw").await;
+    set_user(&h, uid, "alias='operator-alias',tok_a='first'").await;
+    let logged = login(&auth, "alias:operator-alias", "pw").await.unwrap();
+    assert_eq!(
+        check_user(&auth, logged.session().secret()).await.unwrap(),
+        uid
+    );
+    set_user(&h, uid, "tok_a='rotated'").await;
+    assert_eq!(
+        check_user(&auth, logged.session().secret())
+            .await
+            .unwrap_err()
+            .kind(),
+        GONE.0
     );
 }
 

@@ -215,23 +215,8 @@ impl WebApp {
         request: PrintRequest<'_>,
     ) -> HttpResult<(PrintedReport, bool)> {
         let credential = self.bearer_credential(headers, client, auth).await?;
-        let mut tx = self.open_bearer(&credential).await?;
-        if let Some(key) = tx.env().principal().scope().map(erp_orm::Scope::key) {
-            let budget = auth.api_key_budget();
-            if !budget.admit_api_key(key) {
-                let _ = tx.rollback().await;
-                drop(tx);
-                return Err(self
-                    .render_bearer_failure(
-                        erp_rpc::InfraError::RateLimited {
-                            retry_after: budget.retry_after_secs(),
-                        }
-                        .into(),
-                    )
-                    .await);
-            }
-        }
-        let printed = if printable_with(tx.env().principal().scope()) {
+        let mut tx = self.open_document_bearer(&credential).await?;
+        let printed = if unrestricted_document_key(tx.env().principal().scope()) {
             request.print(&mut tx).await
         } else {
             Err(erp_fields::Error::access(
@@ -277,16 +262,6 @@ impl PrintRequest<'_> {
     }
 }
 
-/// Whether a key of `scope` may print. A report reads records outside the RPC dispatch, where a
-/// key's model and method allowlists are enforced, so a key limited by either is refused rather
-/// than allowed past its list. Unrestricted keys (every user key today) and sessions print.
-fn printable_with(scope: Option<&erp_orm::Scope>) -> bool {
-    scope.is_none_or(|scope| {
-        matches!(scope.models(), erp_orm::ModelAllow::All)
-            && matches!(scope.methods(), erp_orm::MethodAllow::All)
-    })
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests")]
 mod tests {
@@ -325,17 +300,17 @@ mod tests {
                 .unwrap()
         };
         let all = scope(erp_orm::ModelAllow::All, erp_orm::MethodAllow::All);
-        assert!(printable_with(None));
-        assert!(printable_with(Some(&all)));
+        assert!(unrestricted_document_key(None));
+        assert!(unrestricted_document_key(Some(&all)));
         let models = scope(
             erp_orm::ModelAllow::named(["res.partner"]).unwrap(),
             erp_orm::MethodAllow::All,
         );
-        assert!(!printable_with(Some(&models)));
+        assert!(!unrestricted_document_key(Some(&models)));
         let methods = scope(
             erp_orm::ModelAllow::All,
             erp_orm::MethodAllow::named(["read"]).unwrap(),
         );
-        assert!(!printable_with(Some(&methods)));
+        assert!(!unrestricted_document_key(Some(&methods)));
     }
 }

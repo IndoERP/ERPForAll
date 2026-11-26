@@ -10,9 +10,11 @@
 
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::{StreamExt, TryStreamExt};
 use object_store::path::Path;
+use object_store::signer::{SignedUrlOptions, Signer};
 use object_store::{
     Error as OsError, GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
     UpdateVersion,
@@ -46,6 +48,75 @@ pub struct ObjectBackend {
     prefix: String,
     fingerprint: String,
     part_size: usize,
+    presign: Option<(Arc<object_store::aws::AmazonS3>, PresignDownloads)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PresignDownloads {
+    pub(crate) minimum: u64,
+    pub(crate) ttl: u64,
+}
+
+const PRESIGN_CACHE: &str = "private, no-store";
+
+fn presign_refused() -> BlobError {
+    BlobError::config(
+        "the S3 store cannot deliver presigned downloads with the required response headers",
+    )
+}
+
+fn sign_download_options(media_type: &str, disposition: &str) -> SignedUrlOptions {
+    SignedUrlOptions::new().with_query([
+        ("response-content-type", media_type),
+        ("response-content-disposition", disposition),
+        ("response-cache-control", PRESIGN_CACHE),
+    ])
+}
+
+async fn signed_download(
+    signer: &object_store::aws::AmazonS3,
+    object: &Path,
+    policy: PresignDownloads,
+    media_type: &str,
+    disposition: &str,
+) -> Result<reqwest::Url, BlobError> {
+    let url = signer
+        .signed_url_opts(
+            reqwest::Method::GET,
+            object,
+            Duration::from_secs(policy.ttl),
+            &sign_download_options(media_type, disposition),
+        )
+        .await
+        .map_err(|_| presign_refused())?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(presign_refused());
+    }
+    Ok(url)
+}
+
+pub(crate) fn endpoint_url(endpoint: &str) -> Option<(reqwest::Url, bool)> {
+    let url = reqwest::Url::parse(endpoint).ok()?;
+    let host = url.host_str()?.trim_matches(['[', ']']);
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    let allow_http = url.scheme() == "http" && loopback;
+    (url.scheme() == "https" || allow_http).then_some(())?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some((url, allow_http))
 }
 
 /// What an `s3` store needs, apart from credentials (which only the environment or an instance
@@ -232,6 +303,7 @@ impl ObjectBackend {
             prefix: prefix.to_owned(),
             fingerprint: String::new(),
             part_size: PART_SIZE,
+            presign: None,
         };
         backend.fingerprint = backend.load_or_create_marker().await?;
         Ok(backend)
@@ -246,6 +318,13 @@ impl ObjectBackend {
     /// `Configuration` for an endpoint that is not HTTPS (plain HTTP only for a loopback
     /// address) or malformed; the errors of [`Self::open`].
     pub async fn s3(settings: &S3Settings) -> Result<Self, BlobError> {
+        Self::open_s3(settings, None).await
+    }
+
+    pub(crate) async fn open_s3(
+        settings: &S3Settings,
+        presign: Option<PresignDownloads>,
+    ) -> Result<Self, BlobError> {
         use object_store::aws::{AmazonS3Builder, S3CopyIfNotExists};
         let mut builder = AmazonS3Builder::from_env()
             .with_bucket_name(&settings.bucket)
@@ -253,16 +332,15 @@ impl ObjectBackend {
             .with_virtual_hosted_style_request(!settings.path_style)
             .with_copy_if_not_exists(S3CopyIfNotExists::Multipart);
         if let Some(endpoint) = &settings.endpoint {
-            let lower = endpoint.to_ascii_lowercase();
-            let loopback = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-                .iter()
-                .any(|p| lower.starts_with(p));
-            if !(lower.starts_with("https://") || loopback) {
+            let (_, allow_http) = endpoint_url(endpoint).ok_or_else(|| BlobError::config(
+                "an s3 endpoint must be https; plain http is allowed only for a loopback address",
+            ))?;
+            if allow_http && presign.is_some() {
                 return Err(BlobError::config(
-                    "an s3 endpoint must be https; plain http is allowed only for a loopback address",
+                    "presigned S3 downloads require an HTTPS store endpoint",
                 ));
             }
-            builder = builder.with_endpoint(endpoint).with_allow_http(loopback);
+            builder = builder.with_endpoint(endpoint).with_allow_http(allow_http);
         }
         let store = builder.build().map_err(|e| {
             BlobError::config(format!(
@@ -270,7 +348,69 @@ impl ObjectBackend {
                 variant_name(&e)
             ))
         })?;
-        Self::open(Arc::new(store), &settings.prefix).await
+        let store = Arc::new(store);
+        let mut backend = Self::open(store.clone(), &settings.prefix).await?;
+        if let Some(policy) = presign {
+            backend.probe_presign(&store, policy).await?;
+            backend.presign = Some((store, policy));
+        }
+        Ok(backend)
+    }
+
+    async fn probe_presign(
+        &self,
+        signer: &object_store::aws::AmazonS3,
+        policy: PresignDownloads,
+    ) -> Result<(), BlobError> {
+        let probe = self.path(&format!("_erp_presign_probe/{}", random_uuid_text()?));
+        self.inner
+            .put_opts(
+                &probe,
+                PutPayload::from_static(b"x"),
+                PutOptions {
+                    mode: PutMode::Create,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .map_err(|_| presign_refused())?;
+        let result = async {
+            const TYPE: &str = "text/plain; charset=utf-8";
+            const DISPOSITION: &str = "attachment; filename=\"erp-probe.bin\"";
+            let url = signed_download(signer, &probe, policy, TYPE, DISPOSITION).await?;
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|_| presign_refused())?;
+            let answer = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|_| presign_refused())?;
+            let has = |name, value| {
+                answer
+                    .headers()
+                    .get(name)
+                    .is_some_and(|header| header == value)
+            };
+            if answer.status() != reqwest::StatusCode::OK
+                || !has(reqwest::header::CONTENT_TYPE, TYPE)
+                || !has(reqwest::header::CONTENT_DISPOSITION, DISPOSITION)
+                || !has(reqwest::header::CACHE_CONTROL, PRESIGN_CACHE)
+            {
+                return Err(presign_refused());
+            }
+            Ok(())
+        }
+        .await;
+        let removed = self
+            .inner
+            .delete(&probe)
+            .await
+            .map_err(|_| presign_refused());
+        result.and(removed)
     }
 
     /// A copy with another part size (tests exercise the multipart path with small parts).
@@ -545,10 +685,38 @@ impl AttachmentStore for ObjectBackend {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             range_reads: true,
-            presign: false,
+            presign: self.presign.is_some(),
             create_only: true,
             if_match_put: true,
         }
+    }
+
+    fn download_handoff<'a>(
+        &'a self,
+        request: crate::DownloadRequest<'a>,
+    ) -> BoxFuture<'a, Result<Option<crate::DownloadHandoff>, BlobError>> {
+        Box::pin(async move {
+            let Some((signer, policy)) = &self.presign else {
+                return Ok(None);
+            };
+            if !request.allow_presign || request.size < policy.minimum {
+                return Ok(None);
+            }
+            if self.head(request.key).await?.size != request.size {
+                return Err(BlobError::config(
+                    "the S3 offload object does not have the expected size",
+                ));
+            }
+            let url = signed_download(
+                signer,
+                &self.path(&request.key.path()),
+                *policy,
+                request.media_type,
+                request.attachment_disposition,
+            )
+            .await?;
+            Ok(Some(crate::DownloadHandoff::Presigned(url.into())))
+        })
     }
 
     fn fingerprint(&self) -> Option<String> {
@@ -854,5 +1022,45 @@ mod abort_diagnostics {
             ));
             assert!(matches!(*abort, BlobError::Unavailable { .. }));
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test assertions")]
+mod download_signing {
+    use super::*;
+
+    #[tokio::test]
+    async fn presigning_pins_media_disposition_cache_and_expiry() {
+        let signer = object_store::aws::AmazonS3Builder::new()
+            .with_access_key_id("test-access")
+            .with_secret_access_key("test-signing-key")
+            .with_bucket_name("test-bucket")
+            .with_region("us-east-1")
+            .build()
+            .unwrap();
+        let disposition = "attachment; filename=\"note.txt\"";
+        let signed = signed_download(
+            &signer,
+            &Path::from("test/object"),
+            PresignDownloads {
+                minimum: 1,
+                ttl: 60,
+            },
+            "text/plain",
+            disposition,
+        )
+        .await
+        .unwrap();
+        let parameters: std::collections::BTreeMap<_, _> = signed.query_pairs().collect();
+        let query_value = |name| parameters.get(name).map(|value| value.as_ref() as &str);
+        assert_eq!(query_value("response-content-type"), Some("text/plain"));
+        assert_eq!(
+            query_value("response-content-disposition"),
+            Some(disposition)
+        );
+        assert_eq!(query_value("response-cache-control"), Some(PRESIGN_CACHE));
+        assert_eq!(query_value("X-Amz-Expires"), Some("60"));
+        assert!(parameters.contains_key("X-Amz-Signature"));
     }
 }

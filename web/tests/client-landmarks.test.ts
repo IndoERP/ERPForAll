@@ -62,6 +62,27 @@ test("boot keeps a neutral mount and renders a semantic error page for invalid d
   expect(document.querySelectorAll("main")).toHaveLength(1); expect(headings()).toHaveLength(1);
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("Invalid sign-in redirect.");
 });
+test("the configured external provider offers a normal browser sign-in and an explicit account link", async () => {
+  page("erp-login", { csrf: "fixture", database: "fixture", redirect: "/erp", error: null,
+    external_label: "Company Identity", can_link_external: true });
+  const fetch = vi.fn(async (_url: string, _options: RequestInit) => new Response(null, { status: 403 }));
+  vi.stubGlobal("fetch", fetch);
+  await boot();
+  mountedHost = document.getElementById("erp-root")!;
+  const forms = [...mountedHost.querySelectorAll<HTMLFormElement>('form[action="/erp/login/external"]')];
+  expect(forms.map(form => form.querySelector("button")?.textContent?.trim())).toEqual([
+    "Sign in with Company Identity", "Connect Company Identity",
+  ]);
+  expect(mountedHost.querySelector('form[action="/erp/session/external/revoke"] button')?.textContent?.trim()).toBe("Disconnect Company Identity");
+  expect(forms[1]!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))).toBe(false);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  const [target, options] = fetch.mock.calls[0]!;
+  expect(new URL(target).pathname).toBe("/erp/login/external");
+  expect(options.redirect).toBe("error");
+  expect((options.body as URLSearchParams).get("link")).toBe("1");
+  expect((options.body as URLSearchParams).get("csrf_token")).toBe("fixture");
+  await vi.waitFor(() => expect(mountedHost?.querySelector("[data-external-login-error]")?.textContent).toBe("External sign-in is unavailable."));
+});
 test("missing mount still rejects explicitly", async () => { await expect(boot()).rejects.toMatchObject({ name: "Error", message: "Application mount point is missing." }); });
 test("home h1 belongs to the page and skip link still focuses content", async () => {
   history.replaceState(null, "", "/erp"); mockRpc(); const root = shell(); app = new HumanApp(root, bootstrap); await app.start();

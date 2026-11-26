@@ -32,6 +32,7 @@
 //! `LIMIT`/`OFFSET` and DML arrays stay named prepared statements cached per connection, where
 //! the generic plan is as good and saves planning ([`PlanPolicy`]).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -40,7 +41,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::graph::ModelGraph;
 use erp_domain::{Domain, DomainKind, Operator, OptimizationLevel};
 use erp_fields::{
-    ColumnType, DateTime, Error, ErrorKind, FieldType, RealId, RecId, Result, Storage, Value,
+    Cell, ColumnType, DateTime, Error, ErrorKind, FieldType, RealId, RecId, Result, Storage, Value,
 };
 use erp_registry::{FieldId, ModelId, ModelSpec};
 use erp_sql::filter::{
@@ -633,6 +634,57 @@ async fn compile_domain_at(
     unaccent: Unaccent,
     offset: usize,
 ) -> Result<Arc<Compiled>> {
+    compile_domain_at_with(
+        tx,
+        records,
+        domain,
+        unaccent,
+        offset,
+        CompanyPreparation::Ordinary,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum CompanyPreparation<'a> {
+    Ordinary,
+    Catalog(Option<&'a erp_sql::company::CompanyValues>),
+}
+
+impl<'a> CompanyPreparation<'a> {
+    async fn values(
+        self,
+        tx: &mut Transaction,
+        env: &Env,
+        fields: &[(ModelId, FieldId)],
+    ) -> Result<Option<Cow<'a, erp_sql::company::CompanyValues>>> {
+        match self {
+            Self::Ordinary => Ok(tx.company_query_values(env, fields).await?.map(Cow::Owned)),
+            Self::Catalog(values) => {
+                let registry = env.registry();
+                for &(model, field) in fields {
+                    let model = registry.model_by_id(model);
+                    let field = model.field_by_id(field);
+                    if field.company_dependent {
+                        return Ok(Some(Cow::Borrowed(
+                            values.ok_or_else(|| erp_sql::company::missing(model, field))?,
+                        )));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
+async fn compile_domain_at_with(
+    tx: &mut Transaction,
+    records: &Records,
+    domain: &Domain,
+    unaccent: Unaccent,
+    offset: usize,
+    preparation: CompanyPreparation<'_>,
+) -> Result<Arc<Compiled>> {
     let _search_scope = crate::search_method::scope(tx)?;
     let env = records.env();
     let spec = records.spec();
@@ -645,7 +697,7 @@ async fn compile_domain_at(
         lang: env.lang(),
     };
     let fields = erp_sql::filter::where_fields(&prepared, &context)?;
-    let company = tx.company_query_values(env, &fields).await?;
+    let company = preparation.values(tx, env, &fields).await?;
     let mut plan = match &company {
         Some(values) => {
             erp_sql::filter::plan_where_with_company(&prepared, &context, values, offset + 1)?
@@ -764,6 +816,27 @@ async fn compile_search_at(
     unaccent: Unaccent,
     offset: usize,
 ) -> Result<Arc<Compiled>> {
+    compile_search_at_with(
+        tx,
+        records,
+        domain,
+        access,
+        active_test,
+        unaccent,
+        (offset, CompanyPreparation::Ordinary),
+    )
+    .await
+}
+
+async fn compile_search_at_with(
+    tx: &mut Transaction,
+    records: &Records,
+    domain: &Domain,
+    access: Option<&Domain>,
+    active_test: bool,
+    unaccent: Unaccent,
+    (offset, preparation): (usize, CompanyPreparation<'_>),
+) -> Result<Arc<Compiled>> {
     tx.admit_records(records).await?;
     if access.is_some_and(Domain::is_false) {
         return Ok(false_compiled());
@@ -782,19 +855,20 @@ async fn compile_search_at(
         let condition = Domain::condition(active, Operator::In, erp_domain::Value::set([true]))?;
         domain = condition & domain;
     }
-    let user = compile_domain_at(tx, records, &domain, unaccent, offset).await?;
+    let user = compile_domain_at_with(tx, records, &domain, unaccent, offset, preparation).await?;
     let Some(access) = access else {
         return Ok(user);
     };
     if user.constant == Some(false) {
         return Ok(user);
     }
-    let security = compile_domain_at(
+    let security = compile_domain_at_with(
         tx,
         &predicate_records(records),
         access,
         unaccent,
         offset + user.params.len(),
+        preparation,
     )
     .await?;
     and_compiled(&user, &security)
@@ -999,12 +1073,22 @@ async fn compile_search_order(
     order: &str,
     offset: usize,
 ) -> Result<Arc<BoundOrder>> {
+    compile_search_order_with(tx, records, order, offset, CompanyPreparation::Ordinary).await
+}
+
+async fn compile_search_order_with(
+    tx: &mut Transaction,
+    records: &Records,
+    order: &str,
+    offset: usize,
+    preparation: CompanyPreparation<'_>,
+) -> Result<Arc<BoundOrder>> {
     tx.validate_cached_search_language(records.env())?;
     let spec = records.spec();
     let registry = records.env().registry();
     let lang = records.env().lang();
     let fields = erp_sql::order::order_fields(registry, spec, order, lang)?;
-    let company = tx.company_query_values(records.env(), &fields).await?;
+    let company = preparation.values(tx, records.env(), &fields).await?;
     let (compiled, params) = match company {
         Some(values) => (
             Arc::new(erp_sql::order::compile_order_with_company(
@@ -2040,6 +2124,14 @@ impl SearchQuery {
         self.filter.params.len() + self.order.as_ref().map_or(0, |order| order.params.len())
     }
 
+    /// The company parameter of the compiled order, before any keyset restriction is added.
+    pub(crate) fn company_order_slot(&self) -> Option<usize> {
+        self.order
+            .as_ref()
+            .filter(|order| !order.params.is_empty())
+            .map(|_| self.filter.params.len() + 1)
+    }
+
     /// AND a keyset piece (`erp_sql::keyset`) to the filter; its placeholders are
     /// numbered after the filter's ([`SearchQuery::filter_params`]).
     pub(crate) fn restrict(&mut self, sql: &str, params: Vec<Param>) {
@@ -2106,11 +2198,12 @@ impl SearchQuery {
 
     /// Run the query (unless it is known to be empty) fetching `columns` into the cache; the ids
     /// in query order. The model's order applies when none was set.
-    pub(crate) async fn execute_columns(
+    pub(crate) async fn execute_keyset(
         &mut self,
         tx: &mut Transaction,
         columns: &[FieldId],
-    ) -> Result<Vec<RecId>> {
+        expressions: &[(&str, ColumnType)],
+    ) -> Result<(Vec<RecId>, Vec<Cell>)> {
         tx.admit_records(&self.records).await?;
         tx.validate_search_language(self.records.env()).await?;
         if self.order.is_none() {
@@ -2118,9 +2211,9 @@ impl SearchQuery {
                 Some(compile_search_order(tx, &self.records, "", self.filter.params.len()).await?);
         }
         if self.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
-        self.execute(tx, columns).await
+        self.execute_projected(tx, columns, expressions).await
     }
 
     /// The `SELECT` of the query fetching `columns`, with its parameters.
@@ -2139,13 +2232,40 @@ impl SearchQuery {
         tx: &mut Transaction,
         columns: &[FieldId],
     ) -> Result<Vec<RecId>> {
+        self.execute_projected(tx, columns, &[])
+            .await
+            .map(|(ids, _)| ids)
+    }
+
+    async fn execute_projected(
+        &self,
+        tx: &mut Transaction,
+        columns: &[FieldId],
+        expressions: &[(&str, ColumnType)],
+    ) -> Result<(Vec<RecId>, Vec<Cell>)> {
         tx.admit_records(&self.records).await?;
         if self.filter.constant == Some(false) {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         self.flush_inputs(tx).await?;
-        let (sql, params) = self.statement(columns)?;
-        let cacher = RowCacher::new(self.records.spec(), columns);
+        let spec = self.records.spec();
+        let (sql, params) = if expressions.is_empty() {
+            self.statement(columns)?
+        } else {
+            let registry = self.records.env().registry();
+            let mut params = self.filter.params.clone();
+            let joins = self.joins(true);
+            let clauses = self.clauses(&mut params, true, self.limit, &joins)?;
+            let sql = erp_sql::select::select_spec_projected(
+                registry,
+                spec,
+                columns,
+                expressions,
+                &clauses,
+            );
+            (Arc::from(sql), params)
+        };
+        let cacher = RowCacher::new(spec, columns);
         // a limit bounds the rows: the ids and the cache grow once up to a chunk; an unbounded
         // search grows them in proportion to the rows it has added (`cache::rows_to_come`;
         // design note `perf-stream.md` §3.1, §11 risk 7)
@@ -2160,12 +2280,23 @@ impl SearchQuery {
             PlanClass::ByParams => tx.plan_policy(&params),
         };
         let mut rows = cacher.sink(expected);
+        let mut projected = Vec::new();
         tx.query_each_with(&sql, &params, policy, |cache, row| {
             ids.push(rows.cache_row(cache, row)?);
+            // A cursor is only built for a full page. The last row may be in either keyset piece.
+            if !expressions.is_empty() && self.limit == Some(ids.len() as u64) {
+                for (index, (_, column)) in expressions.iter().enumerate() {
+                    projected.push(crate::read::decode(
+                        row,
+                        1 + columns.len() + index,
+                        *column,
+                    )?);
+                }
+            }
             Ok(())
         })
         .await?;
-        Ok(ids)
+        Ok((ids, projected))
     }
 
     /// The matching ids in order (one query the first time, none afterwards).
@@ -2303,25 +2434,6 @@ fn validate_catalog_value(
     }
 }
 
-fn refuse_catalog_properties(
-    registry: &erp_registry::Registry,
-    fields: &[(ModelId, FieldId)],
-) -> Result<()> {
-    for &(model, field) in fields {
-        let model = registry.model_by_id(model);
-        let field = model.field_by_id(field);
-        if field.company_dependent {
-            return Err(crate::company_dependent_runtime::unsupported(
-                model.name,
-                field.name,
-                "selection catalog expressions",
-                crate::company_dependent_runtime::Owner::Catalog,
-            ));
-        }
-    }
-    Ok(())
-}
-
 // ----- public API --------------------------------------------------------------------------------
 
 impl Records {
@@ -2351,7 +2463,9 @@ impl Records {
             let field = spec.field(name).ok_or_else(|| {
                 Error::programming(format!("Invalid catalog field '{name}' on '{}'", spec.name))
             })?;
-            if !field.has_column() || !matches!(field.ty, FieldType::Char { .. } | FieldType::Text)
+            if !field.has_column()
+                || field.inherited.is_some()
+                || !matches!(field.ty, FieldType::Char { .. } | FieldType::Text)
             {
                 return Err(Error::programming(format!(
                     "selection catalog '{}.{name}' requires stored text",
@@ -2371,11 +2485,22 @@ impl Records {
             validate_catalog_domain(domain, spec, charge, 0)?;
         }
         tx.check_domain_fields(env, spec, domain)?;
-        // A native catalog must not trigger property-default lookups or an implicit flush.
-        // Inspect the complete dependency plans, including user paths in record rules, first.
+        // Prepare the complete dependency plans, including record rules, without callbacks.
         let unaccent = tx.unaccent_status().await?;
         let registry = env.registry();
         let mut dependencies = erp_sql::order::order_fields(registry, spec, order, env.lang())?;
+        for &(model, field) in &dependencies {
+            if model != self.model_id()
+                || !spec.field_by_id(field).has_column()
+                || spec.field_by_id(field).inherited.is_some()
+                || matches!(spec.field_by_id(field).ty, FieldType::Many2one { .. })
+            {
+                return Err(Error::programming(
+                    "selection catalogs require direct stored scalar order fields",
+                ));
+            }
+        }
+        tx.check_read_pairs(env, &dependencies)?;
         dependencies.extend(columns.iter().map(|field| (spec.id, *field)));
         if let Some(active) = spec.active_name {
             dependencies.push((spec.id, active));
@@ -2406,26 +2531,78 @@ impl Records {
                 },
             )?);
         }
-        refuse_catalog_properties(registry, &dependencies)?;
-        let filter = compile_search(tx, self, domain, access.as_ref(), true, unaccent).await?;
+        let mut properties: Vec<_> = dependencies
+            .iter()
+            .filter_map(|(model, field)| {
+                let spec = registry.model_by_id(*model);
+                spec.field_by_id(*field)
+                    .company_dependent
+                    .then_some((*model, *field))
+            })
+            .collect();
+        if properties
+            .iter()
+            .any(|(model, field)| *model != spec.id || spec.field_by_id(*field).inherited.is_some())
+        {
+            return Err(Error::programming(
+                "selection catalogs require direct stored company fields",
+            ));
+        }
+        properties.sort_unstable();
+        properties.dedup();
+        let properties: Vec<_> = properties.into_iter().map(|(_, field)| field).collect();
+        let company = tx.catalog_company_values(env, spec, &properties).await?;
+        let preparation = CompanyPreparation::Catalog(company.as_ref());
+        let filter = compile_search_at_with(
+            tx,
+            self,
+            domain,
+            access.as_ref(),
+            true,
+            unaccent,
+            (0, preparation),
+        )
+        .await?;
         if filter.constant == Some(false) {
             return Ok(Vec::new());
         }
-        let order = compile_search_order(tx, self, order, filter.params.len()).await?;
-        for &(model, field) in &order.fields {
-            if model != self.model_id()
-                || !spec.field_by_id(field).has_column()
-                || matches!(spec.field_by_id(field).ty, FieldType::Many2one { .. })
-            {
-                return Err(Error::programming(
-                    "selection catalogs require direct stored scalar order fields",
-                ));
-            }
-        }
+        let order =
+            compile_search_order_with(tx, self, order, filter.params.len(), preparation).await?;
         erp_sql::order::check_join_conflicts(&[&filter.join_list, &order.joins])?;
         let joins = merge_joins(&[&filter.join_list, &order.joins]);
         let mut params = filter.params.clone();
         params.extend(order.params.iter().cloned());
+        let projection_slot = if columns
+            .iter()
+            .any(|field| spec.field_by_id(*field).company_dependent)
+        {
+            let field = spec.field_by_id(
+                *columns
+                    .iter()
+                    .find(|field| spec.field_by_id(**field).company_dependent)
+                    .ok_or_else(|| {
+                        Error::programming("selection catalog property projection has no field")
+                    })?,
+            );
+            let values = company
+                .as_ref()
+                .ok_or_else(|| erp_sql::company::missing(spec, field))?;
+            params.push(values.param()?);
+            Some(params.len())
+        } else {
+            None
+        };
+        let project = |id| {
+            let field = spec.field_by_id(id);
+            if field.company_dependent {
+                let slot = projection_slot.ok_or_else(|| erp_sql::company::missing(spec, field))?;
+                erp_sql::company::expression(registry, spec, field, &spec.table, slot)
+            } else {
+                Ok(erp_sql::filter::column(spec, field.name))
+            }
+        };
+        let key = project(columns[0])?;
+        let label = project(columns[1])?;
         let candidates = pairs
             .checked_add(1)
             .ok_or_else(|| Error::programming("selection candidate count overflow"))?;
@@ -2442,9 +2619,9 @@ impl Records {
             limit: Some(limit),
             offset: None,
         };
-        let sql = erp_sql::select::selection_catalog(
+        let sql = erp_sql::select::selection_catalog_projected(
             spec,
-            [columns[0], columns[1]],
+            [&key, &label],
             &clauses,
             byte_param,
             pair_param,
@@ -3040,47 +3217,5 @@ mod native_fields_tests {
         let error = bind(&[mixed]).expect_err("mixed array rejected");
         assert_eq!(error.kind(), ErrorKind::Programming);
         assert_eq!(error.message(), "array parameter with mixed value types");
-    }
-}
-
-#[cfg(test)]
-mod catalog_property_tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
-    use super::*;
-    use erp_registry::{AddonDescriptor, FieldDecl, ModelDecl, RegistryBuilder};
-    #[test]
-    fn catalog_properties_refuse_before_implicit_default_preparation() {
-        static ADDON: AddonDescriptor = AddonDescriptor {
-            name: "catalog_property_guard",
-            depends: &[],
-            exact_only: false,
-        };
-        static MODEL: ModelDecl = ModelDecl::new("catalog_property_guard", "catalog.property")
-            .fields(
-                const {
-                    &[
-                        FieldDecl::integer("plain"),
-                        FieldDecl::char("note").company_dependent(true),
-                    ]
-                },
-            );
-        let registry = RegistryBuilder::new([&ADDON])
-            .linked(false)
-            .with_decls([&MODEL])
-            .build()
-            .unwrap();
-        let model = registry.model("catalog.property").unwrap();
-        assert!(
-            refuse_catalog_properties(&registry, &[(model.id, model.field("plain").unwrap().id)])
-                .is_ok()
-        );
-        let error =
-            refuse_catalog_properties(&registry, &[(model.id, model.field("note").unwrap().id)])
-                .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Programming);
-        assert_eq!(
-            error.message(),
-            "catalog.property.note: company-dependent selection catalog expressions is not supported until a later release"
-        );
     }
 }

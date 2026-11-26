@@ -175,6 +175,9 @@ fn browser_text_turn_requires_csrf_and_budget_then_returns_metered_provider_text
                 buffer.extend_from_slice(&chunk[..n]);
                 if let Some(pos) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
                     let head = std::str::from_utf8(&buffer[..pos]).unwrap();
+                    assert!(head.lines().any(|line| {
+                        line.eq_ignore_ascii_case("authorization: bearer synthetic-only")
+                    }));
                     let length = head
                         .lines()
                         .find_map(|line| {
@@ -266,7 +269,7 @@ fn browser_text_turn_requires_csrf_and_budget_then_returns_metered_provider_text
         let mut check = retail.installed.begin(SUPERUSER_ID).await.unwrap();
         let rows = check
             .query(
-                "SELECT state,tokens,cost,active_session FROM ai_usage WHERE user_id=$1",
+                "SELECT state,tokens,cost,active_session, NOT (to_jsonb(u)::text LIKE ANY(ARRAY['%Synthetic ping.%','%Synthetic pong.%','%synthetic-only%'])) FROM ai_usage u WHERE user_id=$1",
                 &[&uid],
             )
             .await
@@ -276,6 +279,10 @@ fn browser_text_turn_requires_csrf_and_budget_then_returns_metered_provider_text
         assert_eq!(rows[0].get::<_, i64>(1), 11003);
         assert_eq!(rows[0].get::<_, i64>(2), 11006);
         assert!(rows[0].get::<_, Option<String>>(3).is_none());
+        assert!(
+            rows[0].get::<_, bool>(4),
+            "usage ledger retained exchange data"
+        );
         check.rollback().await.unwrap();
         drop(check);
         serving.abort();

@@ -452,6 +452,8 @@ pub struct Signal {
     subscribers: Mutex<Vec<(NotifyChannel, Arc<tokio::sync::Notify>)>>,
     /// Moves when a subscription is added: a running listener `LISTEN`s on the new channel.
     subscription_epoch: AtomicU64,
+    /// One coalescing wake for services holding credentials or access-sensitive subscriptions.
+    security_wake: tokio::sync::watch::Sender<()>,
 }
 
 /// Most channel subscriptions one [`Signal`] takes: the listener's `LISTEN` set is bounded by
@@ -483,6 +485,7 @@ impl Signal {
             counters: Counters::default(),
             subscribers: Mutex::new(Vec::new()),
             subscription_epoch: AtomicU64::new(0),
+            security_wake: tokio::sync::watch::channel(()).0,
         }
     }
 
@@ -612,6 +615,11 @@ impl Signal {
         self.superseded.load(Ordering::Acquire)
     }
 
+    /// Wake a subscriber when this process applies a newer registry, policy or membership.
+    pub fn subscribe_security_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.security_wake.subscribe()
+    }
+
     /// The metrics.
     pub fn stats(&self) -> SignalStats {
         let c = &self.counters;
@@ -724,6 +732,10 @@ impl Signal {
         if applied.get(key) == began_at {
             applied.0.insert(key.clone(), began_at.saturating_add(1));
             self.apply_epoch.fetch_add(1, Ordering::AcqRel);
+            drop(applied);
+            if !is_cache(key) {
+                self.security_wake.send_replace(());
+            }
         }
     }
 
@@ -914,7 +926,11 @@ impl crate::transaction::Shared {
         signal.counters.applies.fetch_add(1, Ordering::Relaxed);
         if outcome == Refreshed::Superseded {
             signal.superseded.store(true, Ordering::Release);
+            signal.security_wake.send_replace(());
             return Ok(Applied::Superseded);
+        }
+        if changes.registry || changes.policy || changes.membership {
+            signal.security_wake.send_replace(());
         }
         Ok(Applied::InPlace)
     }
@@ -992,6 +1008,7 @@ impl crate::transaction::Shared {
                 if outcome == Refreshed::Superseded {
                     signal.superseded.store(true, Ordering::Release);
                 }
+                signal.security_wake.send_replace(());
                 regression("this process ran a full refresh; retry the request")
             }
             Err(error) => regression("the full refresh failed and the next request tries again")

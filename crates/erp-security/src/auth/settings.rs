@@ -631,6 +631,8 @@ pub struct AuthConfig {
     throttle_entries: usize,
     cooldown_hook_deadline: Duration,
     token_plan_hook_deadline: Duration,
+    session_data_bytes: usize,
+    session_login_deadline: Duration,
 }
 
 impl AuthConfig {
@@ -646,7 +648,44 @@ impl AuthConfig {
         throttle_entries: 4_096,
         cooldown_hook_deadline: Duration::from_secs(5),
         token_plan_hook_deadline: Duration::from_secs(10),
+        session_data_bytes: 16 * 1024,
+        session_login_deadline: Duration::from_secs(5),
     };
+
+    /// Longest one post-login hook chain may run.
+    pub const fn session_login_deadline(&self) -> Duration {
+        self.session_login_deadline
+    }
+
+    /// Set the post-login hook deadline in milliseconds.
+    ///
+    /// # Errors
+    /// Refuses deadlines outside 10 to 60,000 milliseconds.
+    pub fn with_session_login_deadline_ms(mut self, ms: u32) -> Result<Self, ConfigError> {
+        bound(
+            "limits.session_login_hook_deadline_ms",
+            f64::from(ms),
+            10.0,
+            60_000.0,
+        )?;
+        self.session_login_deadline = Duration::from_millis(u64::from(ms));
+        Ok(self)
+    }
+
+    /// Maximum serialized addon data stored by a session-login hook.
+    pub const fn session_data_bytes(&self) -> usize {
+        self.session_data_bytes
+    }
+
+    /// Configure the per-session addon data limit in bytes.
+    ///
+    /// # Errors
+    /// Refuses limits outside 1 KiB to 256 KiB.
+    pub fn with_session_data_bytes(mut self, bytes: u32) -> Result<Self, ConfigError> {
+        bound("session.data_bytes", f64::from(bytes), 1024.0, 262144.0)?;
+        self.session_data_bytes = bytes as usize;
+        Ok(self)
+    }
 
     /// `limits.credential_bytes` (64 – 4,096).
     ///

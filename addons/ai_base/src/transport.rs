@@ -3,19 +3,24 @@
 
 use crate::{config::Credentials, encoding::RequestEncoder, routing::ConfiguredRoute};
 use erp_sdk::ai::{ProviderError, ToolTurnRequest, ToolTurnResponse};
-use reqwest::{Client, Response, StatusCode, header};
-use std::{error::Error as _, io, time::Duration};
+use reqwest::{Client, Response, StatusCode, dns, header};
+use std::{error::Error as _, io, net::IpAddr, sync::Arc, time::Duration};
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
 pub(crate) fn trusted_base(input: &str) -> Option<Url> {
     let mut url = Url::parse(input).ok()?;
-    let loopback = match url.host()? {
-        Host::Ipv4(ip) => ip.is_loopback(),
-        Host::Ipv6(ip) => ip.is_loopback(),
-        Host::Domain(_) => false,
+    let allowed = match (url.scheme(), url.host()?) {
+        // Local providers must be configured explicitly using a literal loopback address.
+        ("http", Host::Ipv4(ip)) => ip.is_loopback(),
+        ("http", Host::Ipv6(ip)) => ip.is_loopback(),
+        ("https", Host::Ipv4(ip)) => public_ip(ip.into()),
+        ("https", Host::Ipv6(ip)) => public_ip(ip.into()),
+        ("https", Host::Domain(_)) => true,
+        _ => false,
     };
-    if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+    if !allowed
+        || url.port() == Some(0)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -25,6 +30,57 @@ pub(crate) fn trusted_base(input: &str) -> Option<Url> {
     }
     url.path_segments_mut().ok()?.pop_if_empty().push("");
     Some(url)
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(a == 0
+                || a >= 224
+                || ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_documentation()
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 192 && (b, c) == (0, 0))
+                || (a == 192 && (b, c) == (88, 99))
+                || (a == 198 && (18..=19).contains(&b)))
+        }
+        IpAddr::V6(ip) => {
+            let [a, b, ..] = ip.segments();
+            (0x2000..0x4000).contains(&a)
+                && !matches!(a, 0x2002 | 0x3fff)
+                && !(a == 0x2001 && (b <= 0x1ff || b == 0xdb8))
+        }
+    }
+}
+
+struct CheckedDns;
+
+impl dns::Resolve for CheckedDns {
+    fn resolve(&self, name: dns::Name) -> dns::Resolving {
+        Box::pin(async move {
+            const MAX_ADDRESSES: usize = 32;
+            let addresses: Vec<_> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .take(MAX_ADDRESSES + 1)
+                .collect();
+            if addresses.is_empty()
+                || addresses.len() > MAX_ADDRESSES
+                || addresses.iter().any(|address| !public_ip(address.ip()))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "provider DNS is outside the authorized address policy",
+                )
+                .into());
+            }
+            // The HTTP connector connects to these same addresses. TLS still verifies the
+            // configured hostname, and any later connection repeats the address checks.
+            Ok(Box::new(addresses.into_iter()) as dns::Addrs)
+        })
+    }
 }
 
 /// Sends a single assistant turn or its continuations to the same configured provider.
@@ -102,6 +158,7 @@ impl ConfiguredRoute {
             .map_err(|_| invalid("unsupported provider endpoint"))?;
         let client = Client::builder()
             .default_headers(headers)
+            .dns_resolver(Arc::new(CheckedDns))
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())

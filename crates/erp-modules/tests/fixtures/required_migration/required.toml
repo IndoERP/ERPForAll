@@ -1,0 +1,1 @@
+required_migrations = ['migrations/1.1/post-bump.sql']

@@ -28,17 +28,6 @@ pub(crate) fn refuse_event_namespace(spec: &ModelSpec, op: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuse mutation families whose capture boundary remains deferred beyond S7.
-pub(crate) fn refuse_uncaptured_mutation(spec: &ModelSpec, operation: &str) -> Result<()> {
-    if spec.eventful {
-        return Err(Error::programming(format!(
-            "outbox: eventful {operation} capture for model '{}' is not implemented until S7-S9",
-            spec.name
-        )));
-    }
-    Ok(())
-}
-
 /// Check before method overrides or delegated-parent work can change the database.
 pub(crate) fn check_create_capture(
     records: &crate::Records,
@@ -51,17 +40,6 @@ pub(crate) fn check_create_capture(
         return Err(Error::programming(
             "outbox: eventful mutation requires an OperationIdentity",
         ));
-    }
-    if rows.iter().any(|row| {
-        row.iter_commands().next().is_some()
-            || row.iter().any(|(name, _)| {
-                records
-                    .spec()
-                    .field(name)
-                    .is_some_and(|field| field.ty.is_x2many())
-            })
-    }) {
-        refuse_uncaptured_mutation(records.spec(), "relation")?;
     }
     Ok(())
 }

@@ -155,6 +155,8 @@ pub(crate) enum Late {
     Async,
     /// The built-in `display_name`, computed from the record name on every read.
     DisplayName,
+    /// A stored relation output needs the owner's database id before its links can be written.
+    RelationOutput(FieldId),
     /// A database-generated value exists only after the record is inserted.
     Generated(FieldId),
     /// Its compute method reads a computed field of the same model that is itself late (that
@@ -212,6 +214,10 @@ impl Late {
                 Late::DisplayName => {
                     format!("{subject} is computed from the record name on every read")
                 }
+                Late::RelationOutput(output) => format!(
+                    "{} stores relation rows after the owner is inserted",
+                    name(*output),
+                ),
                 Late::Generated(r) => format!(
                     "{subject} reads database-generated {}, which requires an inserted record",
                     name(*r)
@@ -1271,6 +1277,12 @@ fn late_reason(
     }
     if matches!(fc.source, Source::DisplayName) {
         return Some(Late::DisplayName);
+    }
+    if let Some(field) = fc.group.iter().copied().find(|field| {
+        let spec = model.field_by_id(*field);
+        spec.store && matches!(spec.ty, FieldType::Many2many { .. })
+    }) {
+        return Some(Late::RelationOutput(field));
     }
     // a field of the group decided earlier in the order decides for the whole group
     if let Some(late) = fc

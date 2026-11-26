@@ -9,13 +9,13 @@ use erp_fields::{DateTime, Error, ErrorKind, Result};
 use erp_orm::audit::{ApiKeyIssued, AuthEvent, KeyRouteScope};
 use erp_orm::{ApiKeyId, PrincipalKind, Transaction, UserId};
 
-/// Principal kind requested for a new key. Agent/service remain gated.
+/// Principal kind requested for a new key. MCP keys delegate a subject with no capabilities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyKind {
     /// Acts as the subject.
     User,
-    /// Delegates for the subject; currently refused.
+    /// Delegates for the subject on the MCP route.
     Agent,
     /// Dedicated service account; currently refused.
     Service,
@@ -31,7 +31,7 @@ impl KeyKind {
         }
     }
 }
-/// Route audience. MCP only admits agent keys, which remain gated.
+/// Route audience. MCP only admits agent keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyScope {
@@ -54,6 +54,7 @@ impl KeyScope {
 /// User keys have no allowlists, are writable and inherit subject capabilities.
 #[non_exhaustive]
 pub struct IssueRequest {
+    scope: KeyScope,
     subject: UserId,
     name: Box<str>,
     expiry: Expiry,
@@ -68,7 +69,7 @@ enum Expiry {
 }
 impl IssueRequest {
     /// Validate name (nonempty after trimming, at most 128 bytes), kind and scope.
-    /// Agent/service return the AccessDenied gate; MCP user keys and
+    /// Service and RPC agent keys return the AccessDenied gate. MCP user keys and
     /// invalid names return Validation. Expiry is checked against database policy
     /// by [`issue`], never against an application clock.
     pub fn new(
@@ -109,6 +110,7 @@ impl IssueRequest {
         }
         let gated = match kind {
             KeyKind::User => None,
+            KeyKind::Agent if scope == KeyScope::Mcp => None,
             KeyKind::Agent => Some("agent"),
             KeyKind::Service => Some("service"),
         };
@@ -118,12 +120,13 @@ impl IssueRequest {
                 format!("API keys of kind '{kind}' are not accepted until a later release"),
             ));
         }
-        if scope != KeyScope::Rpc {
+        if scope == KeyScope::Mcp && kind != KeyKind::Agent {
             return Err(Error::validation(
                 "scope mcp requires kind agent and capabilities none",
             ));
         }
         Ok(Self {
+            scope,
             subject,
             name: name.into(),
             expiry,
@@ -334,6 +337,7 @@ pub async fn issue(
                 &i32::from(digest.kid()),
                 &prefix.as_ref(),
                 &expires,
+                &(request.scope == KeyScope::Mcp),
             ],
         )
         .await?;
@@ -464,7 +468,9 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 const INSERT_SQL: &str = "INSERT INTO res_users_apikeys
 (name,user_id,created_by,kind,scope,digest,digest_kid,prefix,models,methods,
  read_only,capabilities,expiration_date,create_date)
-VALUES($1,$2,$3,'user','rpc',$4,$5,$6,NULL,NULL,false,'subject',
+VALUES($1,$2,$3,CASE WHEN $8::bool THEN 'agent' ELSE 'user' END,
+       CASE WHEN $8 THEN 'mcp' ELSE 'rpc' END,$4,$5,$6,NULL,NULL,false,
+       CASE WHEN $8 THEN 'none' ELSE 'subject' END,
        $7::timestamp,now() AT TIME ZONE 'utc') RETURNING id::int8, user_id::int8, created_by::int8, kind, scope, read_only,
  capabilities, expiration_date, models IS NULL, methods IS NULL";
 

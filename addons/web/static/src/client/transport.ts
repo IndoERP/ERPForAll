@@ -56,6 +56,11 @@ export function fileNameOf(disposition: string | null): string {
   if (exact) { try { return decodeURIComponent(exact[1]!.trim()); } catch { /* fall back to the ASCII name */ } }
   return /filename="([^"]*)"/i.exec(disposition ?? "")?.[1] ?? "download.xlsx";
 }
+class ApprovalChallenge extends ClientError {
+  constructor(readonly request: number | "key", message: string, status: number, diagnostics: ErrorDiagnostics) {
+    super("validation", message, status, diagnostics);
+  }
+}
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export interface CallOptions {
   readonly write?: boolean;
@@ -71,7 +76,8 @@ export class RpcClient {
     private readonly activity?: () => () => void,
     /** Runs after every write attempt, whatever its outcome: a failed or ambiguous write may still have changed data. */
     private readonly written?: (model: string) => void,
-    private readonly connection?: (event: ConnectionEvent, options: CallOptions) => void
+    private readonly connection?: (event: ConnectionEvent, options: CallOptions) => void,
+    private readonly awaitApproval?: (requestId: number) => Promise<boolean>
   ) {}
   call(model: string, method: string, args: Record<string, unknown>, options: CallOptions = {}): Promise<unknown> {
     if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(model) || !/^[a-z][a-z0-9_]*$/.test(method)) {
@@ -92,7 +98,8 @@ export class RpcClient {
     const finish = options.background ? undefined : this.activity?.();
     try {
       this.connection?.("request", options);
-      const result = await this.send(path, args, options);
+      const body = JSON.stringify(args);
+      const result = await this.sendReviewed(path, body, options);
       this.connection?.("online", options);
       return result;
     } catch (error) {
@@ -149,7 +156,26 @@ export class RpcClient {
       return { blob, fileName: fileNameOf(response.headers.get("Content-Disposition")) };
     } finally { finish?.(); }
   }
-  private async send(path: string, args: Record<string, unknown>, options: CallOptions): Promise<unknown> {
+  private async sendReviewed(path: string, body: string, options: CallOptions): Promise<unknown> {
+    try {
+      return await this.send(path, body, options);
+    } catch (error) {
+      if (!(error instanceof ApprovalChallenge) || error.request !== "key" || !this.awaitApproval) throw error;
+    }
+    const key = newRequestId();
+    try {
+      return await this.send(path, body, options, key);
+    } catch (error) {
+      if (!(error instanceof ApprovalChallenge) || typeof error.request !== "number") throw error;
+      if (!await this.awaitApproval(error.request)) {
+        throw new ClientError("validation", `Approval request ${error.request} was not executed.`);
+      }
+    }
+    // The original bytes and key remain local to this call. A lost response or a
+    // permission failure never causes another automatic write.
+    return this.send(path, body, options, key);
+  }
+  private async send(path: string, body: string, options: CallOptions, key?: string): Promise<unknown> {
     // The server answers with the id it logged; it keeps the one sent unless that one is malformed.
     let requestId = newRequestId();
     const diagnostic = (status: number): ErrorDiagnostics => ({ endpoint: path, status, requestId });
@@ -157,8 +183,8 @@ export class RpcClient {
     try {
       response = await this.fetcher(path, {
         method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
-        headers: { "Content-Type": "application/json", "Accept": "application/json", "X-Request-Id": requestId },
-        body: JSON.stringify(args), signal: options.write ? undefined : options.signal,
+        headers: { "Content-Type": "application/json", "Accept": "application/json", "X-Request-Id": requestId, ...(key ? { "Idempotency-Key": key } : {}) },
+        body, signal: options.write ? undefined : options.signal,
       });
     } catch (error) {
       if (!options.write && options.signal?.aborted) throw error;
@@ -211,6 +237,15 @@ export class RpcClient {
         ...(typeof source["timestamp"] === "number" ? { timestamp: source["timestamp"] } : {}),
         ...(typeof source["debug"] === "string" && source["debug"] ? { debug: source["debug"].slice(0, 32_768) } : {}),
       };
+      const context = source["context"];
+      if (path.startsWith("/erp/json/2/") && context && typeof context === "object" && !Array.isArray(context)) {
+        const approval = context as Record<string, unknown>;
+        if (response.status === 422 && approval["approval_key_required"] === true)
+          throw new ApprovalChallenge("key", message, response.status, details);
+        const id = approval["approval_request_id"];
+        if (response.status === 409 && typeof id === "number" && Number.isSafeInteger(id) && id > 0)
+          throw new ApprovalChallenge(id, message, response.status, details);
+      }
       if (ambiguousWrite) throw new ClientError("ambiguous", ambiguousMessage, response.status, details);
       const kind: FailureKind = response.status === 403 ? "permission" : response.status < 500 ? "validation" : "server";
       throw new ClientError(kind, message, response.status, details, kind === "validation" ? refusedFields(source["context"]) : []);

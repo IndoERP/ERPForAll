@@ -3,7 +3,7 @@ summary = "Messages, followers and subtypes behind the chatter of any document"
 category = "Productivity/Discuss"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.1.0"
+version = "1.1.1"
 depends = ["base"]
 data = [
     "security/ir.access.csv",

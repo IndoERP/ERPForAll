@@ -795,13 +795,14 @@ async fn boundary_at(tx: &mut Transaction, epoch: i64, batch: Option<i64>) -> Re
 // Re-reads one seal's range with the sealer's projection and the same payload and wire caps.
 // A refusal is recorded for the seal; only SQL or decoding of known columns returns `Err`.
 async fn read_rows(tx: &mut Transaction, p: &Parsed, count: i64) -> Result<RowRead> {
+    let source = super::super::retention::evidence_source(tx).await?;
     let sql = format!(
         "WITH candidates AS MATERIALIZED (
-            SELECT tableoid AS relation_id,ctid AS tuple_id,xid,id FROM erp_event.ir_audit_entry
+            SELECT source_relation AS relation_id,source_tuple AS tuple_id,xid,id FROM {source}
             WHERE (xid,id)>($1::text::xid8,$2) AND (xid,id)<=($3::text::xid8,$4) ORDER BY xid,id LIMIT $5
         ), payloads AS (
             SELECT c.xid,c.id,pg_catalog.row_to_json(p)::text AS payload
-            FROM candidates c JOIN erp_event.ir_audit_entry a ON a.tableoid=c.relation_id AND a.ctid=c.tuple_id
+            FROM candidates c JOIN {source} a ON a.source_relation=c.relation_id AND a.source_tuple=c.tuple_id
             CROSS JOIN LATERAL (SELECT {}) p
         ), sizes AS (
             SELECT *,pg_catalog.octet_length(payload)::bigint AS payload_bytes FROM payloads
@@ -865,8 +866,9 @@ async fn read_rows(tx: &mut Transaction, p: &Parsed, count: i64) -> Result<RowRe
 }
 
 async fn unsealed(tx: &mut Transaction, after: (u64, i64)) -> Result<TailSummary> {
+    let source = super::super::retention::evidence_source(tx).await?;
     let sql = format!(
-        "SELECT count(*),{},{} FROM erp_event.ir_audit_entry WHERE (xid,id)>($1::text::xid8,$2)",
+        "SELECT count(*),{},{} FROM {source} WHERE (xid,id)>($1::text::xid8,$2)",
         micros("min(create_date)"),
         micros("max(create_date)")
     );

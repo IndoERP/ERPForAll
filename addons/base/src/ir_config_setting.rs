@@ -1252,7 +1252,8 @@ async fn read_values_requested(
         revision: current,
         values: complete,
         mut sources,
-    } = load_values(&registry, tx, &identity, expanded).await?;
+        ..
+    } = load_values(&registry, tx, &identity, expanded, &[]).await?;
     let mut result = Vec::new();
     for key in keys {
         let value = complete.get(&key).ok_or_else(corrupt)?;
@@ -1272,7 +1273,7 @@ pub(crate) async fn read_job_policy(
         .map(crate::jobs_settings::key)
         .collect();
     let keys = registry.expanded_keys(&keys)?;
-    let snapshot = load_values(&registry, tx, "global", keys).await?;
+    let snapshot = load_values(&registry, tx, "global", keys, &[]).await?;
     Ok((revision(&snapshot.revision)?, snapshot.values))
 }
 
@@ -1280,6 +1281,7 @@ struct StoredSnapshot {
     revision: String,
     values: BTreeMap<String, Value>,
     sources: BTreeMap<String, wire::ValueSource>,
+    repaired: BTreeSet<String>,
 }
 
 /// Read one company setting used as a native business-field default.
@@ -1351,6 +1353,7 @@ async fn load_values(
     tx: &mut Transaction,
     identity: &str,
     expanded: Vec<String>,
+    replacements: &[(String, Value)],
 ) -> Result<StoredSnapshot> {
     // Read revision and values in a single statement; READ COMMITTED cannot mix revisions.
     // Keep a present key when withholding oversized/corrupt text. Its NULL projection below
@@ -1375,29 +1378,44 @@ async fn load_values(
         revision(&current).map_err(|_| corrupt())?;
         let key: Option<String> = row.try_get(1).map_err(|_| corrupt())?;
         if let Some(key) = key {
-            let text: String = row.try_get(2).map_err(|_| stored_error(&key))?;
+            let text: Option<String> = row.try_get(2).map_err(|_| stored_error(&key))?;
             values.insert(key, text);
         }
     }
     let mut complete = BTreeMap::new();
     let mut sources = BTreeMap::new();
+    let mut repaired = BTreeSet::new();
     for key in expanded {
         let decl = registry.get(&key).ok_or_else(corrupt)?;
         let (value, source) = match values.get(&key) {
-            Some(text) => (
-                stored(decl, text).map_err(|_| stored_error(&key))?,
-                wire::ValueSource::Stored,
-            ),
+            Some(text) => {
+                let value = text.as_deref().and_then(|text| stored(decl, text).ok());
+                let value = match value {
+                    Some(value) => value,
+                    None => {
+                        let (_, replacement) = replacements
+                            .iter()
+                            .find(|(changed, _)| changed == &key)
+                            .ok_or_else(|| stored_error(&key))?;
+                        repaired.insert(key.clone());
+                        replacement.clone()
+                    }
+                };
+                (value, wire::ValueSource::Stored)
+            }
             None => (decl.default_value().clone(), wire::ValueSource::Default),
         };
         complete.insert(key.clone(), value);
         sources.insert(key, source);
     }
-    registry.validate_groups(&complete)?;
+    if replacements.is_empty() {
+        registry.validate_groups(&complete)?;
+    }
     Ok(StoredSnapshot {
         revision: current,
         values: complete,
         sources,
+        repaired,
     })
 }
 
@@ -1445,12 +1463,13 @@ pub async fn write_values(
         env.records("ir.config.setting")?.check_access(tx, erp_sdk::Operation::Write).await?;
         for (key, _) in &changes { declared(&registry, env, tx, kind, key, true).await?; }
         let expanded = registry.expanded_keys(&keys)?;
-        let old = read_values_requested(env, tx, scope.clone(), expanded, &keys).await?;
-        let previous: BTreeMap<_, _> = old.values.into_iter().map(|entry| (entry.key, entry.value)).collect();
-        let mut proposed = BTreeMap::new();
-        for (key, value) in &previous {
-            proposed.insert(key.clone(), from_json(serde_json::to_value(value).map_err(|_| corrupt())?)?);
+        batch(&expanded, true)?;
+        for key in &expanded {
+            declared(&registry, env, tx, kind, key, false).await
+                .map_err(|error| conceal_expanded(error, key, &keys))?;
         }
+        let snapshot = load_values(&registry, tx, &identity, expanded, &changes).await?;
+        let mut proposed = snapshot.values.clone();
         for (key, value) in &changes { proposed.insert(key.clone(), value.clone()); }
         registry.validate_groups(&proposed)?;
         for (key, value) in &changes {
@@ -1465,8 +1484,12 @@ pub async fn write_values(
         let mut result = Vec::new();
         let mut effective_changes = erp_sdk::ValueMap::new();
         for (key,value) in &changes {
-            let old_value = previous.get(key).ok_or_else(corrupt)?;
-            let old_text = serde_json::to_string(old_value).map_err(|_| corrupt())?;
+            let old_text = if snapshot.repaired.contains(key) {
+                "[invalid stored value]".to_owned()
+            } else {
+                let old_value = snapshot.values.get(key).ok_or_else(corrupt)?;
+                serde_json::to_string(&scalar(old_value)?).map_err(|_| corrupt())?
+            };
             let text = serde_json::to_string(&scalar(value)?).map_err(|_| invalid())?;
             if old_text != text {
                 effective_changes.insert(key.clone(), value.clone());

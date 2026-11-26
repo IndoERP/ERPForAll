@@ -157,8 +157,11 @@ impl UsersLoginGate {
         let info: AuthInfo = sup
             .call(tx, this.as_records(), (Arc::clone(&credential), env))
             .await?;
-        tx.batch("CREATE TABLE IF NOT EXISTS test_auth_check (uid int8 NOT NULL)")
-            .await?;
+        tx.execute(
+            "CREATE TABLE IF NOT EXISTS test_auth_check (uid int8 NOT NULL)",
+            &[],
+        )
+        .await?;
         tx.execute(
             "INSERT INTO test_auth_check (uid) VALUES ($1)",
             &[&info.uid().get()],

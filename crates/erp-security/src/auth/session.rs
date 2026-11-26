@@ -343,6 +343,7 @@ pub struct CheckedSession {
     via_previous: bool,
     rotation_due: bool,
     touch_due: bool,
+    remaining: Duration,
 }
 
 impl CheckedSession {
@@ -354,6 +355,11 @@ impl CheckedSession {
     /// The user.
     pub fn user(&self) -> UserId {
         self.user
+    }
+
+    /// Remaining absolute session lifetime, as measured by the database during verification.
+    pub fn remaining(&self) -> Duration {
+        self.remaining
     }
 
     /// The request presented the previous secret, within its grace after a rotation.
@@ -596,7 +602,11 @@ pub(crate) fn check_sql(resolver: &Resolver, plan: &TokenPlan) -> String {
          u.login, u.password{}\n  \
          FROM (SELECT decode($1::text, 'hex') AS digest) d\n  \
          JOIN erp_session s ON s.sid_digest = d.digest OR s.prev_digest = d.digest\n  \
-         JOIN res_users u ON u.id = s.user_id",
+         JOIN res_users u ON u.id = s.user_id
+         WHERE s.data->>'external_issuer' IS NULL OR EXISTS (
+           SELECT 1 FROM erp_external_provider p JOIN erp_external_identity i ON i.issuer=p.issuer
+           WHERE p.enabled AND p.issuer=s.data->>'external_issuer' AND i.subject=s.data->>'external_subject'
+             AND i.user_id=s.user_id AND i.revoked_at IS NULL)",
         resolver.subject_columns(),
         OBSERVATION_STAMP_SQL,
         plan.select_list("u")
@@ -722,6 +732,7 @@ impl CredentialCheck for SessionCheck<'_> {
             rotation_due: current
                 && since_rotation >= self.cached.settings.session_policy().rotation_interval(),
             touch_due: since_seen >= self.cached.settings.session_policy().touch_interval(),
+            remaining: secs(expires_in),
         };
         Ok(CredentialVerdict::accepted(principal, checked))
     }

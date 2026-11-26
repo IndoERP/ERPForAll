@@ -12,6 +12,10 @@
 mod multiuser_crud;
 #[path = "support/multiuser_fixture.rs"]
 mod multiuser_fixture;
+#[path = "support/multiuser_mail.rs"]
+mod multiuser_mail;
+#[path = "support/multiuser_rpc_special.rs"]
+mod multiuser_rpc_special;
 #[path = "support/native_http.rs"]
 mod native_http;
 

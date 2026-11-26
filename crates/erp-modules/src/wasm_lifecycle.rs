@@ -2002,9 +2002,13 @@ impl WasmPackages {
                 WasmReason::NotWasm("the manifest has no [wasm] section".to_owned()),
             ));
         };
-        // Nothing of network, temporary files or SQL migrations is provided by this host yet; an
-        // approved capability that is not enforced would be a promise nobody keeps.
-        if let Some(cap) = wasm.capabilities.first() {
+        // The SQL capability permits the module system to run archived migrations. It gives
+        // the guest no SQL host function. Network and temporary files remain unavailable.
+        if let Some(cap) = wasm
+            .capabilities
+            .iter()
+            .find(|cap| **cap != WasmCapability::MigrationsSql)
+        {
             return Err(refuse(
                 name,
                 WasmReason::CapabilityUnavailable(cap.canonical_str()),
@@ -2024,6 +2028,10 @@ impl WasmPackages {
         check_compute_wiring(name, &defs, &checks)?;
         let mut data = PackageData {
             files,
+            migration_files: package_migration_files(
+                package,
+                wasm.capabilities.contains(&WasmCapability::MigrationsSql),
+            )?,
             client_files: package_client_files(package)?,
             ..PackageData::default()
         };
@@ -2053,6 +2061,33 @@ impl WasmPackages {
             data: Arc::new(data),
         })
     }
+}
+
+fn package_migration_files(package: &ErpAddonPackage, approved: bool) -> Result<PackageFiles> {
+    let mut files = PackageFiles::new();
+    for path in package
+        .file_paths()
+        .filter(|path| crate::migrations::parse_migration_path(path).is_some())
+    {
+        if !approved {
+            return Err(refuse(
+                package.name(),
+                WasmReason::Unsupported(format!(
+                    "SQL migration '{path}' requires the administrator-approved migrations-sql capability"
+                )),
+            ));
+        }
+        let bytes = package.get_file(path).ok_or_else(|| {
+            refuse(
+                package.name(),
+                WasmReason::DataFile(format!(
+                    "verified migration file '{path}' disappeared from the archive"
+                )),
+            )
+        })?;
+        files.insert(path.to_owned(), bytes.to_vec());
+    }
+    Ok(files)
 }
 
 /// Retain client sources only from the already integrity-checked archive. The host later

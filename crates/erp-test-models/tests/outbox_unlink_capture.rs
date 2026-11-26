@@ -141,10 +141,14 @@ async fn deletes_actual_ids_and_commits_tombstone_atomically() {
             .count(),
         1
     );
-    assert!(
-        !tx.captured()
+    assert_eq!(
+        tx.captured()
             .iter()
-            .any(|s| s.starts_with("SELECT") && s.contains("test_unlink_root"))
+            .filter(|s| s.starts_with("SELECT")
+                && s.contains("test_unlink_root")
+                && s.ends_with("FOR UPDATE"))
+            .count(),
+        1
     );
     let mut check = h.begin().await.unwrap();
     assert_eq!(count(&mut check, "test_unlink_root").await, 0);
@@ -226,7 +230,8 @@ async fn cascade_metadata_covers_actual_cold_cache_database_effects() {
         )
         .await
         .unwrap();
-    tx.env()
+    let nulled = tx
+        .env()
         .records("test.unlink.null")
         .unwrap()
         .create(
@@ -247,7 +252,7 @@ async fn cascade_metadata_covers_actual_cold_cache_database_effects() {
         .unwrap();
     assert_eq!(row[0].get::<_, Option<i64>>(0), None);
     let rows = events(&mut tx).await;
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2);
     assert_eq!(
         rows[0].get::<_, Vec<String>>(2),
         [
@@ -257,6 +262,20 @@ async fn cascade_metadata_covers_actual_cold_cache_database_effects() {
             "test.unlink.null"
         ]
     );
+    assert_eq!(rows[1].get::<_, &str>(3), "test.unlink.child");
+    assert_eq!(
+        rows[1].get::<_, serde_json::Value>(0),
+        serde_json::json!(child.ids())
+    );
+    assert_eq!(rows[1].get::<_, &str>(5), rows[0].get::<_, &str>(5));
+    let survivor = tx.query(&format!("SELECT record_ids, field_names, operation_id::text FROM {EVENTS} WHERE model='test.unlink.null' AND kind='write'"), &[]).await.unwrap();
+    assert_eq!(survivor.len(), 1);
+    assert_eq!(
+        survivor[0].get::<_, serde_json::Value>(0),
+        serde_json::json!(nulled.ids())
+    );
+    assert_eq!(survivor[0].get::<_, Vec<String>>(1), ["root_id"]);
+    assert_eq!(survivor[0].get::<_, &str>(2), rows[0].get::<_, &str>(5));
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }
@@ -553,14 +572,14 @@ async fn runtime_role_deletes_and_inserts_only_supplied_event_columns() {
         .unwrap();
     tx.grant_event_runtime_role(&role).await.unwrap();
     tx.execute(
-        &format!("GRANT SELECT, DELETE ON test_unlink_root TO {quoted}"),
+        &format!("GRANT SELECT, UPDATE, DELETE ON test_unlink_root TO {quoted}"),
         &[],
     )
     .await
     .unwrap();
-    // The stored-dependent fixture requires an ordinary dependency read before deletion.
+    // Capture locks dependent business rows before PostgreSQL applies the FK actions.
     tx.execute(
-        &format!("GRANT SELECT ON test_unlink_derived TO {quoted}"),
+        &format!("GRANT SELECT, UPDATE ON test_unlink_derived, test_unlink_child, test_unlink_null TO {quoted}"),
         &[],
     )
     .await

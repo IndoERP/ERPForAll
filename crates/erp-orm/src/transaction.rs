@@ -3362,6 +3362,38 @@ impl Transaction {
         }
     }
 
+    /// Call a private record hook as the authenticated user inside the system transaction
+    /// establishing their session. Both the receiver and `tx.env()` use the caller's
+    /// identity until the call returns, including during cancellation or unwinding.
+    ///
+    /// # Errors
+    /// Refuses a non-system dispatcher, the system user, public methods, and transaction
+    /// control by the hook. Propagates model and method errors.
+    pub async fn call_authenticated_hook<A: Send + 'static, R: Send + 'static>(
+        &mut self,
+        uid: crate::UserId,
+        context: Context,
+        method: &'static str,
+        arguments: A,
+    ) -> Result<R> {
+        if self.env.principal().kind() != crate::PrincipalKind::System || !method.starts_with('_') {
+            return Err(Error::access(
+                "Authenticated hook dispatch requires a system transaction and a private method",
+            ));
+        }
+        let caller = self.resolve_authenticated_user(uid).await?;
+        let env = self
+            .env_for(caller, context)
+            .with_operation_identity(self.env.operation_identity().cloned().map(Arc::new));
+        let mut scope = CompanyEnvScope::enter(self, None)?;
+        scope.tx.env = env;
+        let mut hook = scope.hook_scope(method);
+        let records = hook.env().records("res.users")?.browse([uid.get()])?;
+        let result = records.call::<A, R>(&mut hook, method, arguments).await;
+        hook.finish()?;
+        result
+    }
+
     /// Run a hook chain inside this transaction, which the framework ends after the hook, for the
     /// lifetime of the returned borrowing scope. Calls that end the
     /// transaction and raw transaction-control SQL are refused inside it ([`HookScope`]); call
@@ -3906,7 +3938,7 @@ impl Transaction {
     }
 
     /// The isolation level this transaction was opened with.
-    pub(crate) fn isolation_level(&self) -> Isolation {
+    pub fn isolation_level(&self) -> Isolation {
         self.isolation
     }
 

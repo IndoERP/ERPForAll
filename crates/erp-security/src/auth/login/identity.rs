@@ -4,6 +4,35 @@ mod reset;
 /// A request-local policy check; it can only refuse, never grant session authority.
 pub type PasswordAuthorization<'a> = dyn Fn(&erp_orm::Principal) -> Result<()> + Send + Sync + 'a;
 
+/// A native password adapter's refusal gate, with the active primary transaction and
+/// its freshly checked session principal. The principal owns the authorization decision.
+#[doc(hidden)]
+pub trait PasswordTransactionAuthorization: Send + Sync {
+    /// Take a policy lock before Auth refreshes the final session and authority.
+    fn prepare<'a>(&'a self, _tx: &'a mut Transaction) -> erp_orm::BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Check the refreshed authority. Inputs contain no password data.
+    fn check<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+        principal: &'a erp_orm::Principal,
+    ) -> erp_orm::BoxFuture<'a, Result<()>>;
+}
+
+struct PrincipalOnly<'a>(&'a PasswordAuthorization<'a>);
+
+impl PasswordTransactionAuthorization for PrincipalOnly<'_> {
+    fn check<'a>(
+        &'a self,
+        _tx: &'a mut Transaction,
+        principal: &'a erp_orm::Principal,
+    ) -> erp_orm::BoxFuture<'a, Result<()>> {
+        Box::pin(std::future::ready((self.0)(principal)))
+    }
+}
+
 async fn identity_commit(tx: &mut Transaction) -> Result<()> {
     match tx.commit_pipelined(None).await {
         Ok(()) => Ok(()),
@@ -86,6 +115,7 @@ struct IdentityUser {
 
 /// Successful verification carries its original rollout proof into the caller's final transaction.
 struct IdentityVerdict {
+    hook_tx: Option<Box<Transaction>>,
     user: IdentityUser,
     feature: Option<AttemptFeature>,
     base_generation: Option<i64>,
@@ -228,6 +258,19 @@ impl Auth {
         client: ClientAddr,
         authorize: &PasswordAuthorization<'_>,
     ) -> Result<()> {
+        self.confirm_identity_with_policy(secret, password, client, &PrincipalOnly(authorize))
+            .await
+    }
+
+    /// The native bridge for a password policy that depends on transactional state.
+    #[doc(hidden)]
+    pub async fn confirm_identity_with_policy(
+        &self,
+        secret: &SessionSecret,
+        password: &str,
+        client: ClientAddr,
+        authorize: &dyn PasswordTransactionAuthorization,
+    ) -> Result<()> {
         self.screen("", password, client).map_err(Error::from)?;
         let admitted = admit(
             &self.admission,
@@ -277,6 +320,7 @@ impl Auth {
             sql: Arc::clone(&self.sql),
             has_languages: self.has_languages,
             checks_overridden: self.checks_overridden,
+            post_login: None,
             cooldown_overridden: self.cooldown_overridden,
             principal_accounting,
             feature,
@@ -293,6 +337,7 @@ impl Auth {
         let (reply, answer) = oneshot::channel();
         tokio::spawn(watch(task, Arc::clone(&self.counters), login_key, reply));
         let IdentityVerdict {
+            hook_tx,
             user: verified,
             feature,
             base_generation,
@@ -302,23 +347,30 @@ impl Auth {
             .await
             .map_err(|_| Error::programming("the identity verdict task ended without an answer"))?
             .map_err(Error::from)?;
-        let mut tx = self.orm.begin_opts(read_committed()).await?;
+        let overridden = hook_tx.is_some();
+        let mut tx = match hook_tx {
+            Some(tx) => *tx,
+            None => self.orm.begin_opts(read_committed()).await?,
+        };
         let outcome = async {
             protect_identity_rollout(&mut tx, feature.as_ref(), base_generation).await?;
             if let Some(selection) = &selection {
-                tx.execute("LOCK TABLE res_users IN SHARE ROW EXCLUSIVE MODE", &[]).await?;
-                let fresh = dispatch_selection(&mut tx, &verified.login, &self.selection_limits, self.orm.registry()).await?;
-                let candidate = select_candidate(&mut tx, &fresh, &self.selection_limits).await?;
-                let matches = fresh.domain.domain() == selection.plan.domain.domain()
-                    && fresh.order == selection.plan.order
-                    && candidate.is_some_and(|(uid, _, _, _, _, witness)| uid == verified.uid && witness == selection.witness);
+                let matches = lock_login_selection(&mut tx, &self.orm, &verified.login, &self.selection_limits, &selection.plan, verified.uid, &selection.witness).await?;
                 if !matches {
                     return Err(credential::access_denied());
                 }
             }
             let (session, ..) = self.lock_identity(&mut tx, secret, &verified).await?;
+            authorize.prepare(&mut tx).await?;
             let authority = self.check_session_in(&mut tx, secret).await?;
-            authorize(authority.principal())?;
+            authorize.check(&mut tx, authority.principal()).await?;
+            if overridden {
+                let mut current = self.orm.begin_opts(read_committed().read_only(PHASE_A_ENTRY)).await?;
+                let authority = self.check_session_in(&mut current, secret).await?;
+                // The final transaction retains the fence during this separate current read.
+                authorize.check(&mut current, authority.principal()).await?;
+                current.rollback().await?;
+            }
             tx.execute("UPDATE erp_session SET identity_checked_at = clock_timestamp() WHERE id = $1::text::uuid", &[&session.id().to_text()]).await?;
             Ok(())
         }.await;
@@ -368,6 +420,18 @@ impl Auth {
         password: &str,
         authorize: &PasswordAuthorization<'_>,
     ) -> Result<IdentityCheck> {
+        self.change_password_with_policy(secret, password, &PrincipalOnly(authorize))
+            .await
+    }
+
+    /// The native bridge for a password policy that depends on transactional state.
+    #[doc(hidden)]
+    pub async fn change_password_with_policy(
+        &self,
+        secret: Option<&SessionSecret>,
+        password: &str,
+        authorize: &dyn PasswordTransactionAuthorization,
+    ) -> Result<IdentityCheck> {
         let secret = request_secret(secret)?;
         if password.is_empty() {
             return Err(Error::user(
@@ -402,8 +466,9 @@ impl Auth {
         let outcome = async {
             let (session, session_ids, extra_values) =
                 self.lock_identity(&mut tx, secret, &user).await?;
+            authorize.prepare(&mut tx).await?;
             let authority = self.check_session_in(&mut tx, secret).await?;
-            authorize(authority.principal())?;
+            authorize.check(&mut tx, authority.principal()).await?;
             if recent(&mut tx, session.id()).await? == IdentityCheck::Required {
                 return Ok(IdentityCheck::Required);
             }
@@ -546,6 +611,9 @@ impl Verdict {
             Ok(auth) => auth,
             Err(e) => return self.refuse(e, phase_a).await,
         };
+        if auth.mfa() == super::super::Mfa::Enforce {
+            return Err(self.abandon_phase_a(phase_a, LoginError::Denied).await);
+        }
         let Some(mut user) = self.attempt.user.take() else {
             return Err(self.abandon_phase_a(phase_a, LoginError::Denied).await);
         };
@@ -572,15 +640,20 @@ impl Verdict {
                     .await);
             }
         };
-        end_phase_a(phase_a, true)
-            .await
-            .map_err(LoginError::Failed)?;
+        let hook_tx = match phase_a {
+            PhaseA::Open(tx) => Some(tx),
+            phase => {
+                end_phase_a(phase, true).await.map_err(LoginError::Failed)?;
+                None
+            }
+        };
         let verified = IdentityUser {
             uid: expected,
             login: self.login().to_owned(),
             stored: Zeroizing::new(user.stored.as_deref().cloned()),
         };
         Ok(IdentityVerdict {
+            hook_tx,
             user: verified,
             feature: self.feature,
             base_generation: self.attempt.base_generation,

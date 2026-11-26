@@ -424,14 +424,52 @@ impl Transaction {
             realized.push((recs, commands));
         }
         let groups = realized;
-        match &fs.ty {
+        let started =
+            self.pending_capture.active.is_none() && self.m2m_capture_relevant(model, field);
+        if started {
+            self.begin_capture_operation(&groups[0].0, true).await?;
+        }
+        let result = match &fs.ty {
             FieldType::One2many { .. } => self.write_o2m(model, field, groups, create).await,
             FieldType::Many2many { .. } => self.write_m2m(model, field, groups).await,
             _ => Err(Error::programming(format!(
                 "{}.{} is not an x2many field",
                 spec.name, fs.name
             ))),
+        };
+        if started {
+            self.pending_capture.active = None;
         }
+        result
+    }
+
+    pub(crate) fn m2m_capture_relevant(&self, model: ModelId, field: FieldId) -> bool {
+        let spec = self.registry().model_by_id(model);
+        let fs = spec.field_by_id(field);
+        fs.store
+            && matches!(fs.ty, FieldType::Many2many { .. })
+            && (spec.eventful
+                || self
+                    .shared
+                    .relations
+                    .inverses(model, field)
+                    .iter()
+                    .any(|(owner, inverse)| {
+                        let owner = self.registry().model_by_id(*owner);
+                        owner.eventful && owner.field_by_id(*inverse).store
+                    }))
+    }
+
+    // These are explicit nested ORM operations of a relation command. They settle their own
+    // provenance before returning control to the parent's relation mutation.
+    async fn relation_records<T>(
+        &mut self,
+        run: impl for<'a> FnOnce(&'a mut Self) -> crate::BoxFuture<'a, Result<T>>,
+    ) -> Result<T> {
+        let parent = self.pending_capture.active.take();
+        let result = run(self).await;
+        self.pending_capture.active = parent;
+        result
     }
 
     /// Commands for database records with the new records they name replaced (REL §4.8.7): a new
@@ -729,14 +767,16 @@ impl Transaction {
             ))
         };
         for (vals, ids) in std::mem::take(&mut state.to_update) {
-            state.comodel.browse_ids(ids).write(self, vals).await?;
+            let lines = state.comodel.browse_ids(ids);
+            self.relation_records(move |tx| Box::pin(async move { lines.write(tx, vals).await }))
+                .await?;
         }
         if !state.to_detach.is_empty() {
             let lines = state
                 .comodel
                 .browse_ids(std::mem::take(&mut state.to_detach));
-            lines
-                .write(self, RawVals::new().set_cell(state.inverse, Cell::Null))
+            let vals = RawVals::new().set_cell(state.inverse, Cell::Null);
+            self.relation_records(move |tx| Box::pin(async move { lines.write(tx, vals).await }))
                 .await?;
         }
         let mut before: FxHashMap<RecId, FxHashSet<RecId>> = FxHashMap::default();
@@ -756,11 +796,15 @@ impl Transaction {
             let lines = state
                 .comodel
                 .browse_ids(std::mem::take(&mut state.to_delete));
-            lines.unlink(self).await?;
+            self.relation_records(move |tx| Box::pin(async move { lines.unlink(tx).await }))
+                .await?;
         }
         if !state.to_create.is_empty() {
             let vals = std::mem::take(&mut state.to_create);
-            let lines = state.comodel.create(self, vals).await?;
+            let model = state.comodel.clone();
+            let lines = self
+                .relation_records(move |tx| Box::pin(async move { model.create(tx, vals).await }))
+                .await?;
             if !field_domain.is_true()
                 && self.filter_domain(&lines, field_domain).await?.len() < lines.len()
             {
@@ -784,7 +828,9 @@ impl Transaction {
             {
                 return Err(inaccessible());
             }
-            lines.write(self, state.link_vals(record)).await?;
+            let vals = state.link_vals(record);
+            self.relation_records(move |tx| Box::pin(async move { lines.write(tx, vals).await }))
+                .await?;
         }
         Ok(())
     }
@@ -950,11 +996,16 @@ impl Transaction {
             }
         }
         for (vals, ids) in to_update {
-            co.browse_ids(ids).write(self, vals).await?;
+            let lines = co.browse_ids(ids);
+            self.relation_records(move |tx| Box::pin(async move { lines.write(tx, vals).await }))
+                .await?;
         }
         if !to_create.is_empty() {
             let (targets_of, vals): (Vec<Vec<RecId>>, Vec<RawVals>) = to_create.into_iter().unzip();
-            let lines = co.create(self, vals).await?;
+            let model = co.clone();
+            let lines = self
+                .relation_records(move |tx| Box::pin(async move { model.create(tx, vals).await }))
+                .await?;
             for (line, targets) in lines.rec_ids().iter().zip(&targets_of) {
                 added.add(*line);
                 for x in targets {
@@ -970,8 +1021,8 @@ impl Transaction {
                 .copied()
                 .filter(|i| !inaccessible.contains(i))
                 .collect();
-            co.browse_ids(to_delete.iter().copied())
-                .unlink(self)
+            let lines = co.browse_ids(to_delete.iter().copied());
+            self.relation_records(move |tx| Box::pin(async move { lines.unlink(tx).await }))
                 .await?;
             for set in old.values_mut().chain(new.values_mut()) {
                 for y in &deleted {
@@ -1044,10 +1095,20 @@ impl Transaction {
             column1: &rel.column1,
             column2: &rel.column2,
         };
-        for (pairs, sql) in [
+        let capture = self.m2m_capture_relevant(model, field);
+        let mut changed_x = FxHashSet::default();
+        let mut changed_y = FxHashSet::default();
+        for (pairs, mut sql) in [
             (&add_pairs, erp_sql::relational::insert_pairs(relation)),
             (&remove_pairs, erp_sql::relational::delete_pairs(relation)),
         ] {
+            if capture {
+                sql.push_str(&format!(
+                    " RETURNING {}, {}",
+                    erp_sql::quote(&rel.column1),
+                    erp_sql::quote(&rel.column2)
+                ));
+            }
             // sorted, so that concurrent writers lock pairs in the same order; bounded chunks
             let mut sorted: Vec<(i64, i64)> =
                 pairs.iter().map(|(x, y)| (x.get(), y.get())).collect();
@@ -1055,7 +1116,62 @@ impl Transaction {
             for chunk in sorted.chunks(erp_sql::relational::PAIR_CHUNK) {
                 let xs: Vec<i64> = chunk.iter().map(|(x, _)| *x).collect();
                 let ys: Vec<i64> = chunk.iter().map(|(_, y)| *y).collect();
-                self.execute_orm(&sql, &[&xs, &ys]).await?;
+                if capture {
+                    for row in self.query_orm(&sql, &[&xs, &ys]).await? {
+                        let id = |column| -> Result<RecId> {
+                            let value = row.try_get::<_, i64>(column).map_err(|error| {
+                                Error::db("outbox: could not read a changed relation id")
+                                    .with_source(error)
+                            })?;
+                            RecId::from_real(value).ok_or_else(|| {
+                                Error::programming(
+                                    "outbox: a changed relation returned an invalid id",
+                                )
+                            })
+                        };
+                        changed_x.insert(id(0_usize)?);
+                        changed_y.insert(id(1_usize)?);
+                        if changed_x.len().max(changed_y.len()) > crate::outbox::MAX_INDIRECT_IDS {
+                            return Err(crate::outbox::limit(
+                                "relation change exceeds 16384 captured record ids",
+                            ));
+                        }
+                    }
+                } else {
+                    self.execute_orm(&sql, &[&xs, &ys]).await?;
+                }
+            }
+        }
+        if capture {
+            let mut fields: Vec<_> = self
+                .shared
+                .relations
+                .siblings(model, field)
+                .iter()
+                .map(|id| spec.field_by_id(*id).name.to_owned())
+                .collect();
+            fields.push(fs.name.to_owned());
+            fields.sort_unstable();
+            fields.dedup();
+            self.capture_indirect_change(
+                model,
+                crate::outbox::Kind::Write,
+                fields,
+                changed_x.into_iter().collect(),
+            )?;
+            let changed_y: Vec<_> = changed_y.into_iter().collect();
+            let inverses = self.shared.relations.inverses(model, field).to_vec();
+            for (owner, inverse) in inverses {
+                let inverse = registry.model_by_id(owner).field_by_id(inverse);
+                if !inverse.store {
+                    continue;
+                }
+                self.capture_indirect_change(
+                    owner,
+                    crate::outbox::Kind::Write,
+                    vec![inverse.name.to_owned()],
+                    changed_y.clone(),
+                )?;
             }
         }
         // what the follow-delete triggers of the relation table did (a bumped cache): forgotten

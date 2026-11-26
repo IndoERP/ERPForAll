@@ -579,7 +579,11 @@ impl Transaction {
                     .unwrap_or(Cell::Null);
                 if fs.company_dependent {
                     let (company, fallback) = self.property_context(env, model, field)?;
-                    crate::company_dependent::project(&fs.ty, &cell, company, &fallback)
+                    if id.is_new() {
+                        crate::company_dependent::project_draft(&fs.ty, &cell, company, &fallback)
+                    } else {
+                        crate::company_dependent::project(&fs.ty, &cell, company, &fallback)
+                    }
                 } else if fs.translate {
                     crate::translated::project(spec.name, fs.name, &cell, env.lang())
                 } else {
@@ -789,7 +793,19 @@ impl Transaction {
             }
             match computed {
                 Some(fc) if fc.stored => {
-                    self.load(records, field).await?;
+                    let relation = matches!(fs.ty, erp_fields::FieldType::Many2many { .. });
+                    if relation {
+                        if records.rec_ids().iter().all(|id| !id.is_new()) {
+                            self.ensure_x2many(records, field).await?;
+                        } else {
+                            let real = records.browse_ids(
+                                records.rec_ids().iter().copied().filter(|id| !id.is_new()),
+                            );
+                            self.ensure_x2many(&real, field).await?;
+                        }
+                    } else {
+                        self.load(records, field).await?;
+                    }
                     let new_missing: Vec<RecId> =
                         dedup(
                             records.rec_ids().iter().copied().filter(|id| {
@@ -802,8 +818,13 @@ impl Transaction {
                     let (from_origin, compute): (Vec<RecId>, Vec<RecId>) = new_missing
                         .into_iter()
                         .partition(|id| fc.editable && id.origin().is_some());
-                    self.copy_from_origin(&env, model, field, &from_origin)
-                        .await?;
+                    if relation {
+                        self.ensure_x2many(&records.browse_ids(from_origin), field)
+                            .await?;
+                    } else {
+                        self.copy_from_origin(&env, model, field, &from_origin)
+                            .await?;
+                    }
                     // A fresh stored compute may read its own old value (for example
                     // partner language). As for nonstored fields below, an uncached
                     // protected read is null, not a recursive call to the same compute.
@@ -1518,7 +1539,8 @@ impl Transaction {
                 let fs = spec.field_by_id(f);
                 if !real.is_empty()
                     && matches!(fs.ty, erp_fields::FieldType::Many2one { .. })
-                    && self.inverse_has_dependents(model, f)
+                    && (self.inverse_has_dependents(model, f)
+                        || self.o2m_capture_relevant(model, f))
                     && real.iter().any(|id| !self.cache.contains(model, f, *id))
                 {
                     let real_arc: Arc<[RecId]> = Arc::from(real.clone());
@@ -1544,6 +1566,20 @@ impl Transaction {
             };
             let value = |i: usize| values.get(i).cloned().flatten();
             if fc.stored {
+                if matches!(fs.ty, erp_fields::FieldType::Many2many { .. }) {
+                    let compute_env = if fc.sudo {
+                        env.engine_sudo()
+                    } else {
+                        env.clone()
+                    };
+                    let changed = self
+                        .apply_many2many_outputs(&compute_env, model, f, ids, values)
+                        .await?;
+                    if !changed.is_empty() {
+                        changes.push((f, changed));
+                    }
+                    continue;
+                }
                 let with_inverses = matches!(fs.ty, erp_fields::FieldType::Many2one { .. })
                     && !shared.relations.inverses(model, f).is_empty();
                 let mc = self.cache.model_mut(model);
@@ -1641,6 +1677,66 @@ impl Transaction {
             }
         }
         Ok(())
+    }
+
+    /// Persist computed relation values through the same relation-table writer as `Command::Set`.
+    /// That path notifies stored dependents and updates inverse caches. New owners stay cache-only.
+    fn apply_many2many_outputs<'a>(
+        &'a mut self,
+        env: &'a Env,
+        model: ModelId,
+        field: FieldId,
+        ids: &'a [RecId],
+        values: Vec<Option<Cell>>,
+    ) -> BoxFuture<'a, Result<Vec<RecId>>> {
+        Box::pin(async move {
+            let records = Records::empty(
+                env.with_context([("active_test", Value::Bool(false))]),
+                model,
+            );
+            let mut groups = Vec::new();
+            let mut drafts = Vec::new();
+            for (&id, value) in ids.iter().zip(values) {
+                let Some(value) = value else { continue };
+                let links = match value {
+                    Cell::Ids(links) => links,
+                    Cell::Null => Arc::from([]),
+                    _ => {
+                        return Err(Error::programming(
+                            "computed many2many returned a scalar value",
+                        ));
+                    }
+                };
+                if id.is_new() {
+                    let value = Cell::Ids(links);
+                    if self
+                        .cache
+                        .get(model, field, id)
+                        .is_none_or(|old| !old.same_value(&value))
+                    {
+                        self.cache.model_mut(model).set(
+                            field,
+                            erp_fields::Storage::Ids,
+                            id,
+                            value,
+                            false,
+                        )?;
+                        drafts.push(id);
+                    }
+                } else {
+                    groups.push((
+                        records.browse_ids([id]),
+                        vec![crate::commands::Command::Set(links.to_vec())],
+                    ));
+                }
+            }
+            let before = self.mutations();
+            if let Err(error) = self.write_x2many(model, field, groups, false).await {
+                self.poison_after(before, &error);
+                return Err(error);
+            }
+            Ok(drafts)
+        })
     }
 
     /// The values a compute reads through its paths: per step after the first, the values of

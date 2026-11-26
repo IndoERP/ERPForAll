@@ -237,6 +237,14 @@ SELECT NOT has_schema_privilege('public','USAGE') OR EXISTS (
     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='public' AND CASE
         WHEN c.relkind='S' AND c.relname=ANY($2::text[]) THEN has_sequence_privilege(c.oid,'USAGE,SELECT,UPDATE')
+        WHEN c.relkind='r' AND c.relname='erp_record_protection.owner'
+        THEN NOT has_table_privilege(c.oid,'SELECT')
+            OR has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            OR has_any_column_privilege(c.oid,'INSERT,UPDATE,REFERENCES')
+        WHEN c.oid IN (SELECT relid FROM pg_catalog.pg_partition_tree(
+            pg_catalog.to_regclass('public.\"erp_record_protection.binding\"')))
+        THEN has_table_privilege(c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            OR has_any_column_privilege(c.oid,'SELECT,INSERT,UPDATE,REFERENCES')
         WHEN c.relkind IN ('r','p') AND c.oid IN (SELECT oid FROM restricted) THEN FALSE
         WHEN c.relkind='S' AND EXISTS (SELECT 1 FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class t ON t.oid=d.refobjid WHERE d.classid='pg_catalog.pg_class'::regclass AND d.refclassid='pg_catalog.pg_class'::regclass AND d.objid=c.oid AND d.deptype IN ('a','i') AND t.relnamespace=n.oid AND t.oid IN (SELECT oid FROM restricted)) THEN FALSE
         WHEN c.relkind IN ('r','p') AND c.relname = 'ai_session'
@@ -2442,11 +2450,14 @@ async fn runtime_rpc(
     let mut tx = auth.orm().begin(SUPERUSER_ID).await?;
     let languages = erp_security::auth::context::installed_languages(&mut tx).await?;
     tx.rollback().await?;
-    Ok(Arc::new(erp_rpc::RpcService::new(
-        auth.orm().clone(),
-        NativeHost { languages },
-        crate::server_runtime::rpc_config(config)?,
-    )))
+    Ok(Arc::new(
+        erp_rpc::RpcService::new(
+            auth.orm().clone(),
+            NativeHost { languages },
+            crate::server_runtime::rpc_config(config)?,
+        )
+        .attempt_gate(crate::approval_rpc::ApprovalGate),
+    ))
 }
 
 // The catalogue binder is part of native composition. The offered set is the module system's

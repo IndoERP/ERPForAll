@@ -75,6 +75,25 @@ fn unsupported(model: &ModelSpec, field: &str, why: &str) -> Error {
 /// The terms of `spec` (the model's `_order` when empty) for keyset pagination, `id` appended
 /// unless present (the tiebreaker of [`crate::order::compile_order`]).
 pub fn keyset_terms(registry: &Registry, model: &ModelSpec, spec: &str) -> Result<Vec<KeyTerm>> {
+    keyset_terms_inner(registry, model, spec, None)
+}
+
+/// Keyset terms whose company-dependent expressions use the order's bound company parameter.
+pub fn keyset_terms_with_company(
+    registry: &Registry,
+    model: &ModelSpec,
+    spec: &str,
+    company_slot: usize,
+) -> Result<Vec<KeyTerm>> {
+    keyset_terms_inner(registry, model, spec, Some(company_slot))
+}
+
+fn keyset_terms_inner(
+    registry: &Registry,
+    model: &ModelSpec,
+    spec: &str,
+    company_slot: Option<usize>,
+) -> Result<Vec<KeyTerm>> {
     let spec = if spec.trim().is_empty() {
         model.order
     } else {
@@ -94,13 +113,6 @@ pub fn keyset_terms(registry: &Registry, model: &ModelSpec, spec: &str) -> Resul
                 term.field, model.name
             ))
         })?;
-        if field.company_dependent {
-            return Err(unsupported(
-                model,
-                field.name,
-                "company-dependent keys require prepared company values until a later release; use offset pagination",
-            ));
-        }
         if field.inherited.is_some() {
             return Err(unsupported(
                 model,
@@ -109,7 +121,17 @@ pub fn keyset_terms(registry: &Registry, model: &ModelSpec, spec: &str) -> Resul
                  keyset pagination does not join",
             ));
         }
-        let col = format!("{table}.{}", quote(field.name));
+        let col = if field.company_dependent {
+            crate::company::expression(
+                registry,
+                model,
+                field,
+                &model.table,
+                company_slot.ok_or_else(|| crate::company::missing(model, field))?,
+            )?
+        } else {
+            format!("{table}.{}", quote(field.name))
+        };
         let descending = term.direction == Direction::Desc;
         let nulls_first = term.nulls.first_for(term.direction);
         let nullable = can_be_null(field);

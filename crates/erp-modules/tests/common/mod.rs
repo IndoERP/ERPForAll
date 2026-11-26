@@ -22,6 +22,30 @@ use tempfile::TempDir;
 
 // ---- fixtures ------------------------------------------------------------------------------
 
+pub const REQUIRED_MIGRATION_DECLARATION: &str =
+    include_str!("../fixtures/required_migration/required.toml");
+pub const REQUIRED_MIGRATION_PATH: &str = "migrations/1.1/post-bump.sql";
+pub const REQUIRED_MIGRATION_SQL: &str =
+    include_str!("../fixtures/required_migration/migrations/1.1/post-bump.sql");
+
+pub async fn setup_migration_probe(orm: &Orm) {
+    exec(orm, "CREATE TABLE migration_probe (applications int NOT NULL); INSERT INTO migration_probe VALUES (0)").await;
+}
+
+pub async fn assert_migration_probe(orm: &Orm, module: &str, version: &str, applications: &str) {
+    assert_eq!(state(orm, module).await, "installed");
+    let result = rows(orm, &format!(
+        "SELECT latest_version, applications::text FROM ir_module_module CROSS JOIN migration_probe WHERE name = '{module}'"
+    )).await;
+    assert_eq!(
+        result,
+        vec![vec![
+            Some(version.to_owned()),
+            Some(applications.to_owned())
+        ]]
+    );
+}
+
 /// Addons in a dev folder, `base` included.
 pub struct Addons {
     root: TempDir,

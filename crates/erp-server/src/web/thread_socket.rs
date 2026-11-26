@@ -51,12 +51,17 @@ impl WakeHub {
         let wake = signal
             .subscribe(&erp_orm::NotifyChannel::new("erp_thread_changed").map_err(auth_error)?)
             .map_err(auth_error)?;
+        let mut security = signal.subscribe_security_changes();
         let (tx, rx) = watch::channel(());
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     () = tx.closed() => break,
                     () = wake.notified() => { tx.send_replace(()); }
+                    result = security.changed() => {
+                        if result.is_err() { break; }
+                        tx.send_replace(());
+                    }
                 }
             }
         });
@@ -282,6 +287,27 @@ struct SocketSession {
     min_rate: u64,
     heartbeat: Duration,
 }
+
+#[derive(Default)]
+struct SocketCounts {
+    wakeups: u64,
+    heartbeats: u64,
+    resyncs: u64,
+    refused: bool,
+}
+
+impl Drop for SocketCounts {
+    fn drop(&mut self) {
+        tracing::debug!(
+            wakeups = self.wakeups,
+            heartbeats = self.heartbeats,
+            resyncs = self.resyncs,
+            refused = self.refused,
+            "thread socket delivery totals"
+        );
+    }
+}
+
 impl SocketSession {
     async fn window(&self, sub: &Subscription) -> erp_fields::Result<Vec<i64>> {
         if self.draining.load(Ordering::Acquire)
@@ -331,7 +357,7 @@ impl SocketSession {
     async fn checked_window(&self, socket: &mut WebSocket, sub: &Subscription) -> Option<Vec<i64>> {
         match tokio::time::timeout(self.io, self.window(sub)).await {
             Ok(Ok(window)) => Some(window),
-            Ok(Err(error)) if matches!(error.kind().http_status(), 403 | 404 | 422) => {
+            Ok(Err(error)) if matches!(error.kind().http_status(), 401 | 403 | 404 | 422) => {
                 refuse(socket, self.io).await;
                 None
             }
@@ -411,6 +437,7 @@ impl SocketSession {
         if !send(&mut socket, self.io, resync()).await {
             return;
         }
+        let mut counts = SocketCounts::default();
         let mut check = tokio::time::interval(self.heartbeat);
         let mut awaiting_pong = false;
         check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -440,7 +467,13 @@ impl SocketSession {
                 refuse(&mut socket, self.io).await;
                 return;
             }
+            if heartbeat {
+                counts.heartbeats += 1;
+            } else {
+                counts.wakeups += 1;
+            }
             let Some(next) = self.checked_window(&mut socket, &sub).await else {
+                counts.refused = true;
                 return;
             };
             if next != visible {
@@ -448,6 +481,7 @@ impl SocketSession {
                 if !send(&mut socket, self.io, resync()).await {
                     return;
                 }
+                counts.resyncs += 1;
             }
             if heartbeat {
                 awaiting_pong = true;

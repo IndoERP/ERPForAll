@@ -116,15 +116,22 @@ async fn key_id(
     tx: &mut Transaction,
     hasher: &ApiKeyHasher,
     key: &str,
-    scope: &str,
+    scope: Option<&str>,
     refusal: &'static str,
-) -> Result<i64> {
+) -> Result<(i64, bool)> {
     let invalid = || Error::new(ErrorKind::AccessDenied, refusal);
     let token = NativeApiKey::parse(key).map_err(|_| invalid())?;
     let digest = hasher.digest(&token);
     let uid = tx.env().user_id().get();
-    let rows = tx.query("SELECT id::int8 FROM res_users_apikeys WHERE digest=$1 AND digest_kid=$2 AND user_id=$3 AND scope=$4 AND kind='user' AND models IS NULL AND methods IS NULL AND read_only IS FALSE AND capabilities='subject' AND (expiration_date IS NULL OR expiration_date>=now() AT TIME ZONE 'utc') FOR UPDATE", &[&digest.bytes().as_slice(), &i32::from(digest.kid()), &uid, &scope]).await?;
-    let id: i64 = column(rows.first().ok_or_else(invalid)?, 0)?;
+    let rows = tx.query("SELECT id::int8, scope='mcp' FROM res_users_apikeys
+        WHERE digest=$1 AND digest_kid=$2 AND user_id=$3 AND ($4::text IS NULL OR scope=$4)
+        AND ((kind='user' AND scope='rpc' AND capabilities='subject' AND models IS NULL AND methods IS NULL AND NOT read_only)
+             OR (kind='agent' AND scope='mcp' AND capabilities='none'))
+        AND (expiration_date IS NULL OR expiration_date>=now() AT TIME ZONE 'utc') FOR UPDATE",
+        &[&digest.bytes().as_slice(), &i32::from(digest.kid()), &uid, &scope]).await?;
+    let row = rows.first().ok_or_else(invalid)?;
+    let id = column(row, 0)?;
+    let mcp = column(row, 1)?;
     // Agent and service keys are refused completely, also behind an impersonation chain and
     // under elevated environments; they cannot manage keys, not even their own.
     if let Some((_, kind)) = key_actor(tx.env().principal())?
@@ -134,7 +141,7 @@ async fn key_id(
             "Agent and service keys cannot manage API keys",
         ));
     }
-    Ok(id)
+    Ok((id, mcp))
 }
 
 /// Renew a native user key by creating another key for the same current user
@@ -150,7 +157,10 @@ pub async fn generate(
 ) -> Result<IssuedApiKey> {
     gate(tx).await?;
     let hasher = hasher(tx).await?;
-    key_id(tx, &hasher, key, scope, GENERATE_INVALID).await?;
+    if scope != "rpc" {
+        return Err(Error::new(ErrorKind::AccessDenied, GENERATE_INVALID));
+    }
+    key_id(tx, &hasher, key, Some(scope), GENERATE_INVALID).await?;
     let request = IssueRequest::new(
         tx.env().user_id(),
         name,
@@ -167,7 +177,7 @@ pub async fn generate(
 pub async fn revoke(tx: &mut Transaction, key: &str) -> Result<bool> {
     gate(tx).await?;
     let hasher = hasher(tx).await?;
-    let id = key_id(tx, &hasher, key, "rpc", REVOKE_INVALID).await?;
+    let (id, mcp) = key_id(tx, &hasher, key, None, REVOKE_INVALID).await?;
     let deleted = tx
         .execute("DELETE FROM res_users_apikeys WHERE id=$1", &[&id])
         .await?;
@@ -189,8 +199,16 @@ pub async fn revoke(tx: &mut Transaction, key: &str) -> Result<bool> {
         tx.audit_auth(AuthEvent::ApiKeyRevoked(ApiKeyRevoked::new(
             revoked,
             owner,
-            erp_orm::KeyKind::User,
-            KeyRouteScope::Rpc,
+            if mcp {
+                erp_orm::KeyKind::Agent
+            } else {
+                erp_orm::KeyKind::User
+            },
+            if mcp {
+                KeyRouteScope::Mcp
+            } else {
+                KeyRouteScope::Rpc
+            },
             cause,
         )))?;
     }

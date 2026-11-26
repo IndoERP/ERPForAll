@@ -98,6 +98,18 @@ impl Auth {
         changes: &[PasswordReset],
         authorize: &PasswordAuthorization<'_>,
     ) -> Result<IdentityCheck> {
+        self.reset_passwords_with_policy(secret, changes, &PrincipalOnly(authorize))
+            .await
+    }
+
+    /// The native bridge for a password policy that depends on transactional state.
+    #[doc(hidden)]
+    pub async fn reset_passwords_with_policy(
+        &self,
+        secret: Option<&SessionSecret>,
+        changes: &[PasswordReset],
+        authorize: &dyn PasswordTransactionAuthorization,
+    ) -> Result<IdentityCheck> {
         let secret = request_secret(secret)?;
         if changes.is_empty() || changes.len() > 100 {
             return Err(Error::validation(
@@ -197,8 +209,9 @@ impl Auth {
             }
             // Recheck the cookie, wall-clock expiry and policy after every target-session wait.
             self.lock_identity(&mut tx, secret, &actor).await?;
+            authorize.prepare(&mut tx).await?;
             let final_authority = self.check_session_in(&mut tx, secret).await?;
-            authorize(final_authority.principal())?;
+            authorize.check(&mut tx, final_authority.principal()).await?;
             if !final_authority.has_groups("base.group_erp_manager,base.group_system")? { return Err(manager_required()); }
             if recent(&mut tx, session.id()).await? == IdentityCheck::Required { return Ok(IdentityCheck::Required); }
             // after the final locks and authority rechecks: company scope, then the Settings

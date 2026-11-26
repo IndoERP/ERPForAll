@@ -67,12 +67,41 @@ impl ResCurrency {
                 "_round_monetary expects 1 to 256 amounts",
             ));
         }
-        let ids: Vec<RecId> = amounts.iter().map(|(id, _)| *id).collect();
-        let table = crate::money::RoundingTable::load(this.env(), tx, &ids).await?;
-        amounts
-            .into_iter()
-            .map(|(id, amount)| table.get(id)?.round(amount))
-            .collect()
+        let ids: Vec<RecId> = amounts
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| !id.is_new())
+            .collect();
+        let table = if ids.is_empty() {
+            None
+        } else {
+            Some(crate::money::RoundingTable::load(this.env(), tx, &ids).await?)
+        };
+        let mut draft_increments = std::collections::BTreeMap::new();
+        let mut rounded = Vec::with_capacity(amounts.len());
+        for (id, amount) in amounts {
+            if !id.is_new() {
+                let table = table
+                    .as_ref()
+                    .ok_or_else(|| Error::programming("Currency rounding table is missing"))?;
+                rounded.push(table.get(id)?.round(amount)?);
+                continue;
+            }
+            let increment = match draft_increments.entry(id) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let currency = this.as_records().browse_ids([id]);
+                    let Cell::Decimal(rounding) = currency.cell(tx, "rounding").await? else {
+                        return Err(Error::validation(
+                            "Draft currency requires a rounding increment",
+                        ));
+                    };
+                    entry.insert(erp_sdk::money::Increment::new(rounding)?)
+                }
+            };
+            rounded.push(increment.quantize(amount, crate::money::CURRENCY_ROUNDING_MODE)?);
+        }
+        Ok(rounded)
     }
 
     /// Compute decimal places from rounding factor.

@@ -163,6 +163,68 @@ fn an_untrusted_address_or_privileged_caller_cannot_obtain_a_transport() {
     );
 }
 
+#[test]
+fn literal_remote_destinations_require_public_addresses_and_clean_https_urls() {
+    use crate::transport::trusted_base;
+    for endpoint in [
+        "https://10.0.0.4/v1",
+        "https://100.64.0.4/v1",
+        "https://169.254.169.254/v1",
+        "https://192.0.2.4/v1",
+        "https://127.0.0.1/v1",
+        "https://[::ffff:127.0.0.1]/v1",
+        "https://[fc00::1]/v1",
+        "https://[fe80::1]/v1",
+        "https://[2001:db8::1]/v1",
+        "https://provider.example.invalid:0/v1",
+        "https://operator@provider.example.invalid/v1",
+        "https://provider.example.invalid/v1?token=fixture-marker",
+        "https://provider.example.invalid/v1#fixture-marker",
+    ] {
+        assert!(trusted_base(endpoint).is_none());
+    }
+    for endpoint in [
+        "https://93.184.215.14/v1",
+        "https://[2606:4700:4700::1111]/v1",
+        "https://provider.example.invalid/v1",
+        "http://127.0.0.1:11434/v1",
+        "http://[::1]:11434/v1",
+    ] {
+        assert!(trusted_base(endpoint).is_some());
+    }
+}
+
+#[tokio::test]
+async fn dns_resolved_loopback_is_refused_and_exchange_errors_are_redacted() {
+    // A hostname must pass the checked resolver. The numeric loopback exception exists only
+    // for an explicitly configured HTTP local provider.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut selected = route("openai_compatible");
+    selected.base_url = format!(
+        "https://localhost:{}/v1",
+        listener.local_addr().unwrap().port()
+    );
+    let keys = credentials(&selected.base_url, "");
+    let error = selected
+        .transport(&keys)
+        .unwrap()
+        .complete_turn(&request(vec![user()]))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::Unavailable { .. }));
+    assert_eq!(
+        error.to_string(),
+        format!("provider '{PROVIDER}' service unavailable: could not complete the HTTP exchange")
+    );
+    let debug = format!("{keys:?} {error:?}");
+    assert!(!debug.contains("test-only-token"));
+    assert!(!debug.contains("localhost"));
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+}
+
 #[tokio::test]
 async fn chunked_response_is_limited_even_without_a_content_length() {
     let (base, job) = fixture(format!(

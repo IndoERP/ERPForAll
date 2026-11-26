@@ -60,6 +60,7 @@ pub async fn get_model_defaults(
         condition,
         env.uid(),
         "_get_model_defaults",
+        false,
     )
     .await
 }
@@ -77,6 +78,26 @@ pub(crate) async fn get_property_defaults(
         None,
         crate::SUPERUSER_ID.into(),
         "_get_property_defaults",
+        false,
+    )
+    .await
+}
+
+/// Selection metadata flushes pending writes before it hands control to native providers.
+/// Prepare their property expressions using only the resulting database snapshot.
+pub(crate) async fn catalog_property_defaults(
+    tx: &mut Transaction,
+    env: &Env,
+    model: &str,
+) -> Result<FxHashMap<String, Value>> {
+    model_defaults_as(
+        tx,
+        env,
+        model,
+        None,
+        crate::SUPERUSER_ID.into(),
+        "_get_property_defaults",
+        true,
     )
     .await
 }
@@ -88,6 +109,7 @@ async fn model_defaults_as(
     condition: Option<&str>,
     uid: i64,
     method: &'static str,
+    read_only_catalog: bool,
 ) -> Result<FxHashMap<String, Value>> {
     let registry = env.registry();
     if registry.model(model_name).is_none() {
@@ -105,11 +127,17 @@ async fn model_defaults_as(
     }
 
     // validated against the subject's newest resolution, also under sudo (review S1)
-    let company_id = tx.companies(env).await?.first().map(|c| c.get());
+    let company_id = if read_only_catalog {
+        tx.companies_now(env)?.first().map(|c| c.get())
+    } else {
+        tx.companies(env).await?.first().map(|c| c.get())
+    };
 
     // Generic writes are staged. A fresh lookup must see them before caching the result
     // or projecting a property fallback (ordinary precedence is unchanged).
-    Box::pin(tx.flush_model(defaults.id)).await?;
+    if !read_only_catalog {
+        Box::pin(tx.flush_model(defaults.id)).await?;
+    }
 
     // Check ormcache
     let cache_key = OrmCacheKey::new(

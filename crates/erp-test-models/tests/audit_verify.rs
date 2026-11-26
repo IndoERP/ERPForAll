@@ -896,3 +896,131 @@ async fn serializable_isolation_is_accepted() {
     assert_eq!(verified(out).seals(), 1);
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn audit_retention_checks_holds_witness_and_archive_manifest() {
+    use erp_fields::Date;
+    use erp_orm::audit::AuditRetention;
+
+    let h = initialized().await;
+    let c = owner(&h).await;
+    c.batch_execute(
+        "CREATE TABLE erp_event.ir_audit_entry_p20200101
+          PARTITION OF erp_event.ir_audit_entry
+          FOR VALUES FROM ('2020-01-01 00:00:00+00') TO ('2020-01-02 00:00:00+00');
+         INSERT INTO erp_event.ir_audit_entry
+          (create_date,schema_version,entry_kind,origin,outcome,attempt,operation_id,
+           principal_kind,subject_id,actor_kind,actor_id,company_ids,target_ids,events,encoded_bytes)
+          VALUES ('2020-01-01 01:00:00+00',1,'change','internal','committed',1,uuidv7(),
+                  'user',1,'user',1,ARRAY[1]::bigint[],'[]','[]',64);",
+    )
+    .await
+    .unwrap();
+    let day = Date::from_ymd(2020, 1, 1).unwrap();
+    let store = h.orm();
+    let seal = seal_one(&h).await;
+    let witness = evidence(&[&seal]);
+    assert_eq!(
+        store.retain_audit(None, true, &witness).await.unwrap(),
+        AuditRetention::KeepAll,
+    );
+    assert!(store.set_audit_hold(day, true).await.unwrap());
+    assert_eq!(
+        store.retain_audit(Some(30), false, &witness).await.unwrap(),
+        AuditRetention::NothingEligible,
+    );
+    assert!(store.set_audit_hold(day, false).await.unwrap());
+    let mut another_owner = begin_unsettled(&h).await;
+    another_owner
+        .query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('core.audit.retention',0))",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.retain_audit(Some(30), false, &witness).await.unwrap(),
+        AuditRetention::Busy,
+    );
+    another_owner.rollback().await.unwrap();
+    assert!(
+        store
+            .retain_audit(Some(30), true, &WitnessEvidence::NotConfigured)
+            .await
+            .unwrap_err()
+            .message()
+            .contains("published chain anchors")
+    );
+    c.batch_execute("UPDATE erp_event.ir_audit_entry_p20200101 SET events='[1]'")
+        .await
+        .unwrap();
+    assert!(
+        store
+            .retain_audit(Some(30), true, &witness)
+            .await
+            .unwrap_err()
+            .message()
+            .contains("chain verification failed")
+    );
+    c.batch_execute("UPDATE erp_event.ir_audit_entry_p20200101 SET events='[]'")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.retain_audit(Some(30), true, &witness).await.unwrap(),
+        AuditRetention::Archived { day, rows: 1 },
+    );
+    assert_eq!(
+        store.retain_audit(Some(30), true, &witness).await.unwrap(),
+        AuditRetention::Busy,
+    );
+    let row = c.query_one(
+        "SELECT row_count,octet_length(sha256),archived_by=current_user FROM erp_audit_archive.manifest WHERE day=$1",
+        &[&day],
+    ).await.unwrap();
+    assert_eq!(
+        (
+            row.get::<_, i64>(0),
+            row.get::<_, i32>(1),
+            row.get::<_, bool>(2)
+        ),
+        (1, 32, true)
+    );
+    let report = verified(verify_tx(&h, &VerifyScope::full(), &witness).await);
+    assert_eq!(report.rows(), 1);
+    let active = c.query_one(
+        "SELECT (SELECT count(*) FROM erp_event.ir_audit_entry WHERE create_date < '2020-01-02') = 0,
+                EXISTS(SELECT FROM erp_event.ir_audit_entry WHERE method='audit.retention.archive' AND origin='job')",
+        &[],
+    ).await.unwrap();
+    assert!(active.get::<_, bool>(0));
+    assert!(active.get::<_, bool>(1));
+    c.batch_execute("UPDATE erp_audit_archive.ir_audit_entry_p20200101 SET events='[1]'")
+        .await
+        .unwrap();
+    assert!(
+        store
+            .restore_audit_partition(day, &witness)
+            .await
+            .unwrap_err()
+            .message()
+            .contains("does not match its manifest")
+    );
+    c.batch_execute("UPDATE erp_audit_archive.ir_audit_entry_p20200101 SET events='[]'")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.restore_audit_partition(day, &witness).await.unwrap(),
+        1
+    );
+    assert!(!store.set_audit_hold(day, true).await.unwrap());
+    assert_eq!(
+        store.retain_audit(Some(30), false, &witness).await.unwrap(),
+        AuditRetention::NothingEligible,
+    );
+    assert_eq!(
+        verified(verify_tx(&h, &VerifyScope::full(), &witness).await).rows(),
+        1
+    );
+    drop(c);
+    h.cleanup().await.unwrap();
+}

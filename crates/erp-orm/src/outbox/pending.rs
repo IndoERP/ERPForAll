@@ -158,6 +158,9 @@ impl crate::Transaction {
             if spec.eventful && fs.has_column() && fs.inherited.is_none() {
                 return true;
             }
+            if self.o2m_capture_relevant(key.0, key.1) || self.m2m_capture_relevant(key.0, key.1) {
+                return true;
+            }
             todo.extend(
                 self.shared
                     .graph
@@ -212,17 +215,6 @@ impl crate::Transaction {
                 "outbox: eventful mutation requires an OperationIdentity",
             ));
         }
-        if rows.iter().any(|row| {
-            row.iter_commands().next().is_some()
-                || row
-                    .iter()
-                    .any(|(name, _)| records.spec().field(name).is_some_and(|f| f.ty.is_x2many()))
-        }) {
-            return Err(Error::programming(format!(
-                "outbox: eventful relation capture for model '{}' is not implemented until S7-S9",
-                records.spec().name
-            )));
-        }
         Ok(())
     }
 
@@ -269,16 +261,6 @@ impl crate::Transaction {
             return Err(Error::programming(
                 "outbox: eventful mutation requires an OperationIdentity",
             ));
-        }
-        if vals.iter_commands().next().is_some()
-            || vals
-                .iter()
-                .any(|(n, _)| records.spec().field(n).is_some_and(|f| f.ty.is_x2many()))
-        {
-            return Err(Error::programming(format!(
-                "outbox: eventful relation capture for model '{}' is not implemented until S7-S9",
-                records.spec().name
-            )));
         }
         Ok(())
     }
@@ -334,6 +316,35 @@ impl crate::Transaction {
     ) -> Result<()> {
         if self.capture_relevant(model, field) {
             self.pending_capture.bind(model, field, ids)?;
+        }
+        Ok(())
+    }
+
+    /// Queue a names-only change for confirmed persisted relation or FK effects.
+    pub(crate) fn capture_indirect_change(
+        &mut self,
+        model: ModelId,
+        kind: super::Kind,
+        fields: Vec<String>,
+        mut ids: Vec<RecId>,
+    ) -> Result<()> {
+        let name = self.registry().model_by_id(model).name;
+        if !self.registry().model_by_id(model).eventful || ids.is_empty() {
+            return Ok(());
+        }
+        let origin = self.pending_capture.active.clone().ok_or_else(|| {
+            Error::programming("outbox: persisted relation change is missing writer provenance")
+        })?;
+        let depth = self.savepoint_depth();
+        ids.sort_unstable();
+        ids.dedup();
+        for chunk in ids.chunks(super::MAX_ID_ENTRIES) {
+            let entries = chunk
+                .iter()
+                .map(|id| super::IdEntry::Single(id.get()))
+                .collect();
+            let event = origin.envelope(kind, name, entries, fields.clone(), Vec::new())?;
+            self.outbox.push(event, depth)?;
         }
         Ok(())
     }

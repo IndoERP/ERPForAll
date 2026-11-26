@@ -98,6 +98,10 @@ fn encode_temporal(ty: &FieldType, cell: &Cell, text: String) -> Result<Json> {
 /// Programming for malformed storage; Validation for a scalar exceeding the byte limit.
 /// Errors never include the raw stored value.
 pub fn decode(ty: &FieldType, value: &Json) -> Result<Cell> {
+    decode_value(ty, value, false)
+}
+
+fn decode_value(ty: &FieldType, value: &Json, draft: bool) -> Result<Cell> {
     if !supports(ty) {
         return Err(invalid(ty));
     }
@@ -119,7 +123,14 @@ pub fn decode(ty: &FieldType, value: &Json) -> Result<Cell> {
             .as_i64()
             .and_then(|n| i32::try_from(n).ok())
             .map(Cell::Int),
-        (Storage::Id, Json::Number(v)) => v.as_i64().filter(|v| *v > 0).map(Cell::Id),
+        (Storage::Id, Json::Number(v)) => v
+            .as_i64()
+            .filter(|v| {
+                *v > 0
+                    || (draft
+                        && erp_fields::RecId::from_raw(*v).is_some_and(erp_fields::RecId::is_new))
+            })
+            .map(Cell::Id),
         (Storage::Float, Json::Number(v)) => v.as_f64().filter(|v| v.is_finite()).map(Cell::Float),
         (Storage::Decimal, Json::String(v)) => Decimal::from_str_exact(v).ok().map(Cell::Decimal),
         // Integer JSON values are lossless legacy numeric inputs. Fractional JSON numbers
@@ -207,11 +218,15 @@ fn checked_map(cell: &Cell) -> Result<Option<&Map<String, Json>>> {
     Ok(Some(map))
 }
 
-fn validate_map<'a>(ty: &FieldType, cell: &'a Cell) -> Result<Option<&'a Map<String, Json>>> {
+fn validate_map<'a>(
+    ty: &FieldType,
+    cell: &'a Cell,
+    draft: bool,
+) -> Result<Option<&'a Map<String, Json>>> {
     let map = checked_map(cell)?;
     if let Some(map) = map {
         for value in map.values() {
-            decode(ty, value)?;
+            decode_value(ty, value, draft)?;
         }
     }
     Ok(map)
@@ -219,7 +234,7 @@ fn validate_map<'a>(ty: &FieldType, cell: &'a Cell) -> Result<Option<&'a Map<Str
 
 /// Schema admission uses the same complete map contract as runtime projection.
 pub(crate) fn validate_storage(ty: &FieldType, cell: &Cell) -> Result<()> {
-    validate_map(ty, cell).map(|_| ())
+    validate_map(ty, cell, false).map(|_| ())
 }
 
 /// Project one company's effective scalar. Only an absent key inherits the fallback.
@@ -227,12 +242,33 @@ pub(crate) fn validate_storage(ty: &FieldType, cell: &Cell) -> Result<()> {
 /// # Errors
 /// Invalid map, scalar or fallback, including bounded-map admission failures.
 pub fn project(ty: &FieldType, cell: &Cell, company: CompanyId, fallback: &Cell) -> Result<Cell> {
+    project_value(ty, cell, company, fallback, false)
+}
+
+/// Project a cache-only map of a new record, which may hold admitted draft relations.
+pub(crate) fn project_draft(
+    ty: &FieldType,
+    cell: &Cell,
+    company: CompanyId,
+    fallback: &Cell,
+) -> Result<Cell> {
+    project_value(ty, cell, company, fallback, true)
+}
+
+fn project_value(
+    ty: &FieldType,
+    cell: &Cell,
+    company: CompanyId,
+    fallback: &Cell,
+    draft: bool,
+) -> Result<Cell> {
     let fallback = encode(ty, fallback)?;
-    let map = validate_map(ty, cell)?;
-    decode(
+    let map = validate_map(ty, cell, draft)?;
+    decode_value(
         ty,
         map.and_then(|m| m.get(&company.to_string()))
             .unwrap_or(&fallback),
+        draft,
     )
 }
 
@@ -248,9 +284,42 @@ pub fn apply(
     value: &Cell,
     fallback: &Cell,
 ) -> Result<Cell> {
-    let value = encode(ty, value)?;
+    apply_value(ty, base, company, value, fallback, false)
+}
+
+/// Set one company value in a cache-only map. Draft relation identities have already been
+/// admitted by `new_record_cell`; this representation can never be passed to the SQL codec.
+pub(crate) fn apply_draft(
+    ty: &FieldType,
+    base: &Cell,
+    company: CompanyId,
+    value: &Cell,
+    fallback: &Cell,
+) -> Result<Cell> {
+    apply_value(ty, base, company, value, fallback, true)
+}
+
+fn apply_value(
+    ty: &FieldType,
+    base: &Cell,
+    company: CompanyId,
+    value: &Cell,
+    fallback: &Cell,
+    draft: bool,
+) -> Result<Cell> {
+    let value = if draft
+        && matches!(ty, FieldType::Many2one { .. })
+        && let Cell::Id(id) = value
+        && *id < 0
+    {
+        let value = Json::from(*id);
+        decode_value(ty, &value, true)?;
+        value
+    } else {
+        encode(ty, value)?
+    };
     let default = encode(ty, fallback)?;
-    let mut map = validate_map(ty, base)?.cloned().unwrap_or_default();
+    let mut map = validate_map(ty, base, draft)?.cloned().unwrap_or_default();
     if value == default {
         map.remove(&company.to_string());
     } else {

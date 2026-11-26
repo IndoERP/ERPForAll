@@ -21,7 +21,7 @@ use rustc_hash::FxHashMap;
 
 use super::SourceKind;
 use crate::env::Env;
-use crate::principal::{PrincipalHint, PrincipalKind, Resolution, UserId};
+use crate::principal::{Principal, PrincipalHint, PrincipalKind, Resolution, UserId};
 use crate::transaction::Transaction;
 
 /// The §3.4 state of a transaction.
@@ -304,6 +304,34 @@ impl Transaction {
             self.prepare_access(&env.sudo(false)).await?;
         }
         Ok(())
+    }
+
+    /// Resolve a signing-in user in the transaction that is creating their session.
+    pub(crate) async fn resolve_authenticated_user(&mut self, uid: UserId) -> Result<Principal> {
+        let hint = PrincipalHint::caller(uid)?;
+        let principal = if let Some(resolver) = self.shared.resolver.clone() {
+            self.ensure_policy_current().await?;
+            let statement = resolver.statement(&hint)?;
+            let (values, types) = crate::search::typed_params(statement.params())?;
+            let typed: Vec<_> = values
+                .iter()
+                .zip(types)
+                .map(|(v, t)| (v.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync), t))
+                .collect();
+            let rows = self.query_typed(statement.sql(), &typed).await?;
+            let principal = resolver.finish(&hint, &rows, self.policy.as_ref())?;
+            if principal.subject() != uid
+                || principal.kind() != crate::PrincipalKind::User
+                || principal.elevation().is_full()
+            {
+                return Err(Error::access("Invalid principal for authenticated hook"));
+            }
+            self.refresh.record(uid, principal.resolution())?;
+            principal
+        } else {
+            hint.principal()
+        };
+        Ok(principal)
     }
 
     /// Resolve the principal a transaction begins with (design note §3.2): one statement

@@ -32,7 +32,7 @@ pub enum WasmCapability {
     NetworkOutbound(String),
     /// Isolated temporary scratch storage: `filesystem:temp:<N>(kb|mb|gb)`.
     FilesystemTemp(String),
-    /// Permission to execute raw SQL migration files in migrations/*.sql.
+    /// Permission to execute raw SQL files from `migrations/<version>/` during addon upgrades.
     MigrationsSql,
 }
 

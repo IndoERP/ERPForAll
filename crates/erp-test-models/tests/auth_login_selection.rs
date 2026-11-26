@@ -322,7 +322,7 @@ async fn lc13_successful_auth_updates_principal_trusted_throttle() {
 }
 
 #[tokio::test]
-async fn lc14_composition_rejection_with_credential_override() {
+async fn selection_and_credentials_compose_under_admission() {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_data::model_data::ADDON,
@@ -337,30 +337,71 @@ async fn lc14_composition_rejection_with_credential_override() {
 
     let _admin = prepare(&h).await;
     let pool = own_pool(HashPoolConfig::DEFAULT);
-    for fixture in [false, true] {
-        let result = if fixture {
-            erp_security::auth::test_support::login_selection_auth(
-                h.orm().clone(),
-                AuthConfig::DEFAULT,
-                pool,
-            )
-            .await
-        } else {
-            Auth::new(h.orm().clone(), AuthConfig::DEFAULT, pool).await
-        };
-        match result {
-            Err(error) => assert_eq!(
-                (error.kind(), error.message()),
-                (
-                    ErrorKind::Programming,
-                    "custom login selection combined with credential override is unsupported until a later release"
-                ),
-            ),
-            Ok(_) => {
-                panic!("constructor accepted selection plus credential override; fixture={fixture}")
-            }
-        }
-    }
+    let error = Auth::new(h.orm().clone(), AuthConfig::DEFAULT, pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.message(),
+        "custom login selection requires an active membership-bound rollout"
+    );
+    let auth = erp_security::auth::test_support::login_selection_auth(
+        h.orm().clone(),
+        AuthConfig::DEFAULT,
+        pool,
+    )
+    .await
+    .unwrap();
+    let uid = user_with_alias_and_priority(&h, "combined", "pw", "both", 10).await;
+    let logged = login(&auth, "alias:both", "pw").await.unwrap();
+    assert_eq!(check_user(&auth, &cookie(&logged)).await.unwrap(), uid);
+    let mut inspect = h.begin().await.unwrap();
+    let rows = inspect
+        .query(
+            "SELECT data->>'fixture.canonical_login' FROM erp_session WHERE user_id = $1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows[0].get::<_, String>(0), "combined");
+    inspect.rollback().await.unwrap();
+
+    let refused =
+        user_with_alias_and_priority(&h, "reject-hook", "pw", "forbidden-alias", 10).await;
+    let error = login(&auth, "alias:forbidden-alias", "pw")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, LoginError::Failed(_)));
+    assert_eq!(
+        count(&h, &format!("erp_session WHERE user_id={refused}")).await,
+        0
+    );
+    assert_eq!(
+        count(&h, &format!("res_users_log WHERE create_uid={refused}")).await,
+        0
+    );
+    let changed =
+        user_with_alias_and_priority(&h, "changed-during-hook", "pw", "hook-change", 10).await;
+    assert!(matches!(
+        login(&auth, "alias:hook-change", "pw").await,
+        Err(LoginError::Failed(_))
+    ));
+    assert_eq!(
+        count(&h, &format!("res_users WHERE id={changed} AND active")).await,
+        1
+    );
+    assert_eq!(
+        count(&h, &format!("erp_session WHERE user_id={changed}")).await,
+        0
+    );
+    let mfa = user_with_alias_and_priority(&h, "second-factor", "pw", "request-factor", 10).await;
+    assert!(matches!(
+        login(&auth, "second-factor", "pw").await,
+        Err(LoginError::Denied)
+    ));
+    assert_eq!(
+        count(&h, &format!("erp_session WHERE user_id={mfa}")).await,
+        0
+    );
 }
 
 #[tokio::test]

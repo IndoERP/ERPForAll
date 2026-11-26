@@ -12,7 +12,9 @@ use erp_domain::Domain;
 use erp_fields::convert::decimal_from_f64;
 use erp_fields::{Cell, Decimal, Error, FieldType, RecId, Result, Value, serde_json};
 use erp_registry::ModelSpec;
-use erp_sql::keyset::{KeyKind, KeyTerm, KeyValue, keyset_pieces, keyset_terms};
+use erp_sql::keyset::{
+    KeyKind, KeyTerm, KeyValue, keyset_pieces, keyset_terms, keyset_terms_with_company,
+};
 use erp_sql::param::{Scalar, ScalarKind};
 
 use crate::Transaction;
@@ -78,6 +80,7 @@ impl Cursor {
                             Error::validation(format!("keyset cursor value {f} is not finite"))
                         })?,
                     Value::Decimal(d) => serde_json::Value::String(d.to_string()),
+                    Value::BigInt(v) => serde_json::Value::String(v.to_string()),
                     Value::Str(s) => serde_json::Value::String(s.to_string()),
                     Value::Date(d) => serde_json::Value::String(d.to_string()),
                     Value::Uuid(v) => serde_json::Value::String(v.to_string()),
@@ -222,7 +225,13 @@ fn key_value(spec: &ModelSpec, term: &KeyTerm, value: &Value) -> Result<KeyValue
 }
 
 /// The cursor value of `term` for `id`, from the cache (the page's query fetched it).
-fn cursor_value(tx: &Transaction, spec: &ModelSpec, term: &KeyTerm, id: RecId) -> Result<Value> {
+fn cursor_value(
+    tx: &Transaction,
+    spec: &ModelSpec,
+    term: &KeyTerm,
+    id: RecId,
+    projection: Option<&Cell>,
+) -> Result<Value> {
     let field = spec.field_by_id(term.field);
     if matches!(field.ty, FieldType::Id) {
         let real = id.as_real().ok_or_else(|| {
@@ -233,13 +242,19 @@ fn cursor_value(tx: &Transaction, spec: &ModelSpec, term: &KeyTerm, id: RecId) -
         })?;
         return Ok(Value::Int(real.get()));
     }
-    let cell = tx.cache.get(spec.id, term.field, id).ok_or_else(|| {
-        Error::programming(format!(
-            "keyset: {}.{} of the page's last record is not cached",
-            spec.name, field.name
-        ))
-    })?;
-    Ok(match (&term.kind, &cell) {
+    let cached;
+    let cell = if let Some(projected) = projection {
+        projected
+    } else {
+        cached = tx.cache.get(spec.id, term.field, id).ok_or_else(|| {
+            Error::programming(format!(
+                "keyset: {}.{} of the page's last record is not cached",
+                spec.name, field.name
+            ))
+        })?;
+        &cached
+    };
+    Ok(match (&term.kind, cell) {
         (KeyKind::Bool, Cell::Null) => Value::Bool(false),
         // a NaN (only raw SQL can store one) cannot be carried by a cursor
         (_, Cell::Float(f)) if !f.is_finite() => {
@@ -248,7 +263,7 @@ fn cursor_value(tx: &Transaction, spec: &ModelSpec, term: &KeyTerm, id: RecId) -
                 spec.name, field.name
             )));
         }
-        _ => Value::from_cell(&cell),
+        _ => Value::from_cell(cell),
     })
 }
 
@@ -294,8 +309,25 @@ impl Records {
         } else {
             requested.trim().to_owned()
         };
-        let registry = Arc::clone(tx.registry());
-        let terms = keyset_terms(&registry, spec, &order)?;
+        // Refresh policy before checking the requested fetch fields or building the order.
+        if !self.env().su() {
+            tx.prepare_access(self.env()).await?;
+        }
+        let mut columns = crate::search::checked_columns(tx, self.env(), spec, &opts.fetch)?;
+        let search = SearchOptions {
+            offset: 0,
+            limit: Some(limit),
+            order: Some(order.clone()),
+            active_test: opts.active_test,
+            fetch: crate::search::Fetch::Ids,
+        };
+        let base = self.search_query(tx, domain, &search).await?;
+        let registry = tx.registry();
+        let slot = base.company_order_slot();
+        let terms = match slot {
+            Some(slot) => keyset_terms_with_company(registry, spec, &order, slot)?,
+            None => keyset_terms(registry, spec, &order)?,
+        };
         let values = match after {
             None => None,
             Some(cursor) => {
@@ -324,35 +356,36 @@ impl Records {
                 )
             }
         };
-        // the policy generation and the subject's groups first: every field check below reads the
-        // binding, so a membership or policy write of this transaction (or a fresh `with_user`) is
-        // seen before the first mask is asked for
-        if !self.env().su() {
-            tx.prepare_access(self.env()).await?;
-        }
-        let mut columns = crate::search::checked_columns(tx, self.env(), spec, &opts.fetch)?;
+        let mut projections = Vec::new();
         for term in &terms {
             let field = spec.field_by_id(term.field);
-            if field.has_column() && !columns.contains(&term.field) {
+            if field.company_dependent {
+                let slot = slot.ok_or_else(|| erp_sql::company::missing(spec, field))?;
+                let sql = erp_sql::company::expression(registry, spec, field, &spec.table, slot)?;
+                let ty = field.ty.column_type().ok_or_else(|| {
+                    Error::programming(format!(
+                        "{}.{} has no scalar column type",
+                        spec.name, field.name
+                    ))
+                })?;
+                projections.push((sql, ty));
+            } else if field.has_column() && !columns.contains(&term.field) {
                 columns.push(term.field);
             }
         }
-        let search = SearchOptions {
-            offset: 0,
-            limit: Some(limit),
-            order: Some(order.clone()),
-            active_test: opts.active_test,
-            fetch: crate::search::Fetch::Ids,
-        };
-        let base = self.search_query(tx, domain, &search).await?;
-        let ids = match &values {
+        let expressions: Vec<_> = projections
+            .iter()
+            .map(|(sql, ty)| (sql.as_str(), *ty))
+            .collect();
+        let (ids, projections) = match &values {
             None => {
                 let mut query = base;
-                query.execute_columns(tx, &columns).await?
+                query.execute_keyset(tx, &columns, &expressions).await?
             }
             Some(values) => {
                 let pieces = keyset_pieces(&terms, values, base.filter_params() + 1)?;
                 let mut ids: Vec<RecId> = Vec::new();
+                let mut projected = Vec::new();
                 for (sql, params) in pieces {
                     let remaining = limit - ids.len() as u64;
                     if remaining == 0 {
@@ -361,17 +394,34 @@ impl Records {
                     let mut query = base.clone();
                     query.restrict(&sql, params);
                     query.set_limit(remaining);
-                    ids.extend(query.execute_columns(tx, &columns).await?);
+                    let (piece, projection) =
+                        query.execute_keyset(tx, &columns, &expressions).await?;
+                    ids.extend(piece);
+                    projected = projection;
                 }
-                ids
+                (ids, projected)
             }
         };
+        let mut projections = projections.iter();
         let next = match ids.last() {
             Some(last) if ids.len() as u64 == limit => Some(Cursor {
                 order,
                 values: terms
                     .iter()
-                    .map(|t| cursor_value(tx, spec, t, *last))
+                    .map(|term| {
+                        let field = spec.field_by_id(term.field);
+                        let projection = if field.company_dependent {
+                            Some(projections.next().ok_or_else(|| {
+                                Error::programming(format!(
+                                    "keyset: {}.{} has no projected cursor value",
+                                    spec.name, field.name
+                                ))
+                            })?)
+                        } else {
+                            None
+                        };
+                        cursor_value(tx, spec, term, *last, projection)
+                    })
                     .collect::<Result<Vec<_>>>()?,
             }),
             _ => None,

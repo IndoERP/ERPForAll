@@ -229,6 +229,128 @@ fn plain_error(reply: &Raw, status: u16, body: &str, what: &str) {
     class_headers(reply, what);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn local_proxy_handoff_keeps_content_authorization_and_http_headers() {
+    use erp_sdk::blob::{
+        AttachmentStore, ContentKey, LocalStore, Namespace, StageLimits, StagingKey,
+    };
+    let store = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let fixture = native_http::NativeFixture::start_with_config(&format!(
+        "[attachments]\nwrite_store='main'\n[attachments.stores.main]\nkind='local'\npath={:?}\nx_accel_prefix='/_erp_private/main/'",
+        store.path().to_str().unwrap(),
+    )).await;
+    let port = fixture.port;
+    let auth = [("cookie", fixture.cookies.as_str())];
+    let call = |path: &str, body: Value| {
+        ok(
+            &native_http::json_post(port, &fixture.cookies, path, &body.to_string()),
+            path,
+        )
+    };
+    call("/erp/module/install", json!({"modules":["mail"]}));
+    let partner = call(
+        "/erp/json/2/res.partner/create",
+        json!({"vals_list":[{"name":"Offload authorization"}]}),
+    )[0]
+    .as_i64()
+    .unwrap();
+    let bytes = b"A real local attachment body.";
+    let id = call(
+        "/erp/json/2/res.partner/thread_upload",
+        json!({"ids":[partner],"name":"file.txt","mimetype":"text/plain","data":base64(bytes)}),
+    )["attachment_id"]
+        .as_i64()
+        .unwrap();
+    call(
+        "/erp/json/2/res.partner/thread_post",
+        json!({"ids":[partner],"post":{"body":"Claim","attachment_ids":[id]}}),
+    );
+    let local = LocalStore::open(store.path()).await.unwrap();
+    fixture.client.execute(
+        "INSERT INTO ir_blob_store(store_key,fingerprint) VALUES ('main',$1) ON CONFLICT DO NOTHING",
+        &[&local.fingerprint().unwrap()],
+    ).await.unwrap();
+    let row = fixture
+        .client
+        .query_one(
+            "SELECT id, namespace::text FROM ir_blob_store WHERE store_key='main' AND role='own'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let namespace = Namespace::parse(row.get::<_, &str>(1)).unwrap();
+    let staged_key =
+        StagingKey::new(namespace.clone(), Namespace::random().unwrap().as_str()).unwrap();
+    let mut source = bytes.as_slice();
+    let staged = local
+        .stage(&staged_key, &mut source, StageLimits::new(2048))
+        .await
+        .unwrap();
+    let key = ContentKey::new(namespace, *staged.sha256());
+    local.promote(&staged, &key).await.unwrap();
+    let moved = fixture
+        .client
+        .execute(
+            "WITH moved AS (UPDATE ir_blob b SET store_id=$2 FROM ir_attachment a
+                        WHERE a.id=$1 AND b.id=a.blob_id AND b.sha256=$3 RETURNING b.id)
+         DELETE FROM ir_blob_inline WHERE blob_id IN (SELECT id FROM moved)",
+            &[&id, &row.get::<_, i16>(0), &staged.sha256().as_slice()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved, 1);
+    let path = format!("/erp/content/{id}");
+    let full = raw(port, "GET", &path, &auth);
+    assert_eq!(full.status, 200);
+    assert!(full.body.is_empty());
+    class_headers(&full, "local proxy handoff");
+    assert_eq!(full.header("content-type"), Some("text/plain"));
+    assert!(
+        full.header("content-disposition")
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    let internal = full.header("x-accel-redirect").unwrap();
+    let key = internal.strip_prefix("/_erp_private/main/").unwrap();
+    assert_eq!(fs::read(store.path().join(key)).unwrap(), bytes);
+    assert_eq!(raw(port, "GET", internal, &auth).status, 404);
+
+    let head = raw(port, "HEAD", &path, &auth);
+    assert_eq!(head.status, 200);
+    assert_eq!(head.header("x-accel-redirect"), None);
+    assert_eq!(head.header("etag"), full.header("etag"));
+    assert_eq!(
+        head.header("content-length")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap(),
+        bytes.len()
+    );
+    let range = raw(port, "GET", &path, &[auth[0], ("range", "bytes=2-5")]);
+    assert_eq!(range.status, 206);
+    assert_eq!(range.header("x-accel-redirect"), None);
+    assert_eq!(range.body, &bytes[2..=5]);
+    let conditional = raw(
+        port,
+        "GET",
+        &path,
+        &[auth[0], ("if-none-match", full.header("etag").unwrap())],
+    );
+    assert_eq!(conditional.status, 304);
+    assert_eq!(conditional.header("x-accel-redirect"), None);
+
+    let denied = raw(port, "GET", &path, &[]);
+    let absent = raw(port, "GET", "/erp/content/2147000000", &[]);
+    assert_eq!(denied.status, 404);
+    assert_eq!(denied.comparable(), absent.comparable());
+    assert_eq!(denied.header("x-accel-redirect"), None);
+    fs::remove_file(store.path().join(key)).unwrap();
+    let missing = raw(port, "GET", &path, &auth);
+    assert_eq!(missing.status, 500);
+    assert_eq!(missing.header("x-accel-redirect"), None);
+    fixture.cleanup().await;
+}
+
 #[test]
 fn the_content_route_serves_readers_and_answers_every_refusal_with_one_404() {
     std::thread::Builder::new()
@@ -307,6 +429,11 @@ async fn acceptance() {
     );
     // a deployment installs its addons and restarts: serve from the installed registry
     drop(server);
+    client.execute(
+        "INSERT INTO ir_config_parameter (key,value) VALUES ('base.enable_programmatic_api_keys','True') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+        &[],
+    ).await.unwrap();
+    client.execute("UPDATE res_groups SET api_key_duration=7 WHERE id IN (SELECT res_id FROM ir_model_data WHERE module='base' AND name='group_user')", &[]).await.unwrap();
     let _server = start(&config, &stderr, port, "restarted");
 
     let xid = async |name: &str| -> i64 {
@@ -569,7 +696,9 @@ async fn acceptance() {
         Some("attachment; filename=\"hello.txt\"; filename*=UTF-8''hello.txt")
     );
     assert_eq!(read.header("accept-ranges"), Some("bytes"));
-    assert!(read.header("etag").is_none(), "no validator exists yet");
+    let tag = read.header("etag").unwrap();
+    assert_eq!(tag.len(), 66);
+    assert!(tag.starts_with('"') && tag.ends_with('"'));
     class_headers(&read, "owner read");
     // HEAD: the same headers, no body
     let head = raw(
@@ -581,10 +710,52 @@ async fn acceptance() {
     assert_eq!(head.status, 200);
     assert_eq!(head.header("content-length"), Some("11"));
     assert!(head.body.is_empty());
+    assert_eq!(head.header("etag"), Some(tag));
     class_headers(&head, "head");
     let legacy = get(&admin, &format!("/web/content/{hello}"), &[]);
     assert_eq!(legacy.status, 200, "{}", legacy.text());
     assert_eq!(legacy.body, hello_bytes);
+
+    // A real PNG survives image admission and the stored image derivative is addressed by field.
+    let tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+    ok(
+        &call(
+            &admin,
+            "/erp/json/2/res.partner/write",
+            json!({"ids":[in_main, in_second],"vals":{"image_1920":tiny_png}}),
+        ),
+        "write partner image",
+    );
+    for field in ["image_1920", "image_128"] {
+        let path = format!("/erp/content/res.partner/{in_main}/{field}");
+        let field_read = get(&one, &path, &[]);
+        assert_eq!(
+            field_read.status,
+            200,
+            "{field}: {}",
+            String::from_utf8_lossy(&field_read.body)
+        );
+        let field_head = raw(port, "HEAD", &path, &[("cookie", one.as_str())]);
+        assert_eq!(field_head.status, 200);
+        assert_eq!(
+            field_head.header("content-length"),
+            field_read.header("content-length")
+        );
+        assert_eq!(field_head.header("etag"), field_read.header("etag"));
+        assert!(field_read.body.starts_with(b"\x89PNG"));
+        assert_eq!(field_read.header("content-type"), Some("image/png"));
+        let ranged = get(&one, &path, &[("range", "bytes=1-3")]);
+        assert_eq!(ranged.status, 206);
+        assert_eq!(ranged.body, b"PNG");
+        let denied = get(
+            &one,
+            &format!("/erp/content/res.partner/{in_second}/{field}"),
+            &[("if-none-match", "*")],
+        );
+        assert_eq!(denied.status, 404);
+        assert_eq!(denied.header("etag"), None);
+        assert_eq!(get(&portal, &path, &[]).status, 404);
+    }
 
     let image = get(&admin, &format!("/erp/content/{png}"), &[]);
     assert_eq!(image.status, 200);
@@ -638,7 +809,7 @@ async fn acceptance() {
     plain_error(
         &get(&admin, &format!("/erp/content/{png}?cids=1"), &[]),
         400,
-        "The content route accepts only the query parameters download and mimetype, each at most once.",
+        "The content route accepts download, mimetype and access_token, each at most once.",
         "unknown query key",
     );
 
@@ -682,27 +853,374 @@ async fn acceptance() {
         &format!("/erp/content/{big}"),
         &[("range", "bytes=0-9"), ("if-range", "\"anything\"")],
     );
-    assert_eq!(validated.status, 200, "If-Range without a validator: full");
+    assert_eq!(
+        validated.status, 200,
+        "stale If-Range returns the whole representation"
+    );
     assert_eq!(validated.body, big_bytes);
+
+    let tag_big = validated.header("etag").unwrap();
+    assert_ne!(tag, tag_big);
+    for method in ["GET", "HEAD"] {
+        let conditional = raw(
+            port,
+            method,
+            &format!("/erp/content/{big}"),
+            &[
+                ("cookie", &admin),
+                ("if-none-match", &format!("W/{tag_big}")),
+                ("range", "bytes=1-3"),
+            ],
+        );
+        assert_eq!(conditional.status, 304);
+        assert!(conditional.body.is_empty());
+        assert_eq!(conditional.header("etag"), Some(tag_big));
+        let partial = raw(
+            port,
+            method,
+            &format!("/erp/content/{big}"),
+            &[
+                ("cookie", &admin),
+                ("if-range", tag_big),
+                ("range", "bytes=1-3"),
+            ],
+        );
+        assert_eq!(partial.status, 206);
+        assert_eq!(partial.header("content-length"), Some("3"));
+        if method == "GET" {
+            assert_eq!(partial.body, big_bytes[1..4]);
+        } else {
+            assert!(partial.body.is_empty());
+        }
+    }
 
     // session and method
     plain_error(
         &raw(port, "GET", &format!("/erp/content/{hello}"), &[]),
-        401,
-        "user is not connected",
-        "no session",
+        404,
+        "Not found",
+        "unpublished attachment",
     );
-    plain_error(
-        &raw(
+    let invalid_key = get(
+        &admin,
+        &format!("/erp/content/{hello}"),
+        &[("authorization", "Bearer invalid-test-credential")],
+    );
+    assert_eq!(
+        invalid_key.status, 401,
+        "a bad key cannot fall back to the cookie"
+    );
+    let key_reply = native_http::request(port, "POST", "/erp/session/api-key", &[("content-type","application/json")],
+        &json!({"db":db.name(), "login":"content-reader-one", "password":"fixture-content-reader","device_name":"attachment test"}).to_string());
+    assert_eq!(key_reply.status, 200, "device key issue status");
+    let issued: Value = serde_json::from_str(&key_reply.body).unwrap();
+    let authorization = format!("Bearer {}", issued["api_key"].as_str().unwrap());
+    let delegate = native_http::request(port, "POST", "/erp/session/api-key", &[("content-type","application/json")],
+        &json!({"db":db.name(), "login":"content-reader-one", "password":"fixture-content-reader","device_name":"assistant test", "audience":"mcp"}).to_string());
+    assert_eq!(delegate.status, 200);
+    let delegation: Value = serde_json::from_str(&delegate.body).unwrap();
+    let agent_authorization = format!("Bearer {}", delegation["api_key"].as_str().unwrap());
+    assert_eq!(
+        get(
+            &admin,
+            &format!("/erp/content/{hello}"),
+            &[("authorization", &agent_authorization)]
+        )
+        .status,
+        401
+    );
+    let tool_request = |method: &str, params: Value| {
+        let response = native_http::request(
+            port,
+            "POST",
+            "/erp/mcp",
+            &[
+                ("content-type", "application/json"),
+                ("authorization", agent_authorization.as_str()),
+                ("accept", "application/json, text/event-stream"),
+            ],
+            &json!({"jsonrpc":"2.0","id":17,"method":method,"params":params}).to_string(),
+        );
+        assert_eq!(response.status, 200);
+        serde_json::from_str::<Value>(&response.body).unwrap()
+    };
+    let initialized = tool_request(
+        "initialize",
+        json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}),
+    );
+    assert_eq!(initialized["result"]["capabilities"]["tools"], json!({}));
+    let catalog = tool_request("tools/list", json!({}));
+    let offered = "res.company.action_all_company_branches";
+    assert!(
+        catalog["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == offered
+                && tool["inputSchema"]["properties"]["ids"]["type"] == "array")
+    );
+    let invoke = |name: &str, id: i64| {
+        tool_request("tools/call", json!({"name":name,"arguments":{"ids":[id]}}))
+    };
+    assert_eq!(invoke(offered, main)["result"]["isError"], false);
+    assert_eq!(invoke(offered, second)["error"]["code"], -32602);
+    assert_eq!(invoke("res.company.unlink", main)["error"]["code"], -32602);
+    let activity_tool = "mail.activity.action_feedback";
+    let includes_activity = |payload: &Value| {
+        payload["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == activity_tool)
+    };
+    assert!(!includes_activity(&catalog));
+    let activity = ok(
+        &call(
+            &one,
+            "/erp/json/2/mail.activity/create",
+            json!({"vals_list":[{
+                "user_id":one_id, "summary":"Approved task", "date_deadline":"2030-01-01"
+            }]}),
+        ),
+        "own activity",
+    )[0]
+    .as_i64()
+    .unwrap();
+    ok(
+        &call(
+            &admin,
+            "/erp/json/2/ir.approval.policy/create",
+            json!({"vals_list":[{
+                "name":"Review assistant feedback", "principal_kind":"agent", "effect":"write",
+                "model":"mail.activity", "method":"action_feedback", "outcome":"approve",
+                "approver_user_ids":[[6,0,[admin_id]]]
+            }]}),
+        ),
+        "agent policy",
+    );
+    assert!(includes_activity(&tool_request("tools/list", json!({}))));
+    let finish = || {
+        let response = native_http::request(port, "POST", "/erp/mcp", &[
+            ("content-type","application/json"), ("authorization",&agent_authorization),
+            ("idempotency-key","019a0000-0000-7000-8000-000000000017")
+        ], &json!({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{
+            "name":activity_tool, "arguments":{"ids":[activity],"feedback":"Reviewed","attachment_ids":[]}
+        }}).to_string());
+        assert_eq!(response.status, 200);
+        serde_json::from_str::<Value>(&response.body).unwrap()
+    };
+    let pending = finish();
+    let request_id = pending["result"]["structuredContent"]["approval_request_id"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(
+        finish()["result"]["structuredContent"]["approval_request_id"],
+        request_id
+    );
+    assert!(
+        client
+            .query_one("SELECT active FROM mail_activity WHERE id=$1", &[&activity])
+            .await
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    ok(
+        &call(
+            &admin,
+            "/erp/json/2/ir.approval.request/erp_decide",
+            json!({"request_id":request_id,"approve":true}),
+        ),
+        "approve activity",
+    );
+    let finished = finish();
+    assert_eq!(finished["result"]["isError"], false);
+    assert_eq!(finish()["result"], finished["result"]);
+    let applied = client
+        .query_one(
+            "SELECT active, feedback, write_uid FROM mail_activity WHERE id=$1",
+            &[&activity],
+        )
+        .await
+        .unwrap();
+    assert!(!applied.get::<_, bool>(0));
+    assert_eq!(applied.get::<_, String>(1), "Reviewed");
+    assert_eq!(applied.get::<_, i64>(2), one_id);
+    let revoked = call(
+        &one,
+        "/erp/json/2/res.users.apikeys/revoke",
+        json!({"key": delegation["api_key"]}),
+    );
+    assert_eq!(revoked.status, 200, "the owner can revoke a delegated key");
+    let retired = native_http::request(
+        port,
+        "POST",
+        "/erp/mcp",
+        &[
+            ("content-type", "application/json"),
+            ("authorization", &agent_authorization),
+        ],
+        r#"{"jsonrpc":"2.0","id":22,"method":"tools/list"}"#,
+    );
+    assert_eq!(retired.status, 401);
+    let local_alias = |target: i64| {
+        let created = call(
+            &admin,
+            "/erp/json/2/ir.attachment/create",
+            json!({"vals_list":[{
+                "name":"same origin file", "type":"url", "url":format!("http://127.0.0.1:{port}/erp/content/{target}"),
+                "res_model":"res.partner", "res_id":in_main
+            }]}),
+        );
+        ok(&created, "local content alias")[0].as_i64().unwrap()
+    };
+    let hidden_target = local_alias(other_company);
+    let hidden = get(&one, &format!("/erp/content/{hidden_target}"), &[]);
+    assert_eq!(hidden.status, 404);
+    assert!(hidden.header("location").is_none());
+    let alias = local_alias(hello);
+    let redirected = get(&admin, &format!("/erp/content/{alias}?download=true"), &[]);
+    assert_eq!(redirected.status, 307);
+    assert_eq!(
+        redirected.header("location"),
+        Some(format!("/erp/content/{hello}?download=true").as_str())
+    );
+    assert_eq!(
+        raw(port, "GET", &format!("/erp/content/{alias}"), &[]).status,
+        404
+    );
+    let key_read = |id| {
+        raw(
             port,
             "GET",
-            &format!("/erp/content/{hello}"),
-            &[("authorization", "Bearer something")],
-        ),
-        401,
-        "Bearer credentials are not accepted on the content route yet; sign in with a browser session.",
-        "bearer",
+            &format!("/erp/content/{id}"),
+            &[("authorization", &authorization)],
+        )
+    };
+    assert_eq!(key_read(hello).body, hello_bytes);
+    assert_eq!(key_read(other_company).status, 404);
+    assert_eq!(key_read(settings_field).status, 404);
+    let share = |id, public_read| {
+        let reply = call(
+            &admin,
+            "/erp/json/2/ir.attachment/erp_share_content",
+            json!({"ids":[id], "public_read":public_read, "lifetime_seconds":90}),
+        );
+        assert_eq!(reply.status, 200, "share failed ({})", reply.status);
+        serde_json::from_str::<String>(&reply.body).unwrap()
+    };
+    let revoke = |id| {
+        ok(
+            &call(
+                &admin,
+                "/erp/json/2/ir.attachment/erp_revoke_content",
+                json!({"ids":[id]}),
+            ),
+            "revoke",
+        );
+    };
+    let scoped = share(hello, false);
+    assert_eq!(raw(port, "GET", &scoped, &[]).body, hello_bytes);
+    assert_eq!(
+        raw(port, "HEAD", &scoped, &[("if-none-match", tag)]).status,
+        304
     );
+    // Move the immutable bytes to the configured local store. The attachment and
+    // its previously issued grant must keep their identity across storage placement.
+    {
+        use erp_sdk::blob::{
+            AttachmentStore, ContentKey, LocalStore, Namespace, StageLimits, StagingKey,
+        };
+        let store = LocalStore::open(dir.path().join("attachments"))
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO ir_blob_store (store_key, fingerprint) VALUES ('main',$1)
+            ON CONFLICT DO NOTHING",
+                &[&store.fingerprint().unwrap()],
+            )
+            .await
+            .unwrap();
+        let row = client
+            .query_one(
+                "SELECT id, namespace::text, fingerprint FROM ir_blob_store
+            WHERE store_key='main' AND role='own'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(2), store.fingerprint().unwrap());
+        let namespace = Namespace::parse(&row.get::<_, String>(1)).unwrap();
+        let staging =
+            StagingKey::new(namespace.clone(), Namespace::random().unwrap().as_str()).unwrap();
+        let mut bytes = hello_bytes.as_slice();
+        let staged = store
+            .stage(&staging, &mut bytes, StageLimits::new(2048))
+            .await
+            .unwrap();
+        let key = ContentKey::new(namespace, *staged.sha256());
+        store.promote(&staged, &key).await.unwrap();
+        let changed = client
+            .execute(
+                "WITH moved AS (
+            UPDATE ir_blob b SET store_id=$2 FROM ir_attachment a
+            WHERE a.id=$1 AND b.id=a.blob_id AND b.sha256=$3 RETURNING b.id
+        ) DELETE FROM ir_blob_inline WHERE blob_id IN (SELECT id FROM moved)",
+                &[&hello, &row.get::<_, i16>(0), &staged.sha256().as_slice()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+        let offloaded = raw(port, "GET", &scoped, &[("range", "bytes=0-3")]);
+        assert_eq!(offloaded.status, 206);
+        assert_eq!(offloaded.body, hello_bytes[..4]);
+        assert_eq!(offloaded.header("etag"), Some(tag));
+        assert_eq!(
+            offloaded.header("content-type"),
+            read.header("content-type")
+        );
+        assert_eq!(
+            offloaded.header("content-disposition"),
+            read.header("content-disposition")
+        );
+        assert_eq!(
+            raw(port, "HEAD", &scoped, &[("if-none-match", tag)]).status,
+            304
+        );
+    }
+    let token = scoped.split_once('?').unwrap().1;
+    assert_eq!(
+        raw(port, "GET", &format!("/erp/content/{big}?{token}"), &[]).status,
+        404
+    );
+    let new_link = share(hello, false);
+    assert_eq!(raw(port, "GET", &scoped, &[]).status, 404);
+    assert_eq!(raw(port, "GET", &new_link, &[]).body, hello_bytes);
+    client.execute("UPDATE ir_attachment_content_grant SET expires_at=clock_timestamp() WHERE attachment_id=$1",&[&hello]).await.unwrap();
+    assert_eq!(
+        raw(port, "HEAD", &new_link, &[("if-none-match", tag)]).status,
+        404
+    );
+    ok(
+        &call(
+            &admin,
+            "/erp/json/2/ir.attachment/write",
+            json!({"ids":[hello],"vals":{"public":true}}),
+        ),
+        "mark shareable",
+    );
+    let public_path = share(hello, true);
+    assert_eq!(raw(port, "GET", &public_path, &[]).body, hello_bytes);
+    assert_eq!(get(&portal, &public_path, &[]).body, hello_bytes);
+    revoke(hello);
+    assert_eq!(raw(port, "GET", &public_path, &[]).status, 404);
+    assert_eq!(get(&portal, &public_path, &[]).status, 404);
+    let denied_share = call(
+        &one,
+        "/erp/json/2/ir.attachment/erp_share_content",
+        json!({"ids":[hello],"public_read":false,"lifetime_seconds":60}),
+    );
+    assert_eq!(denied_share.status, 403);
     let posted = raw(
         port,
         "POST",
@@ -751,6 +1269,8 @@ async fn acceptance() {
         let refused = get(&one, &format!("/erp/content/{id}"), &[]);
         assert_eq!(refused.comparable(), missing.comparable(), "{what}");
         for extra in [
+            vec![("if-none-match", "*")],
+            vec![("if-match", tag)],
             vec![("range", "bytes=0-1,4-5")],
             vec![("range", "bytes=0-3"), ("if-range", "\"x\"")],
         ] {

@@ -699,13 +699,35 @@ async fn objects_on_a_table_held_for_a_later_pre_stage_wait_for_its_step() {
             "migrations/1.1/pre-a.sql",
             "CREATE TABLE sq_b_pre_ran (id int);\n",
         );
-    let next = module_builder(&db, &addons)
-        .identity_previous(previous)
-        .decls([model("sq_b", "sq_b.later")])
-        .require_sql_objects([&LATER])
-        .with_sql_objects(later_objects())
-        .build()
-        .unwrap();
+    let next = || {
+        module_builder(&db, &addons)
+            .identity_previous(previous.clone())
+            .decls([model("sq_b", "sq_b.later")])
+            .require_sql_objects([&LATER])
+            .with_sql_objects(later_objects())
+            .build()
+            .unwrap()
+    };
+    let prove_installed = "INSERT INTO sq_b_later (name) VALUES ('migration');";
+    addons.file(
+        "sq_b",
+        "migrations/1.1/end-proof.sql",
+        &format!("{prove_installed}\nDO $$ BEGIN RAISE EXCEPTION 'failure after deferred schema'; END $$;"),
+    );
+    let broken = next();
+    let failure = broken
+        .button_immediate_upgrade(
+            &broken.system_env(erp_orm::Context::new()),
+            &[n("base"), n("sq_b")],
+        )
+        .await
+        .expect_err("the end migration must roll back the deferred schema");
+    assert!(format!("{failure:?}").contains("failure after deferred schema"));
+    assert!(!table_exists(&installed.orm, "sq_b_pre_ran").await);
+    assert!(!table_exists(&installed.orm, "sq_b_later").await);
+
+    addons.file("sq_b", "migrations/1.1/end-proof.sql", prove_installed);
+    let next = next();
     let upgraded = next
         .button_immediate_upgrade(
             &next.system_env(erp_orm::Context::new()),
@@ -719,6 +741,9 @@ async fn objects_on_a_table_held_for_a_later_pre_stage_wait_for_its_step() {
     // the pre stage ran, so the table was held back at base's step
     assert!(table_exists(&upgraded.orm, "sq_b_pre_ran").await);
     let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+    let previous = tx.query("SELECT name FROM sq_b_later", &[]).await.unwrap();
+    assert_eq!(previous.len(), 1);
+    assert_eq!(previous[0].get::<_, String>(0), "later");
     let result = tx
         .query(
             "INSERT INTO sq_b_later (name) VALUES ('input') RETURNING name",

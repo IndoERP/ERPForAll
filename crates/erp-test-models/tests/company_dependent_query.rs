@@ -700,6 +700,19 @@ async fn warmed_property_query_plans_retain_field_authorization() {
     );
     error(
         reader
+            .search_after(
+                &mut tx,
+                &Domain::TRUE,
+                &SearchOptions::new().order("note").limit(1),
+                None,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Access,
+        &message,
+    );
+    error(
+        reader
             ._read_group(&mut tx, ReadGroup::new(Domain::TRUE).groupby(["note"]))
             .await
             .unwrap_err(),
@@ -853,19 +866,78 @@ async fn having_grouping_sets_and_cursor_boundaries_use_scalar_values() {
     assert_eq!(sets.len(), 2);
     assert_eq!(sets[0].rows().len(), 2);
     assert_eq!(sets[1].rows()[0][0].to_value(RecordsAs::Id), Value::Int(7));
-    error(
-        model
-            .search_after(
-                &mut tx,
-                &Domain::TRUE,
-                &SearchOptions::new().order("note").limit(1),
-                None,
-            )
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn property_keyset_pages_follow_current_company_and_cross_null_boundary() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let first = company(&tx.env(), 1);
+    let second = company(&tx.env(), 2);
+    default(&mut tx, &first, "fallback", Some(1), None).await;
+    let records = first
+        .records("property.runtime")
+        .unwrap()
+        .create_values(
+            &mut tx,
+            &[
+                vals(&[("note", Value::str("a")), ("name", Value::str("keep"))]),
+                vals(&[("note", Value::str("b")), ("name", Value::str("keep"))]),
+                vals(&[("note", Value::False), ("name", Value::str("keep"))]),
+                vals(&[("name", Value::str("keep"))]),
+                vals(&[("note", Value::str("excluded"))]),
+            ],
+        )
+        .await
+        .unwrap();
+    let ids = records.ids();
+    records
+        .with_env(second.clone())
+        .browse([ids[1]])
+        .unwrap()
+        .write_values(&mut tx, &vals(&[("note", Value::str("second"))]))
+        .await
+        .unwrap();
+    let domain = cond("name", Operator::Eq, "keep") & cond("count", Operator::Ge, 0);
+    let opts = SearchOptions::new().order("note asc nulls last").limit(2);
+    for (env, expected, keys) in [
+        (
+            first,
+            [ids[0], ids[1], ids[3], ids[2]],
+            [Value::str("b"), Value::False],
+        ),
+        (
+            second,
+            [ids[1], ids[0], ids[2], ids[3]],
+            [Value::False, Value::False],
+        ),
+    ] {
+        let scoped = records.with_env(env);
+        let first = scoped
+            .search_after(&mut tx, &domain, &opts, None)
             .await
-            .unwrap_err(),
-        ErrorKind::Programming,
-        "keyset pagination cannot order by property.runtime.note: company-dependent keys require prepared company values until a later release; use offset pagination",
-    );
+            .unwrap();
+        assert_eq!(first.records.ids(), &expected[..2]);
+        let cursor = first.next.unwrap();
+        assert_eq!(cursor.values()[0], keys[0]);
+        let cursor = erp_orm::Cursor::from_json(&cursor.to_json().unwrap()).unwrap();
+        let second = scoped
+            .search_after(&mut tx, &domain, &opts, Some(&cursor))
+            .await
+            .unwrap();
+        assert_eq!(second.records.ids(), &expected[2..]);
+        let cursor = second.next.unwrap();
+        assert_eq!(cursor.values()[0], keys[1]);
+        let last = scoped
+            .search_after(&mut tx, &domain, &opts, Some(&cursor))
+            .await
+            .unwrap();
+        assert!(last.records.is_empty());
+        assert!(last.next.is_none());
+    }
     drop(tx);
     h.cleanup().await.unwrap();
 }

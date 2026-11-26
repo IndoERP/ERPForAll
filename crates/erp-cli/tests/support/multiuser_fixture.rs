@@ -78,6 +78,28 @@ impl User {
             &body.to_string(),
         )
     }
+    /// Dispatch one keyed request with this subject's real session.
+    pub fn keyed_rpc(
+        &self,
+        port: u16,
+        model: &str,
+        method: &str,
+        key: &str,
+        body: &Value,
+    ) -> Reply {
+        native_http::request(
+            port,
+            "POST",
+            &format!("/erp/json/2/{model}/{method}"),
+            &[
+                ("cookie", &self.cookies),
+                ("content-type", "application/json"),
+                ("sec-fetch-site", "same-origin"),
+                ("idempotency-key", key),
+            ],
+            &body.to_string(),
+        )
+    }
     /// `GET path` (a shell address such as `/erp?cids=1`) with this real session. No cookie getter.
     pub fn page_on(&self, port: u16, path: &str) -> Reply {
         native_http::request(port, "GET", path, &[("cookie", &self.cookies)], "")
@@ -625,6 +647,22 @@ pub fn run_with_setup<T: Send + 'static>(
     setup: impl FnOnce(&NativeFixture) + Send + 'static,
     body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
 ) -> T {
+    run_configured(None, setup, body)
+}
+
+/// Run the same multiuser setup with an isolated, compiled web client.
+pub fn run_with_assets<T: Send + 'static>(
+    assets: PathBuf,
+    body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
+) -> T {
+    run_configured(Some(assets), |_| {}, body)
+}
+
+fn run_configured<T: Send + 'static>(
+    assets: Option<PathBuf>,
+    setup: impl FnOnce(&NativeFixture) + Send + 'static,
+    body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
+) -> T {
     let thread = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
@@ -633,7 +671,8 @@ pub fn run_with_setup<T: Send + 'static>(
                 .enable_all()
                 .build()
                 .expect("fixture runtime");
-            let native = runtime.block_on(NativeFixture::start());
+            let native =
+                runtime.block_on(NativeFixture::start_with_assets(|_| {}, assets.as_deref()));
             let result = catch_unwind(AssertUnwindSafe(|| {
                 setup(&native);
                 let fixture = runtime.block_on(MultiuserFixture::prepare(&native));

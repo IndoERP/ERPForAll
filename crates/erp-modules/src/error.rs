@@ -359,6 +359,18 @@ pub enum Error {
         second: String,
     },
 
+    /// The release requires a step absent from its admitted source and native registrations.
+    #[error(
+        "Module '{module}': required migration '{stage}-{name}' for version {version} is missing from {addon_source}; provide the SQL script or a matching native migration"
+    )]
+    RequiredMigrationMissing {
+        module: ModuleName,
+        version: crate::version::SemverVersion,
+        stage: crate::migrations::MigrationStage,
+        name: String,
+        addon_source: String,
+    },
+
     /// A migration step returned an error: the native function's, or the SQL statement's of a
     /// `.sql` script. The source keeps its kind (and SQLSTATE).
     #[error("Module '{module}': migration '{name}' (version {version}, stage {stage}) failed")]

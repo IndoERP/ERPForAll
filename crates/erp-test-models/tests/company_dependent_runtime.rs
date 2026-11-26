@@ -57,6 +57,35 @@ mod fixture {
         #[field(monetary, currency_field = "currency_id", company_dependent = true)]
         pub amount: Decimal,
     }
+
+    #[model(
+        name = "property.upsert",
+        addon = "property_runtime",
+        row_version = true,
+        keys = [key(name = "_name_key", fields = ["name"], message = "Name already exists.")]
+    )]
+    pub struct PropertyUpsert {
+        #[field(char, required)]
+        pub name: Option<Arc<str>>,
+        #[field(char, company_dependent = true)]
+        pub note: Option<Arc<str>>,
+        #[field(integer)]
+        pub quantity: i32,
+    }
+
+    #[model(
+        name = "property.upsert.money",
+        addon = "property_runtime",
+        keys = [key(name = "_money_key", fields = ["name", "currency_id"], message = "Currency and name already exist.")]
+    )]
+    pub struct MoneyPropertyUpsert {
+        #[field(char, required)]
+        pub name: Option<Arc<str>>,
+        #[field(many2one, comodel = "res.currency", required)]
+        pub currency_id: Option<RecId>,
+        #[field(monetary, currency_field = "currency_id", company_dependent = true)]
+        pub amount: Decimal,
+    }
     #[model(name = "property.required", addon = "property_runtime")]
     pub struct RequiredProperty {
         #[field(char, company_dependent = true, required)]
@@ -609,14 +638,208 @@ async fn ordering_and_grouping_work_while_upsert_still_refuses() {
             .collect();
         assert_eq!(got, want);
     }
-    error(
-        model
-            .upsert(&mut tx, erp_orm::UpsertCall::new("unused"))
-            .await
-            .unwrap_err(),
-        ErrorKind::Programming,
-        "property.runtime.note: company-dependent upsert is not supported until a later release",
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+async fn upsert_note(
+    tx: &mut Transaction,
+    env: &Env,
+    note: Value,
+) -> erp_fields::Result<erp_orm::UpsertResult> {
+    env.records("property.upsert")?
+        .upsert_values(
+            tx,
+            "_name_key",
+            &[vals(&[
+                ("name", Value::str("shared")),
+                ("note", note),
+                ("quantity", Value::Int(0)),
+            ])],
+            &["note"],
+            &[("quantity", Some(Value::Int(0)))],
+        )
+        .await
+}
+
+#[tokio::test]
+async fn property_upsert_preserves_other_companies_and_fallbacks() {
+    use erp_orm::UpsertOutcome;
+
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    ir_default::set(
+        &mut tx,
+        &one,
+        "property.upsert",
+        "note",
+        &Value::str("fallback"),
+        None,
+        Some(erp_fields::RecId::from_real(1).unwrap()),
+        None,
+    )
+    .await
+    .unwrap();
+    let inserted = upsert_note(&mut tx, &one, Value::str("one")).await.unwrap();
+    let id = inserted.rows()[0].id().get();
+    assert_eq!(inserted.rows()[0].outcome(), UpsertOutcome::Inserted);
+    let updated = upsert_note(&mut tx, &two, Value::str("two")).await.unwrap();
+    assert_eq!(updated.rows()[0].id().get(), id);
+    assert_eq!(updated.rows()[0].outcome(), UpsertOutcome::Updated);
+    let first = one
+        .records("property.upsert")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    let second = first.with_env(two.clone());
+    assert_eq!(
+        first.value(&mut tx, "note").await.unwrap(),
+        Value::str("one")
     );
+    assert_eq!(
+        second.value(&mut tx, "note").await.unwrap(),
+        Value::str("two")
+    );
+
+    let null = upsert_note(&mut tx, &one, Value::False).await.unwrap();
+    assert_eq!(null.rows()[0].outcome(), UpsertOutcome::Updated);
+    assert_eq!(first.value(&mut tx, "note").await.unwrap(), Value::False);
+    let fallback = upsert_note(&mut tx, &one, Value::str("fallback"))
+        .await
+        .unwrap();
+    assert_eq!(fallback.rows()[0].outcome(), UpsertOutcome::Updated);
+    assert_eq!(
+        first.value(&mut tx, "note").await.unwrap(),
+        Value::str("fallback")
+    );
+    assert_eq!(
+        second.value(&mut tx, "note").await.unwrap(),
+        Value::str("two")
+    );
+    let unchanged = upsert_note(&mut tx, &one, Value::str("fallback"))
+        .await
+        .unwrap();
+    assert_eq!(unchanged.rows()[0].outcome(), UpsertOutcome::Unchanged);
+    assert_eq!(unchanged.rows()[0].version(), fallback.rows()[0].version());
+
+    tx.commit().await.unwrap();
+    let allowed = erp_orm::CompanyId::new(1).unwrap();
+    let resolution = erp_orm::Resolution::in_id_order(
+        erp_orm::GroupSet::default(),
+        [allowed],
+        std::num::NonZeroU64::MIN,
+    )
+    .unwrap();
+    let principal = erp_orm::PrincipalBuilder::user(erp_orm::UserId::new(2).unwrap())
+        .resolution(resolution)
+        .companies(vec![allowed])
+        .build()
+        .unwrap();
+    let mut restricted = h
+        .orm()
+        .begin_opts(erp_orm::BeginOptions::for_principal(principal))
+        .await
+        .unwrap();
+    let forbidden = company(&restricted.env(), 2);
+    let denied = upsert_note(&mut restricted, &forbidden, Value::str("denied"))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.kind(), ErrorKind::Access);
+    drop(restricted);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn property_upsert_retries_an_old_concurrent_snapshot() {
+    let h = harness().await;
+    let mut setup = h.begin().await.unwrap();
+    seed(&mut setup).await;
+    let one = company(&setup.env(), 1);
+    let inserted = upsert_note(&mut setup, &one, Value::str("initial"))
+        .await
+        .unwrap();
+    let id = inserted.rows()[0].id().get();
+    setup.commit().await.unwrap();
+
+    let mut first = h.begin().await.unwrap();
+    let mut second = h.begin().await.unwrap();
+    let one = company(&first.env(), 1);
+    let two = company(&second.env(), 2);
+    second
+        .query("SELECT id FROM property_upsert WHERE id = $1", &[&id])
+        .await
+        .unwrap();
+    upsert_note(&mut first, &one, Value::str("winner"))
+        .await
+        .unwrap();
+    first.commit().await.unwrap();
+    let err = upsert_note(&mut second, &two, Value::str("retry"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.sqlstate(), Some("40001"));
+    second.rollback().await.unwrap();
+
+    let mut retry = h.begin().await.unwrap();
+    let one = company(&retry.env(), 1);
+    let two = company(&retry.env(), 2);
+    upsert_note(&mut retry, &two, Value::str("retry"))
+        .await
+        .unwrap();
+    for (env, expected) in [(one, "winner"), (two, "retry")] {
+        let records = env
+            .records("property.upsert")
+            .unwrap()
+            .browse([id])
+            .unwrap();
+        assert_eq!(
+            records.value(&mut retry, "note").await.unwrap(),
+            Value::str(expected)
+        );
+    }
+    drop(retry);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn property_upsert_rounds_money_without_touching_another_company() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let currency_id = seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    let first = one.records("property.upsert.money").unwrap();
+    let second = first.with_env(two);
+    let rows = |amount: &str| {
+        [vals(&[
+            ("name", Value::str("shared")),
+            ("currency_id", Value::Int(currency_id)),
+            ("amount", Value::Decimal(amount.parse().unwrap())),
+        ])]
+    };
+    let inserted = first
+        .upsert_values(&mut tx, "_money_key", &rows("2.675"), &["amount"], &[])
+        .await
+        .unwrap();
+    let id = inserted.rows()[0].id();
+    let updated = second
+        .upsert_values(&mut tx, "_money_key", &rows("-1.025"), &["amount"], &[])
+        .await
+        .unwrap();
+    assert_eq!(updated.rows()[0].id(), id);
+    tx.invalidate_all().await.unwrap();
+    for (records, expected) in [(first, "2.68"), (second, "-1.03")] {
+        assert_eq!(
+            records
+                .browse_ids([id])
+                .value(&mut tx, "amount")
+                .await
+                .unwrap(),
+            Value::Decimal(expected.parse().unwrap())
+        );
+    }
     drop(tx);
     h.cleanup().await.unwrap();
 }
@@ -945,31 +1168,93 @@ async fn stored_property_consumers_refuse_at_runtime_assembly() {
     }
 }
 
-fn unused_property_hook<'a>(
-    _: &'a mut Transaction,
-    _: &'a erp_orm::WriteBatch,
+fn log_note_change<'a>(
+    tx: &'a mut Transaction,
+    batch: &'a erp_orm::WriteBatch,
 ) -> erp_orm::BoxFuture<'a, erp_fields::Result<()>> {
-    Box::pin(async { Ok(()) })
+    Box::pin(async move {
+        assert_eq!(batch.fields(), &["note"]);
+        for row in batch.rows() {
+            let [(Cell::Str(old), Cell::Str(new))] = row.values() else {
+                return Err(Error::programming(format!(
+                    "expected two logical text values, got {:?}",
+                    row.values()
+                )));
+            };
+            tx.execute(
+                "INSERT INTO property_hook_log (record, old, new) VALUES ($1, $2, $3)",
+                &[&row.id().get(), &old.as_ref(), &new.as_ref()],
+            )
+            .await?;
+        }
+        Ok(())
+    })
 }
 
 #[tokio::test]
-async fn property_hooks_refuse_before_any_connection_or_callback() {
-    let err = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
+async fn property_hooks_project_each_rows_writer_company() {
+    let h = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
         .write_hook(erp_orm::WriteHook::new(
             "property.runtime",
             &["note"],
-            unused_property_hook,
+            log_note_change,
         ))
-        .check()
-        .unwrap_err();
-    assert!(matches!(err, erp_testkit::HarnessError::Orm(_)));
-    if let erp_testkit::HarnessError::Orm(err) = err {
-        error(
-            err,
-            ErrorKind::Programming,
-            "property.runtime.note: company-dependent write-hook registration is not supported until a later release",
-        );
-    }
+        .build()
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    default(&mut tx, &one, "first fallback", Some(1), None).await;
+    default(&mut tx, &two, "second fallback", Some(2), None).await;
+    tx.execute(
+        "CREATE TEMP TABLE property_hook_log (record bigint, old text, new text)",
+        &[],
+    )
+    .await
+    .unwrap();
+    let first = create(&mut tx, &one, &[("note", Value::str("first old"))]).await;
+    let second = create(&mut tx, &one, &[("note", Value::str("other company"))])
+        .await
+        .with_env(two);
+    first
+        .write_values(&mut tx, &vals(&[("note", Value::str("first fallback"))]))
+        .await
+        .unwrap();
+    second
+        .write_values(&mut tx, &vals(&[("note", Value::str("second new"))]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let actual: Vec<(i64, String, String)> = tx
+        .query(
+            "SELECT record, old, new FROM property_hook_log ORDER BY record",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (first.ids()[0], "first old".into(), "first fallback".into()),
+            (
+                second.ids()[0],
+                "second fallback".into(),
+                "second new".into()
+            ),
+        ]
+    );
+    let second_in_one = second.with_env(one);
+    assert_eq!(
+        second_in_one.value(&mut tx, "note").await.unwrap(),
+        Value::str("other company")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
 }
 
 #[tokio::test]

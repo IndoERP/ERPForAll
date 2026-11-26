@@ -38,6 +38,22 @@
           </div>
           <button type="submit" class="primary login-submit" data-login-submit="">Sign in</button>
         </form>
+        <p t-if="this.props.page.external_label" data-external-login-error="" role="alert" class="login-error" hidden="hidden"/>
+        <form t-if="this.props.page.external_label" action="/erp/login/external" method="post" t-on-submit="this.onExternalSubmit">
+          <input type="hidden" name="csrf_token" t-att-value="this.props.page.csrf"/>
+          <input type="hidden" name="redirect" t-att-value="this.props.page.redirect"/>
+          <button type="submit" class="login-submit">Sign in with <span t-out="this.props.page.external_label"/></button>
+        </form>
+        <form t-if="this.props.page.can_link_external" action="/erp/login/external" method="post" t-on-submit="this.onExternalSubmit">
+          <input type="hidden" name="csrf_token" t-att-value="this.props.page.csrf"/>
+          <input type="hidden" name="redirect" t-att-value="this.props.page.redirect"/>
+          <input type="hidden" name="link" value="1"/>
+          <button type="submit" class="login-submit">Connect <span t-out="this.props.page.external_label"/></button>
+        </form>
+        <form t-if="this.props.page.can_link_external" action="/erp/session/external/revoke" method="post">
+          <input type="hidden" name="csrf_token" t-att-value="this.props.page.csrf"/>
+          <button type="submit" class="login-submit">Disconnect <span t-out="this.props.page.external_label"/></button>
+        </form>
       </section>
       <p class="login-footer">Database <span t-out="this.props.page.database"/></p>
     </main>

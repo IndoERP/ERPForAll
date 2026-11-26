@@ -19,6 +19,7 @@ mod lines;
 pub mod load;
 pub mod migration;
 pub mod model_data;
+mod protection;
 pub mod reader;
 pub mod xml;
 
@@ -48,5 +49,8 @@ pub mod internal_impex {
 pub use model_data::{
     IR_MODEL_DATA, LoadRecord, XidBinding, XidCache, XidRecord, ir_model_data_decl,
 };
+#[doc(hidden)]
+pub use protection::BINDING_TABLE as RECORD_PROTECTION_BINDING_TABLE;
+pub use protection::protection_declarations_loaded;
 pub use reader::{ConvertMode, DataFileContent, load_data_file};
 pub use xml::{MAX_DEPTH, MAX_OPERATION_BYTES, ReaderLimits, XmlDataReader, parse_xml_str};

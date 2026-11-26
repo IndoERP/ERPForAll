@@ -1,6 +1,42 @@
 #![allow(clippy::unwrap_used, clippy::panic, reason = "tests")]
 use clap::Parser;
 use erp_cli::Cli;
+
+#[test]
+fn outbox_operations_require_owner_config_and_validate_bounds() {
+    let config = ["--config", "/private/server.toml"];
+    for (operation, arguments) in [
+        ("hold", vec![]),
+        ("release-hold", vec![]),
+        ("status", vec!["--consumer", "core.jobs"]),
+        ("retain", vec!["--days", "30", "--limit", "128"]),
+        (
+            "restore",
+            vec!["--consumer", "core.jobs", "--xid", "0", "--id", "0"],
+        ),
+    ] {
+        let command = ["erp", "outbox", operation];
+        Cli::try_parse_from(
+            command
+                .into_iter()
+                .chain(config)
+                .chain(arguments.iter().copied()),
+        )
+        .unwrap();
+        let error = Cli::try_parse_from(command.into_iter().chain(arguments)).unwrap_err();
+        assert!(error.to_string().contains("--config"));
+    }
+    for options in [
+        ["--days", "0", "--limit", "1"],
+        ["--days", "30", "--limit", "129"],
+    ] {
+        let command = ["erp", "outbox", "retain"]
+            .into_iter()
+            .chain(config)
+            .chain(options);
+        assert!(Cli::try_parse_from(command).is_err());
+    }
+}
 #[test]
 fn human_server_and_database_bootstrap_have_explicit_operator_commands() {
     Cli::try_parse_from(["erp", "server", "--config", "/private/server.toml"]).unwrap();

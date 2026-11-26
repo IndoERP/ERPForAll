@@ -347,6 +347,9 @@ async fn serve_member(
             result = &mut jobs => { jobs_finished=true; result },
             result = gc_maintenance(app, &schedule) => result,
             result = event_upkeep_maintenance(app, &event_owner) => result,
+            result = outbox_job_delivery(app, &event_owner) => result,
+            result = outbox_retention_maintenance(&event_owner, config.outbox_retention_days()) => result,
+            result = crate::audit::supervise_retention(&event_owner, config) => result,
             result = crate::partition_upkeep::supervise(initial_upkeep_period,
                 async || crate::partition_upkeep::policy(app.current_auth().await.orm(), &generic_owner).await,
                 async || crate::partition_upkeep::maintain(app.current_auth().await.orm(), &generic_owner).await.map(|_report| ()),
@@ -589,6 +592,63 @@ async fn supervise_collection(
 
 /// How often every node runs the event partition upkeep.
 const EVENT_UPKEEP_PERIOD: Duration = Duration::from_secs(3_600);
+
+async fn outbox_job_delivery(app: &WebApp, owner: &erp_orm::Orm) -> std::io::Result<()> {
+    let mut ticks = tokio::time::interval(Duration::from_secs(2));
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticks.tick().await;
+        let auth = app.current_auth().await;
+        match owner.deliver_outbox_jobs(auth.orm()).await {
+            Ok(erp_orm::OutboxReplay::Delivered { count, cursor }) => {
+                tracing::debug!(
+                    count,
+                    xid = cursor.xid,
+                    row = cursor.id,
+                    "advanced the outbox job cursor"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(kind = ?error.kind(), cause = %sanitized_cause(&error), "outbox job delivery failed and will retry")
+            }
+        }
+    }
+}
+
+const OUTBOX_RETENTION_PERIOD: Duration = Duration::from_secs(60);
+
+async fn outbox_retention_maintenance(
+    owner: &erp_orm::Orm,
+    days: Option<u32>,
+) -> std::io::Result<()> {
+    let Some(days) = days else {
+        return std::future::pending().await;
+    };
+    let mut ticks = tokio::time::interval(OUTBOX_RETENTION_PERIOD);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticks.tick().await;
+        match owner.retain_outbox(days, 128).await {
+            Ok(erp_orm::OutboxRetention::Purged { count, floor }) if count > 0 => tracing::info!(
+                count,
+                xid = floor.xid,
+                row = floor.id,
+                "retired acknowledged outbox events"
+            ),
+            Ok(erp_orm::OutboxRetention::Held) => {
+                tracing::debug!("outbox retention hold is active")
+            }
+            Ok(erp_orm::OutboxRetention::Busy) => {
+                tracing::debug!("outbox retention will retry after concurrent delivery")
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(kind = ?error.kind(), cause = %sanitized_cause(&error), "outbox retention failed and will retry")
+            }
+        }
+    }
+}
 
 /// The scheduled event partition upkeep of this node: every
 /// [`EVENT_UPKEEP_PERIOD`], the upkeep on `owner` (a one-connection owner pool opened once at
@@ -869,6 +929,79 @@ async fn maintenance(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn automatic_outbox_retention_uses_durable_hold_and_cursor_after_restart() {
+        use erp_orm::{OutboxReplay, SUPERUSER_ID};
+        let db = erp_testkit::TestDb::create().await.unwrap();
+        let registry = Arc::new(erp_registry::RegistryBuilder::new([]).build().unwrap());
+        let open = || {
+            erp_orm::Orm::builder(Arc::clone(&registry), db.pool().clone())
+                .build()
+                .unwrap()
+        };
+        let first = open();
+        let mut tx = first.begin(SUPERUSER_ID).await.unwrap();
+        tx.install_event_schema().await.unwrap();
+        tx.batch("CREATE TABLE erp_event.ir_event_outbox_p20200101 PARTITION OF erp_event.ir_event_outbox
+          FOR VALUES FROM ('2020-01-01 00:00:00+00') TO ('2020-01-02 00:00:00+00');
+          INSERT INTO erp_event.ir_event_outbox
+            (create_date, schema_version, kind, model, record_ids, field_names, cascade_models, subject,
+             principal_kind, actor_kind, actor_id, company_ids, operation_id, tx_ordinal)
+          VALUES ('2020-01-01 00:00:00+00', 1, 'write', 'test.retention', '[1]', '{}', '{}', '1',
+            'system', 'system', 1, '{}', uuidv7(), 1)").await.unwrap();
+        tx.commit().await.unwrap();
+        drop(tx);
+        let cursor = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let result = first
+                    .replay_outbox("test.restart", 1, |_, _| Box::pin(async { Ok(()) }))
+                    .await
+                    .unwrap();
+                if let OutboxReplay::Delivered { cursor, .. } = result {
+                    break cursor;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        first.hold_outbox_retention(true).await.unwrap();
+        let reopened = open();
+        drop(first);
+        let held = reopened
+            .outbox_status("test.restart")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(held.held);
+        assert_eq!(held.acknowledgement, Some(cursor));
+        reopened.hold_outbox_retention(false).await.unwrap();
+
+        let worker = reopened.clone();
+        let task =
+            tokio::spawn(async move { outbox_retention_maintenance(&worker, Some(1)).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if reopened
+                    .outbox_status("test.restart")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .floor
+                    == cursor
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        db.cleanup().await.unwrap();
+    }
 
     struct Handler(Arc<AtomicBool>);
     impl Drop for Handler {

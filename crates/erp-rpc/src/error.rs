@@ -81,6 +81,8 @@ pub enum ProtocolError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InfraError {
+    /// 422: the approval gate requires a key before business dispatch.
+    ApprovalKeyRequired,
     /// 409: a request with the same key is still running.
     IdempotencyInProgress {
         /// The key.
@@ -180,7 +182,8 @@ impl RpcFailure {
                 InfraError::IdempotencyInProgress { .. }
                 | InfraError::IdempotencyAccessChanged
                 | InfraError::IdempotencyResultExpired => 409,
-                InfraError::IdempotencyMismatch { .. }
+                InfraError::ApprovalKeyRequired
+                | InfraError::IdempotencyMismatch { .. }
                 | InfraError::IdempotencyNotAllowed(_)
                 | InfraError::ResultTooLarge { .. } => 422,
                 InfraError::RateLimited { .. } => 429,
@@ -213,6 +216,7 @@ impl RpcFailure {
                 ProtocolError::UnprocessableEntity(_) => "werkzeug.exceptions.UnprocessableEntity",
             },
             Self::Infra(i) => match i {
+                InfraError::ApprovalKeyRequired => "erp.exceptions.ValidationError",
                 InfraError::IdempotencyInProgress { .. } => "erp.idempotency_in_progress",
                 InfraError::IdempotencyAccessChanged => "erp.idempotency_access_changed",
                 InfraError::IdempotencyResultExpired => "erp.idempotency_result_expired",
@@ -278,6 +282,17 @@ impl RpcFailure {
     }
 
     pub(crate) fn body(&self, debug: &str, timestamp: i64, request_id: Option<&str>) -> Vec<u8> {
+        self.body_with_approval(debug, timestamp, request_id, None)
+    }
+
+    /// Render a request ID only after the approval gate's deferral transaction committed.
+    pub(crate) fn body_with_approval(
+        &self,
+        debug: &str,
+        timestamp: i64,
+        request_id: Option<&str>,
+        approval_request_id: Option<i64>,
+    ) -> Vec<u8> {
         let message = self.message();
         let mut w = JsonWriter::unbounded();
         w.begin_object();
@@ -302,9 +317,18 @@ impl RpcFailure {
         w.key("timestamp");
         w.int(timestamp);
         w.key("context");
-        match self.context_json() {
-            Some(json) => w.raw(&json),
-            None => w.empty_object(),
+        if let Some(id) = approval_request_id {
+            w.begin_object();
+            w.key("approval_request_id");
+            w.int(id);
+            w.end_object();
+        } else if matches!(self, Self::Infra(InfraError::ApprovalKeyRequired)) {
+            w.raw(br#"{"approval_key_required":true}"#);
+        } else {
+            match self.context_json() {
+                Some(json) => w.raw(&json),
+                None => w.empty_object(),
+            }
         }
         // The ordinary error context has a smaller, lossy cap. Keep the typed
         // sanitizer report separate so strict refusals never truncate diagnostics.
@@ -366,8 +390,22 @@ impl RpcFailure {
         let Self::Domain(e) = self else {
             return None;
         };
-        let context @ Value::Map(_) = e.context()? else {
+        let context @ Value::Map(fields) = e.context()? else {
             return None;
+        };
+        // Browser resubmission relies on these markers proving that admission reached no
+        // method body, so method errors must never be able to forge them.
+        let sanitized;
+        let context = if fields.contains_key("approval_key_required")
+            || fields.contains_key("approval_request_id")
+        {
+            let mut fields = (**fields).clone();
+            fields.shift_remove("approval_key_required");
+            fields.shift_remove("approval_request_id");
+            sanitized = Value::Map(std::sync::Arc::new(fields));
+            &sanitized
+        } else {
+            context
         };
         // bounded: a context is a small dictionary of names. One that cannot be written (a
         // non-finite float, over 64 KiB) is left out and logged, rather than failing the error
@@ -469,6 +507,9 @@ fn domain_message(e: &Error) -> String {
 
 fn infra_message(i: &InfraError) -> String {
     match i {
+        InfraError::ApprovalKeyRequired => {
+            "Supply an Idempotency-Key to submit this call for approval.".to_owned()
+        }
         InfraError::IdempotencyInProgress { key, retry_after } => format!(
             "A request with Idempotency-Key {key} is still running; retry after {retry_after} \
              seconds."

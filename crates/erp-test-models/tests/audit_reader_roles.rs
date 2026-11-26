@@ -326,6 +326,39 @@ async fn audit_reader_partition_upkeep_and_default_privileges() {
     publish(&h, &reader, &roles).await;
     let owner = h.db().client().await.unwrap();
     let role = erp_sql::quote(reader.get_user().unwrap());
+    let historical = owner
+        .query_one(
+            "SELECT day::text, (day + 1)::text, 'ir_audit_entry_p' || to_char(day, 'YYYYMMDD')
+             FROM (SELECT (now() AT TIME ZONE 'UTC')::date - 60 AS day) AS old_day",
+            &[],
+        )
+        .await
+        .unwrap();
+    let from: &str = historical.get(0);
+    let to: &str = historical.get(1);
+    let partition: &str = historical.get(2);
+    owner
+        .batch_execute(&format!(
+            "CREATE TABLE erp_event.{} PARTITION OF erp_event.ir_audit_entry
+             FOR VALUES FROM ('{from} 00:00:00+00') TO ('{to} 00:00:00+00')",
+            erp_sql::quote(partition),
+        ))
+        .await
+        .unwrap();
+    let archived: i64 = owner
+        .query_one(
+            "INSERT INTO erp_event.ir_audit_entry
+             (create_date,schema_version,entry_kind,origin,outcome,attempt,operation_id,
+              principal_kind,subject_id,actor_kind,actor_id,company_ids,target_ids,events,
+              encoded_bytes)
+             VALUES ($1::text::timestamptz,1,'change','internal','committed',1,
+                     pg_catalog.uuidv7(),'user',1,'user',1,'{}','[]','[]',0)
+             RETURNING id",
+            &[&format!("{from} 12:00:00+00")],
+        )
+        .await
+        .unwrap()
+        .get(0);
     let lost: String = owner.query_one("SELECT c.relname::text FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid WHERE i.inhparent='erp_event.ir_audit_entry'::regclass ORDER BY c.relname DESC LIMIT 1", &[]).await.unwrap().get(0);
     owner.batch_execute(&format!("DROP TABLE erp_event.{}; ALTER DEFAULT PRIVILEGES IN SCHEMA erp_event GRANT SELECT ON TABLES TO {role}", erp_sql::quote(&lost))).await.unwrap();
     let mut tx = h.begin().await.unwrap();
@@ -335,10 +368,15 @@ async fn audit_reader_partition_upkeep_and_default_privileges() {
     );
     tx.commit().await.unwrap();
     let client = login(&reader).await;
-    client
-        .query_one("SELECT count(*) FROM erp_event.ir_audit_entry", &[])
+    let retained: String = client
+        .query_one(
+            "SELECT outcome FROM erp_event.ir_audit_entry WHERE id=$1",
+            &[&archived],
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .get(0);
+    assert_eq!(retained, "committed");
     let error = client
         .query_one(
             &format!("SELECT count(*) FROM erp_event.{}", erp_sql::quote(&lost)),

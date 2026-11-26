@@ -126,6 +126,9 @@ pub async fn purge_module_data(
     };
     let names: Vec<&str> = modules.to_vec();
     let mut report = PurgeReport::default();
+    crate::protection::release_uninstalled(tx, &names)
+        .await
+        .map_err(orm_error)?;
 
     // 1. the modules' external ids with a record, newest first (`:2562`)
     let sql = format!(
@@ -274,6 +277,9 @@ pub async fn purge_module_data(
             .await
             .map_err(orm_error)?;
     }
+    crate::protection::finish_uninstall(tx, &names)
+        .await
+        .map_err(orm_error)?;
     Ok(report)
 }
 

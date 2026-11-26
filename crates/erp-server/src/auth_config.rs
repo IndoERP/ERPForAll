@@ -46,6 +46,12 @@ pub(crate) fn read(value: Option<toml::Value>) -> Result<AuthConfig, ConfigError
             "limits.cooldown_hook_deadline_ms" => config
                 .with_cooldown_hook_deadline_ms(integer("limits.cooldown_hook_deadline_ms")?)
                 .map_err(bounded)?,
+            "limits.session_login_hook_deadline_ms" => config
+                .with_session_login_deadline_ms(integer("limits.session_login_hook_deadline_ms")?)
+                .map_err(bounded)?,
+            "session.data_bytes" => config
+                .with_session_data_bytes(integer("session.data_bytes")?)
+                .map_err(bounded)?,
             "limits.token_plan_hook_deadline_ms" => config
                 .with_token_plan_hook_deadline_ms(integer("limits.token_plan_hook_deadline_ms")?)
                 .map_err(bounded)?,

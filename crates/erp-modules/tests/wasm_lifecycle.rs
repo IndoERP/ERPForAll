@@ -224,6 +224,63 @@ fn wlife(version: &str, fields: &[&str]) -> Vec<u8> {
     )
 }
 
+#[tokio::test]
+async fn package_upgrade_requires_consent_and_applies_required_migration_once() {
+    let (w, _addons) = world().await;
+    let installed = w
+        .life
+        .install(&su(&w.orm), consent(&wlife("1.0.0", &["note"])))
+        .await
+        .unwrap();
+    let env = su(&installed.orm);
+    setup_migration_probe(&installed.orm).await;
+    let release = |caps: &[&str], include_script: bool| {
+        let mut writer = ErpAddonPackageWriter::new();
+        let manifest = manifest_text("wlife", "1.1.0", &["nat"], caps);
+        writer.add_file(
+            "manifest.toml",
+            format!("{REQUIRED_MIGRATION_DECLARATION}{manifest}"),
+        );
+        writer.add_file(
+            "wasm/wlife.wasm",
+            describe("wlife", &["nat"], MODEL, &["note"], &["shout"]),
+        );
+        if include_script {
+            writer.add_file(REQUIRED_MIGRATION_PATH, REQUIRED_MIGRATION_SQL);
+        }
+        writer.build_zip().unwrap()
+    };
+
+    let error = w
+        .life
+        .upgrade(&env, consent(&release(&[], true)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(wasm_reason(&error), WasmReason::Unsupported(message) if message.contains("migrations-sql"))
+    );
+    assert_migration_probe(&installed.orm, "wlife", "1.0.0", "0").await;
+
+    let caps = &["migrations-sql"];
+    let error = w
+        .life
+        .upgrade(&env, consent(&release(caps, false)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::RequiredMigrationMissing { addon_source, .. } if addon_source == "package")
+    );
+    assert_migration_probe(&installed.orm, "wlife", "1.0.0", "0").await;
+
+    let outcome = w
+        .life
+        .upgrade(&env, consent(&release(caps, true)))
+        .await
+        .unwrap();
+    assert_migration_probe(&outcome.orm, "wlife", "1.1.0", "1").await;
+    w.db.cleanup().await.unwrap();
+}
+
 // ---- the world -------------------------------------------------------------------------------
 
 struct World {
@@ -750,12 +807,12 @@ async fn unsupported_contributions_and_capabilities_are_refused_by_name() {
         .life
         .install(
             &env,
-            consent(&with(serde_json::Value::Null, &["migrations-sql"])),
+            consent(&with(serde_json::Value::Null, &["filesystem:temp:1kb"])),
         )
         .await
         .unwrap_err();
     assert!(
-        matches!(wasm_reason(&err), WasmReason::CapabilityUnavailable(c) if c == "migrations-sql"),
+        matches!(wasm_reason(&err), WasmReason::CapabilityUnavailable(c) if c.starts_with("filesystem:temp:")),
         "{err}"
     );
 

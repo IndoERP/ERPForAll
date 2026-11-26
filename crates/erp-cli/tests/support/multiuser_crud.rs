@@ -252,6 +252,8 @@ pub enum Policy {
     OwnSettings { groups: &'static [&'static str] },
     /// Matrix not written yet.
     Deferred(&'static str),
+    /// A neighboring test exercises this model's service or model-specific contract.
+    Specialized,
 }
 
 /// One installed model of the manifest.
@@ -284,7 +286,10 @@ impl ModelCase {
                 // an internal-level grant never refuses a test subject at model level
                 Level::Internal => &[],
             },
-            Policy::OwnRecords | Policy::RawAttachment | Policy::Deferred(_) => &[],
+            Policy::OwnRecords
+            | Policy::RawAttachment
+            | Policy::Deferred(_)
+            | Policy::Specialized => &[],
         }
     }
 
@@ -299,7 +304,8 @@ impl ModelCase {
             | Policy::OwnCompany { .. }
             | Policy::OwnUser { .. }
             | Policy::OwnSettings { .. }
-            | Policy::Deferred(_) => Rows::Created,
+            | Policy::Deferred(_)
+            | Policy::Specialized => Rows::Created,
         }
     }
 
@@ -326,9 +332,7 @@ impl ModelCase {
     }
 }
 
-const TASK_MAIL: &str = "a later release";
 const TASK_SERVICE: &str = "a later release";
-const TASKS: [&str; 2] = [TASK_MAIL, TASK_SERVICE];
 
 // The groups an access denial names: the product manager group, and Settings, which implies it
 // (addons/product/security/product_security.xml, implied_by_ids), in the order of the message
@@ -407,6 +411,12 @@ const ADMIN_ALL: Grants = Grants {
     create: Level::Admin,
     write: Level::Admin,
     unlink: Level::Admin,
+};
+const NO_GRANTS: Grants = Grants {
+    read: Level::Nobody,
+    create: Level::Nobody,
+    write: Level::Nobody,
+    unlink: Level::Nobody,
 };
 const ADMIN_READS: Grants = Grants {
     read: Level::Admin,
@@ -507,15 +517,28 @@ const fn deferred(
 }
 
 const fn mail(model: &'static str) -> ModelCase {
-    deferred(model, "mail", false, TASK_MAIL)
+    specialized(model, "mail", false)
 }
 
 const fn service(model: &'static str, addon: &'static str) -> ModelCase {
-    deferred(model, addon, false, TASK_SERVICE)
+    specialized(model, addon, false)
 }
 
 const fn transient(model: &'static str) -> ModelCase {
-    deferred(model, "base", true, TASK_SERVICE)
+    specialized(model, "base", true)
+}
+
+const fn specialized(model: &'static str, addon: &'static str, transient: bool) -> ModelCase {
+    ModelCase {
+        model,
+        addon,
+        description: "",
+        transient,
+        basis: &[],
+        scope: Scope::Global,
+        policy: Policy::Specialized,
+        guards: &[],
+    }
 }
 
 const fn read_only(
@@ -851,6 +874,14 @@ pub const MANIFEST: &[ModelCase] = &[
         Rows::Created,
         APPROVAL_GUARDS,
     ),
+    base(
+        "ir.approval.request",
+        "Approval Request",
+        APPROVAL_BASIS,
+        NO_GRANTS,
+        Rows::Absent,
+        &[],
+    ),
     owned(
         "ir.attachment",
         "Attachment",
@@ -1072,6 +1103,7 @@ pub fn expect(case: &ModelCase, who: Who, op: Op) -> Expect {
     }
     match case.policy {
         Policy::Deferred(task) => Expect::Deferred(task),
+        Policy::Specialized => unreachable!("the specialized matrix owns the authenticated cases"),
         Policy::InternalReadOnly { .. } => match (who, op) {
             (_, Op::Search) => Expect::Visible(Visible::All),
             (Who::Admin, _) | (_, Op::Read) => Expect::Ok,
@@ -1159,6 +1191,12 @@ pub fn expect_foreign(case: &ModelCase, who: Who, op: Op) -> Option<Expect> {
 pub fn manifest_problems() -> Vec<String> {
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
+    let mut specialized: BTreeSet<_> = super::multiuser_rpc_special::MAIL_MODELS
+        .iter()
+        .chain(super::multiuser_rpc_special::SERVICE_MODELS)
+        .chain(super::multiuser_rpc_special::TRANSIENT_MODELS)
+        .copied()
+        .collect();
     for case in MANIFEST {
         if !seen.insert(case.model) {
             problems.push(format!("{} appears twice in MANIFEST", case.model));
@@ -1171,8 +1209,13 @@ pub fn manifest_problems() -> Vec<String> {
         }
         match case.policy {
             Policy::Deferred(task) => {
-                if !TASKS.contains(&task) {
+                if task != TASK_SERVICE {
                     problems.push(format!("{} defers to unknown task {task}", case.model));
+                }
+            }
+            Policy::Specialized => {
+                if !specialized.remove(case.model) {
+                    problems.push(format!("{} lacks a specialized matrix case", case.model));
                 }
             }
             Policy::InternalReadOnly { groups }
@@ -1233,6 +1276,9 @@ pub fn manifest_problems() -> Vec<String> {
                 problems.push(format!("{}: a guard lacks its error", case.model));
             }
         }
+    }
+    for model in specialized {
+        problems.push(format!("{model} is tested outside the manifest"));
     }
     for defect in KNOWN_DEFECTS {
         let written = MANIFEST
@@ -1485,7 +1531,8 @@ fn judge(
                     Policy::CompanyScoped { .. }
                     | Policy::InternalReadOnly { .. }
                     | Policy::Base { .. }
-                    | Policy::Deferred(_) => hint,
+                    | Policy::Deferred(_)
+                    | Policy::Specialized => hint,
                 };
                 denied && out.message == record_message(case, op, name, *id, hint)
             }
@@ -1561,6 +1608,7 @@ impl Marker {
             "ir.actions.client" => Marker::Char("res_model"),
             "ir.actions.report" => Marker::Char("report_file"),
             "ir.approval.policy" => Marker::Bool("active"),
+            "ir.approval.request" => Marker::Fixed("state", "pending"),
             "ir.attachment" => Marker::Char("description"),
             "ir.config.setting.audit" => Marker::Char("setting_key"),
             "ir.config_parameter" | "ir.dated.parameter" => Marker::Char("value"),
@@ -2182,6 +2230,9 @@ impl<'a, 'f> Crud<'a, 'f> {
                 "outcome": "allow",
                 "model": self.next_revision_model(),
             }),
+            "ir.approval.request" => json!({
+                "target_model": "res.partner", "target_method": "write", "state": "pending"
+            }),
             "ir.config.setting" => json!({}),
             "ir.config.setting.audit" => json!({"setting_key": tag}),
             "ir.config_parameter" => {
@@ -2478,6 +2529,26 @@ impl<'a, 'f> Crud<'a, 'f> {
         .expect("search_count is an integer")
     }
 
+    fn count_matrix_rows(&self, case: &ModelCase, keeper: Option<Who>) -> i64 {
+        if case.model == "ir.approval.request" {
+            // Raw access is closed to every RPC principal, including the provisioning user.
+            // Check the durable state separately from the public access probes.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("matrix database observer runtime");
+            return runtime
+                .block_on(
+                    self.fx
+                        .native
+                        .client
+                        .query_one("SELECT count(*) FROM ir_approval_request", &[]),
+                )
+                .expect("approval request count through the fixture database owner")
+                .get(0);
+        }
+        self.count_as(keeper, case.model, json!([]))
+    }
+
     fn marker_value(&self, model: &str, id: i64, marker: &Marker) -> Value {
         self.marker_value_as(None, model, id, marker)
     }
@@ -2618,9 +2689,9 @@ impl<'a, 'f> Crud<'a, 'f> {
         let co = Self::co_of(who);
         let vals = self.payload(case.model, &tag, co);
         let reader = Self::reader(case.model, co);
-        let before = self.count_as(reader, case.model, json!([]));
+        let before = self.count_matrix_rows(case, reader);
         let out = self.call(who, case.model, "create", json!({"vals_list": [vals]}));
-        let after = self.count_as(reader, case.model, json!([]));
+        let after = self.count_matrix_rows(case, reader);
         let mut details: Vec<String> = judge(
             case,
             Op::Create,
@@ -2859,12 +2930,26 @@ impl<'a, 'f> Crud<'a, 'f> {
         let mut found = Vec::new();
         if case.rows() == Rows::Absent {
             // the manifest says no record exists; one that does would go untested
-            let n = self.count(case.model, json!([]));
+            let n = self.count_matrix_rows(case, None);
             if n != 0 {
                 found.push(format!(
                     "[{}] the manifest says no record exists, the provisioning administrator finds {n}",
                     case.model
                 ));
+            }
+        }
+        if case.model == "ir.approval.request" {
+            for who in [Who::Admin, Who::A, Who::B] {
+                let out = self.call(who, case.model, "search_count", json!({"domain": []}));
+                if let Some(detail) = judge(case, Op::Search, Expect::ModelDenied, &out, None, &[])
+                {
+                    found.push(Self::fail(
+                        case,
+                        who,
+                        Op::Search,
+                        &format!("search_count: {detail}"),
+                    ));
+                }
             }
         }
         // before the cells: an own-row unlink below removes a row these checks read
@@ -2897,6 +2982,9 @@ impl<'a, 'f> Crud<'a, 'f> {
         for case in MANIFEST {
             if case.is_deferred() {
                 deferred_cells += 3 * OPS.len();
+                continue;
+            }
+            if case.policy == Policy::Specialized {
                 continue;
             }
             mismatches.extend(Self::guarded(case.model, || self.model_cells(case)));

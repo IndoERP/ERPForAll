@@ -35,18 +35,20 @@ pub const HOUSEKEEPING_JOB_KINDS: [&str; 2] =
 
 /// The tables `neutralize` changes; a database without one of them is refused before anything
 /// changes (it was not initialized by this version).
-const NEUTRALIZE_TABLES: [&str; 7] = [
+const NEUTRALIZE_TABLES: [&str; 10] = [
     "ir_cron",
     "erp_job",
     "erp_session",
+    "erp_external_provider",
+    "erp_external_identity",
+    "erp_external_login_intent",
     "res_users_apikeys",
     "erp_login_throttle",
     "res_users",
     "ir_config_parameter",
 ];
 
-/// The system parameter a neutralized database carries: a marker for operators and tools.
-/// Nothing reads it yet (spec DBLIFE, section 3).
+/// The system parameter a neutralized database carries. External login also checks this marker.
 pub const NEUTRALIZED_PARAMETER: &str = "database.neutralized";
 
 /// What `restore` appends to the target's name for the database it restores into before that
@@ -708,6 +710,19 @@ async fn neutralize_async(args: &NeutralizeArgs) -> Result<String> {
         )
         .await
         .map_err(step("could not hold the jobs"))?;
+    tx.execute(
+        "UPDATE erp_external_provider SET enabled = false WHERE enabled",
+        &[],
+    )
+    .await
+    .map_err(step("could not disable the external identity providers"))?;
+    tx.execute("DELETE FROM erp_external_login_intent", &[])
+        .await
+        .map_err(step("could not remove external sign-in challenges"))?;
+    let external_identities = tx
+        .execute("DELETE FROM erp_external_identity", &[])
+        .await
+        .map_err(step("could not remove external identity links"))?;
     let sessions = tx
         .execute("DELETE FROM erp_session", &[])
         .await
@@ -754,12 +769,13 @@ async fn neutralize_async(args: &NeutralizeArgs) -> Result<String> {
     let skipped = skipped.map(|line| format!("{line}\n")).unwrap_or_default();
     Ok(format!(
         "{skipped}Database {name} neutralized: {} scheduled actions switched off, {} jobs held (kept: {}), \
-         {} sessions and {} API keys removed, {} login throttle rows cleared, {} passwords replaced \
+         {} sessions, {} external identity links and {} API keys removed, {} login throttle rows cleared, {} passwords replaced \
          by the throwaway password, database secret replaced, {NEUTRALIZED_PARAMETER} = true.",
         crons,
         jobs,
         HOUSEKEEPING_JOB_KINDS.join(", "),
         sessions,
+        external_identities,
         keys,
         throttle,
         passwords,

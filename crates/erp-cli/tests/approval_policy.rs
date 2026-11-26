@@ -258,11 +258,8 @@ impl Fixture {
         }
     }
 
-    /// An active user Approve or Deny revision for the tests of resolution: the model refuses to
-    /// create one (nothing consults policies yet), so it is created archived and
-    /// activated by SQL. These tests therefore no longer prove that a model-admitted active
-    /// revision resolves; the slice that removes the fence (and
-    /// ) restores them by creating the revisions active again.
+    /// Activate a stored fixture directly so resolution tests can inspect stale or overlapping
+    /// revisions even where the live model admission would reject them.
     async fn create_unfenced(&self, uid: i64, vals: RawVals) -> Result<i64, Error> {
         let id = self
             .create(uid, vals.set_cell("active", Cell::Bool(false)))
@@ -408,11 +405,11 @@ fn refused(id: i64, name: &str, reason: &str) -> String {
 
 /// with their accepted parts)
 #[test]
-fn default_revisions_are_inert_agent_approvals_and_no_user_revision() {
-    run(default_revisions_are_inert_agent_approvals_and_no_user_revision_body);
+fn default_revisions_require_agent_approval_and_ship_no_user_revision() {
+    run(default_revisions_require_agent_approval_and_ship_no_user_revision_body);
 }
 
-async fn default_revisions_are_inert_agent_approvals_and_no_user_revision_body() {
+async fn default_revisions_require_agent_approval_and_ship_no_user_revision_body() {
     let f = fixture().await;
     let client = f.db.client().await.unwrap();
     let rows = client
@@ -488,7 +485,7 @@ async fn default_revisions_are_inert_agent_approvals_and_no_user_revision_body()
     assert_eq!(error.kind(), ErrorKind::Programming, "{error}");
     assert_eq!(
         error.message(),
-        "Approval policies apply to user principals only; a system call does not pass the \
+        "Approval policies apply to user and agent principals; a system call does not pass the \
          approval phase."
     );
     let empty = ApprovalCall::model_level("", "write").unwrap_err();
@@ -499,6 +496,180 @@ async fn default_revisions_are_inert_agent_approvals_and_no_user_revision_body()
     );
     drop(client);
     f.db.cleanup().await.unwrap();
+}
+
+async fn agent_tx(f: &Fixture, subject: i64, key: i64) -> Transaction {
+    use erp_orm::{ApiKeyId, BeginOptions, MethodAllow, ModelAllow, PrincipalBuilder, Scope};
+    let mut user = f.begin(subject).await;
+    let resolution = user.env().principal().resolution().as_ref().clone();
+    user.rollback().await.unwrap();
+    let key = ApiKeyId::new(key).unwrap();
+    let scope = Scope::builder(key, "Scoped MCP fixture")
+        .models(ModelAllow::named(["res.partner"]).unwrap())
+        .methods(MethodAllow::named(["read", "write", "unlink"]).unwrap())
+        .build()
+        .unwrap();
+    let principal = PrincipalBuilder::agent(user_ids(&[subject])[0], key)
+        .unwrap()
+        .resolution(resolution)
+        .companies(vec![company_id(f.main)])
+        .scope(scope)
+        .build()
+        .unwrap();
+    f.orm
+        .begin_opts(BeginOptions::for_principal(principal))
+        .await
+        .unwrap()
+}
+
+#[test]
+fn agent_approval_checks_defaults_discovery_and_the_exact_key() {
+    run(agent_approval_checks_defaults_discovery_and_the_exact_key_body);
+}
+
+async fn agent_approval_checks_defaults_discovery_and_the_exact_key_body() {
+    use erp_addon_base::approval_request::{Admission, Call, admit, assistant_visible};
+    use erp_orm::rpc::Effect;
+    use sha2::{Digest, Sha256};
+
+    let mut f = fixture().await;
+    let admin = f
+        .user("agent-config", &[f.main], &[f.group_system, f.group_user])
+        .await;
+    let subject = f.user("agent-owner", &[f.main], &[f.group_user]).await;
+    let reviewer = f.user("agent-reviewer", &[f.main], &[f.group_user]).await;
+    f.refresh().await;
+    let call = |method, effect| Call {
+        model: "res.partner",
+        method,
+        effect,
+        key: None,
+        payload: None,
+        binding: None,
+    };
+    let mut tx = agent_tx(&f, subject, 51).await;
+    assert!(matches!(
+        admit(&mut tx, call("read", Effect::Read)).await.unwrap(),
+        Admission::Dispatch
+    ));
+    assert_eq!(
+        admit(&mut tx, call("write", Effect::Write))
+            .await
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Access
+    );
+    assert!(
+        admit(&mut tx, call("unlink", Effect::Destructive))
+            .await
+            .is_err()
+    );
+    assert!(
+        !assistant_visible(&mut tx, "res.partner", "write", Effect::Write)
+            .await
+            .unwrap()
+    );
+    tx.rollback().await.unwrap();
+
+    let managed = |effect, outcome, method| {
+        select(
+            policy("agent rule", effect, outcome),
+            None,
+            Some("res.partner"),
+            Some(method),
+        )
+        .set_cell("principal_kind", Cell::Str("agent".into()))
+    };
+    let allow = f
+        .create(admin, managed("write", "allow", "write"))
+        .await
+        .unwrap();
+    let deny = f
+        .create(admin, managed("read", "deny", "read"))
+        .await
+        .unwrap();
+    let mut tx = agent_tx(&f, subject, 51).await;
+    assert!(matches!(
+        admit(&mut tx, call("write", Effect::Write)).await.unwrap(),
+        Admission::Dispatch
+    ));
+    assert_eq!(
+        admit(&mut tx, call("read", Effect::Read))
+            .await
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Access
+    );
+    assert!(
+        assistant_visible(&mut tx, "res.partner", "write", Effect::Write)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !assistant_visible(&mut tx, "res.partner", "read", Effect::Read)
+            .await
+            .unwrap()
+    );
+    tx.rollback().await.unwrap();
+    f.archive(admin, allow).await;
+    f.archive(admin, deny).await;
+    f.create(
+        admin,
+        approvers(managed("write", "approve", "write"), &[reviewer], &[]),
+    )
+    .await
+    .unwrap();
+
+    const KEY: &str = "019a0000-0000-7000-8000-000000000031";
+    let payload = [4; 32];
+    let mut first = agent_tx(&f, subject, 51).await;
+    assert!(
+        assistant_visible(&mut first, "res.partner", "write", Effect::Write)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        admit(&mut first, call("write", Effect::Write))
+            .await
+            .unwrap(),
+        Admission::KeyRequired
+    ));
+    let binding: [u8; 32] = Sha256::digest(first.env().principal().binding_bytes()).into();
+    assert!(matches!(
+        admit(
+            &mut first,
+            Call {
+                key: Some(KEY),
+                payload: Some(&payload),
+                binding: Some(&binding),
+                ..call("write", Effect::Write)
+            }
+        )
+        .await
+        .unwrap(),
+        Admission::Defer(_)
+    ));
+    first.commit().await.unwrap();
+    drop(first);
+
+    let mut other = agent_tx(&f, subject, 52).await;
+    let other_binding: [u8; 32] = Sha256::digest(other.env().principal().binding_bytes()).into();
+    let error = admit(
+        &mut other,
+        Call {
+            key: Some(KEY),
+            payload: Some(&payload),
+            binding: Some(&other_binding),
+            ..call("write", Effect::Write)
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    other.rollback().await.unwrap();
+    drop(other);
+    let Fixture { db, .. } = f;
+    db.cleanup().await.unwrap();
 }
 
 /// levels, exact company and all companies)
@@ -861,21 +1032,13 @@ async fn only_administrators_write_and_revisions_are_immutable_body() {
         "Approval policy revisions cannot be deleted; archive them instead.",
     );
     f.archive(admin, id).await;
-    // reactivating a user Approve revision is fenced; SQL restores the old state
-    let error = f
-        .write(
-            admin,
-            id,
-            RawVals::new().set_cell("active", Cell::Bool(true)),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
-    f.sql(
-        "UPDATE ir_approval_policy SET active = true WHERE id = $1",
-        &[&id],
+    f.write(
+        admin,
+        id,
+        RawVals::new().set_cell("active", Cell::Bool(true)),
     )
-    .await;
+    .await
+    .unwrap();
 
     // The write-time refusals: each names the revision, nothing persists.
     let before: i64 =
@@ -905,11 +1068,10 @@ async fn only_administrators_write_and_revisions_are_immutable_body() {
                 .to_owned(),
         ),
         (
-            policy("agent allow", "write", "allow")
-                .set_cell("principal_kind", Cell::Str("agent".into())),
-            "agent allow",
-            "an Allow exception for agent and service principals is not supported until accepts it (D2, a later release)."
-                .to_owned(),
+            policy("service allow", "write", "allow")
+                .set_cell("principal_kind", Cell::Str("service".into())),
+            "service allow",
+            "an Allow exception for service principals is unavailable.".to_owned(),
         ),
         (
             select(
@@ -1615,164 +1777,465 @@ async fn a_widened_approval_needs_an_approver_of_every_allowed_company_body() {
     f.db.cleanup().await.unwrap();
 }
 
-/// `true` when no active revision named `fenced` exists.
-async fn no_active_fenced_revision(f: &Fixture) -> bool {
-    let rows =
+#[test]
+fn approval_requests_bind_exact_calls_and_execute_as_the_requester() {
+    run(approval_request_flow);
+}
+
+#[test]
+fn managed_password_policy_resolves_after_waiting_on_a_policy_revision() {
+    run(|| async {
+        use erp_addon_base::ir_approval_policy::{
+            check_managed_password, prepare_managed_password,
+        };
+        use erp_orm::{BeginOptions, Isolation, rpc::Effect};
+        use std::time::Duration;
+
+        let mut f = fixture().await;
+        let admin = f
+            .user("policy-writer", &[f.main], &[f.group_system, f.group_user])
+            .await;
+        let subject = f
+            .user("managed-password-actor", &[f.main], &[f.group_user])
+            .await;
+        f.refresh().await;
+        let mut writer = f.begin(admin).await;
+        writer
+            .env()
+            .records(MODEL)
+            .unwrap()
+            .create(
+                &mut writer,
+                vec![select(
+                    policy("Deny password writes", "write", "deny"),
+                    Some(f.main),
+                    None,
+                    None,
+                )],
+            )
+            .await
+            .unwrap();
+
+        let orm = f.orm.clone();
+        let (started, process) = tokio::sync::oneshot::channel();
+        let checked = tokio::spawn(async move {
+            let mut tx = orm
+                .begin_opts(
+                    BeginOptions::new(SUPERUSER_ID)
+                        .isolation(Isolation::ReadCommitted)
+                        .on_primary(),
+                )
+                .await
+                .unwrap();
+            let pid: i32 = tx.query("SELECT pg_backend_pid()", &[]).await.unwrap()[0].get(0);
+            started.send(pid).unwrap();
+            prepare_managed_password(&mut tx).await.unwrap();
+            let result = check_managed_password(
+                &mut tx,
+                UserId::new(subject).unwrap(),
+                "res.users",
+                "change_password",
+                Effect::Write,
+            )
+            .await;
+            tx.rollback().await.unwrap();
+            result
+        });
+        let pid = process.await.unwrap();
+        let observer = f.db.client().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let waiting: bool = observer.query_one(
+                    "SELECT COALESCE((SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid=$1), false)",
+                    &[&pid],
+                ).await.unwrap().get(0);
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        writer.commit().await.unwrap();
+        drop(writer);
+        let error = checked.await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access);
+        drop(observer);
+        let Fixture { db, .. } = f;
+        db.cleanup().await.unwrap();
+    });
+}
+
+struct ApprovalHost;
+
+impl erp_rpc::RpcHost for ApprovalHost {
+    fn language_active(&self, code: &str) -> erp_fields::Result<bool> {
+        Ok(code == "en_US")
+    }
+
+    fn has_capability(
+        &self,
+        _: &erp_orm::Principal,
+        _: &erp_orm::Capability,
+    ) -> erp_fields::Result<bool> {
+        Ok(false)
+    }
+}
+
+async fn approval_rpc(
+    f: &Fixture,
+    service: &erp_rpc::RpcService,
+    user: i64,
+    path: &str,
+    body: serde_json::Value,
+    key: Option<&str>,
+) -> erp_rpc::RpcResponse {
+    let mut tx = f.begin(user).await;
+    let principal = tx.env().principal().clone();
+    tx.rollback().await.unwrap();
+    let mut call = erp_rpc::RpcCall::json2(
+        path,
+        serde_json::to_vec(&body).unwrap(),
+        erp_rpc::Caller::Principal(principal),
+    );
+    if let Some(key) = key {
+        call = call.idempotency_key(
+            erp_rpc::IdempotencyKey::from_headers(&[key])
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    service.call(call).await
+}
+
+async fn approval_request_flow() {
+    use serde_json::{Value as Json, json};
+    let mut f = fixture().await;
+    let mut audit = f
+        .setup
+        .begin_opts(
+            erp_orm::BeginOptions::new(SUPERUSER_ID)
+                .isolation(erp_orm::Isolation::ReadCommitted)
+                .on_primary(),
+        )
+        .await
+        .unwrap();
+    audit.install_audit_schema().await.unwrap();
+    audit.batch(erp_rpc::IDEMPOTENCY_DDL).await.unwrap();
+    audit.commit().await.unwrap();
+    drop(audit);
+
+    let admin = f
+        .user("approval-admin", &[f.main], &[f.group_system, f.group_user])
+        .await;
+    let requester = f
+        .user(
+            "approval-requester",
+            &[f.main],
+            &[f.group_system, f.group_user],
+        )
+        .await;
+    let reviewer = f
+        .user("approval-reviewer", &[f.main], &[f.group_user])
+        .await;
+    let partner = f
+        .record(
+            "res.partner",
+            RawVals::new().set_cell("name", Cell::Str("Before approval".into())),
+        )
+        .await;
+    f.refresh().await;
+    let policy_id = f
+        .create(
+            admin,
+            approvers(
+                select(
+                    policy("Partner write approval", "write", "approve"),
+                    None,
+                    Some("res.partner"),
+                    Some("write"),
+                ),
+                &[reviewer],
+                &[],
+            ),
+        )
+        .await
+        .unwrap();
+    let service =
+        erp_rpc::RpcService::new(f.orm.clone(), ApprovalHost, erp_rpc::RpcConfig::default())
+            .attempt_gate(erp_cli::approval_rpc::ApprovalGate);
+    const WRITE: &str = "/json/2/res.partner/write";
+    const DECIDE: &str = "/json/2/ir.approval.request/erp_decide";
+    const STATUS: &str = "/json/2/ir.approval.request/erp_status";
+    const FIRST: &str = "019a0000-0000-7000-8000-000000000001";
+    const SECOND: &str = "019a0000-0000-7000-8000-000000000002";
+    const THIRD: &str = "019a0000-0000-7000-8000-000000000003";
+    let values = |name| json!({"ids":[partner],"vals":{"name":name}});
+    let body =
+        |response: &erp_rpc::RpcResponse| serde_json::from_slice::<Json>(response.body()).unwrap();
+    let pending_id = |response: &erp_rpc::RpcResponse| {
+        assert_eq!(response.status(), 409, "{}", body(response));
+        let id = body(response)["context"]["approval_request_id"]
+            .as_i64()
+            .unwrap();
+        assert_eq!(response.approval_request_id(), Some(id));
+        id
+    };
+    let id = pending_id(
+        &approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("After approval"),
+            Some(FIRST),
+        )
+        .await,
+    );
+    assert_eq!(
+        pending_id(
+            &approval_rpc(
+                &f,
+                &service,
+                requester,
+                WRITE,
+                values("After approval"),
+                Some(FIRST)
+            )
+            .await
+        ),
+        id
+    );
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Tampered"),
+            Some(FIRST)
+        )
+        .await
+        .status(),
+        409
+    );
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            DECIDE,
+            json!({"request_id":id,"approve":true}),
+            None
+        )
+        .await
+        .status(),
+        403
+    );
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            reviewer,
+            DECIDE,
+            json!({"request_id":id,"approve":true}),
+            None
+        )
+        .await
+        .status(),
+        200
+    );
+    // A decision does not keep its authority after the approver loses a required company.
+    f.sql(
+        "DELETE FROM res_company_users_rel WHERE user_id = $1 AND cid = $2",
+        &[&reviewer, &f.main],
+    )
+    .await;
+    let no_longer_eligible = approval_rpc(
+        &f,
+        &service,
+        requester,
+        WRITE,
+        values("After approval"),
+        Some(FIRST),
+    )
+    .await;
+    assert_eq!(
+        no_longer_eligible.status(),
+        422,
+        "{}",
+        body(&no_longer_eligible)
+    );
+    f.sql(
+        "INSERT INTO res_company_users_rel (user_id, cid) VALUES ($1, $2)",
+        &[&reviewer, &f.main],
+    )
+    .await;
+    let dispatched = approval_rpc(
+        &f,
+        &service,
+        requester,
+        WRITE,
+        values("After approval"),
+        Some(FIRST),
+    )
+    .await;
+    assert_eq!(dispatched.status(), 200, "{}", body(&dispatched));
+    assert!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("After approval"),
+            Some(FIRST)
+        )
+        .await
+        .replayed()
+    );
+    let receipt = approval_rpc(
+        &f,
+        &service,
+        requester,
+        STATUS,
+        json!({"request_id":id}),
+        None,
+    )
+    .await;
+    let receipt = body(&receipt);
+    assert_eq!(receipt["state"], "executed");
+    let operation = receipt["operation"].as_str().unwrap();
+    let row =
         f.db.client()
             .await
             .unwrap()
-            .query(
-                "SELECT id::int8 FROM ir_approval_policy WHERE name = 'fenced' AND active",
-                &[],
+            .query_one(
+                "SELECT name, write_uid::int8 FROM res_partner WHERE id=$1",
+                &[&partner],
             )
             .await
             .unwrap();
-    rows.is_empty()
-}
+    assert_eq!(row.get::<_, String>(0), "After approval");
+    assert_eq!(row.get::<_, i64>(1), requester);
+    let evidence =
+        f.db.client()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT subject_id, model, method FROM erp_event.ir_audit_entry
+         WHERE operation_id = $1::text::uuid AND origin = 'rpc' AND outcome = 'committed'",
+                &[&operation],
+            )
+            .await
+            .unwrap();
+    assert_eq!(evidence.get::<_, i64>(0), requester);
+    assert_eq!(evidence.get::<_, &str>(1), "res.partner");
+    assert_eq!(evidence.get::<_, &str>(2), "write");
 
-const FENCED_TAIL: &str = "is not available yet in this release. Save the revision archived to \
-                           prepare it.";
-
-#[test]
-fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists() {
-    run(an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists_body);
-}
-
-async fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists_body() {
-    let f = fixture().await;
-    let admin = f
-        .user("fence-admin", &[f.main], &[f.group_user, f.group_system])
-        .await;
-    let approver = f.user("fence-approver", &[f.main], &[f.group_user]).await;
-    let fenced = |name: &str, id: i64| {
-        format!(
-            "Approval policy revision '{name}' (id {id}): requiring approval for or denying calls \
-             of users {FENCED_TAIL}"
+    let denied = pending_id(
+        &approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Denied"),
+            Some(SECOND),
         )
-    };
-    let wanted = |outcome: &str| {
-        let vals = select(
-            policy("fenced", "write", outcome),
-            None,
-            Some("res.partner"),
-            None,
-        );
-        if outcome == "approve" {
-            approvers(vals, &[approver], &[])
-        } else {
-            vals
-        }
-    };
-
-    for outcome in ["approve", "deny"] {
-        // create active: refused (the error names the row it inserted, then the transaction rolls back)
-        let error = f.create(admin, wanted(outcome)).await.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Validation, "{outcome}: {error}");
-        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
-        assert!(no_active_fenced_revision(&f).await);
-
-        // archived: created, stays archived; activating it (write or action_unarchive) is refused
-        let id = f
-            .create(admin, wanted(outcome).set_cell("active", Cell::Bool(false)))
-            .await
-            .unwrap();
-        let error = f
-            .write(
-                admin,
-                id,
-                RawVals::new().set_cell("active", Cell::Bool(true)),
-            )
-            .await
-            .unwrap_err();
-        validation(&error, &fenced("fenced", id));
-        let mut tx = f.begin(admin).await;
-        let archived = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
-        let error = archived.action_unarchive(&mut tx).await.unwrap_err();
-        tx.rollback().await.unwrap();
-        assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
-        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
-        assert!(no_active_fenced_revision(&f).await);
-        // a copy of the archived revision that asks for `active = true` reaches the fence (a copy
-        // of an active row meets the selector tie first)
-        let mut tx = f.begin(admin).await;
-        let archived = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
-        let defaults = erp_fields::ValueMap::from_iter([("active".to_owned(), Value::Bool(true))]);
-        let error = archived.copy(&mut tx, Some(defaults)).await.unwrap_err();
-        tx.rollback().await.unwrap();
-        assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
-        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
-        assert!(no_active_fenced_revision(&f).await);
-        // revisions are never deleted through the model; SQL clears the row for the next round
-        f.sql("DELETE FROM ir_approval_policy WHERE id = $1", &[&id])
-            .await;
-    }
-
-    // the superuser is not exempt
-    let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
-    let error = tx
-        .env()
-        .records(MODEL)
-        .unwrap()
-        .create(&mut tx, vec![wanted("deny")])
+        .await,
+    );
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            reviewer,
+            DECIDE,
+            json!({"request_id":denied,"approve":false}),
+            None
+        )
         .await
-        .unwrap_err();
-    tx.rollback().await.unwrap();
-    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
-    assert!(error.message().ends_with(FENCED_TAIL), "{error}");
-
-    // a data file is not exempt: the loader reaches the model's create
-    let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
-    let mut session = erp_data::load::LoadSession::new(erp_data::load::SessionOptions::new(
-        "20.0",
-        Arc::new(erp_data::load::NoFiles),
-    ));
-    session.begin_operation(["base"]).unwrap();
-    let operations = erp_data::parse_xml_str(
-        "<erp><record id=\"fenced_by_file\" model=\"ir.approval.policy\">\
-         <field name=\"name\">fenced</field><field name=\"principal_kind\">user</field>\
-         <field name=\"effect\">write</field><field name=\"outcome\">deny</field></record></erp>",
-        "fenced.xml",
-        "base",
-        false,
+        .status(),
+        200
+    );
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Denied"),
+            Some(SECOND)
+        )
+        .await
+        .status(),
+        403
+    );
+    let expiring = pending_id(
+        &approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Expired"),
+            Some(THIRD),
+        )
+        .await,
+    );
+    let decision = json!({"request_id":expiring,"approve":true});
+    let approved = approval_rpc(&f, &service, reviewer, DECIDE, decision.clone(), None).await;
+    assert_eq!(body(&approved)["state"], "approved");
+    f.sql(
+        "UPDATE ir_approval_request SET expires_at = clock_timestamp() - interval '1 second'
+         WHERE id=$1",
+        &[&expiring],
     )
-    .unwrap();
-    let mut operations = operations.into_iter().map(Ok);
-    let file =
-        erp_data::load::FileContext::new("base", "fenced.xml", erp_data::ConvertMode::Update);
-    let error = Box::pin(session.load_file(&mut tx, &file, &mut operations))
+    .await;
+    let expired = approval_rpc(
+        &f,
+        &service,
+        requester,
+        STATUS,
+        json!({"request_id":expiring}),
+        None,
+    )
+    .await;
+    assert_eq!(body(&expired)["state"], "expired");
+    assert_eq!(body(&expired)["can_decide"], false);
+    let duplicate_decision = approval_rpc(&f, &service, reviewer, DECIDE, decision, None).await;
+    assert_eq!(body(&duplicate_decision)["state"], "expired");
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Expired"),
+            Some(THIRD)
+        )
         .await
-        .unwrap_err();
-    assert_eq!(error.orm_kind(), Some(ErrorKind::Validation), "{error}");
-    match error.kind() {
-        erp_data::load::LoadErrorKind::Orm(error) => {
-            assert!(error.message().ends_with(FENCED_TAIL), "{error}");
-        }
-        other => panic!("expected the model's refusal, got {other:?}"),
-    }
-    tx.rollback().await.unwrap();
-    assert!(no_active_fenced_revision(&f).await);
-
-    // a database that already holds an active one (made by SQL): a copy is never active, archiving
-    // is allowed, and every other combination is created
-    let old = f.create_unfenced(admin, wanted("approve")).await.unwrap();
-    let mut tx = f.begin(admin).await;
-    let source = tx.env().records(MODEL).unwrap().browse([old]).unwrap();
-    let error = source.copy(&mut tx, None).await.unwrap_err();
-    tx.rollback().await.unwrap();
-    // a copy of an ACTIVE row meets the selector tie first (the fence is covered above, on the
-    // archived row): one outcome, a refusal
-    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
-    f.archive(admin, old).await;
-    assert!(no_active_fenced_revision(&f).await);
-    f.create(admin, policy("fenced", "write", "allow"))
-        .await
-        .unwrap();
-    f.create(
+        .status(),
+        409
+    );
+    f.write(
         admin,
-        policy("fenced agent", "write", "deny")
-            .set_cell("principal_kind", Cell::Str("agent".into())),
+        policy_id,
+        RawVals::new().set_cell("active", Cell::Bool(false)),
     )
     .await
     .unwrap();
-    f.db.cleanup().await.unwrap();
+    assert_eq!(
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Expired"),
+            Some(THIRD)
+        )
+        .await
+        .status(),
+        409,
+        "archiving the policy cannot reopen a reserved approval key"
+    );
+    drop(service);
+    let Fixture { db, .. } = f;
+    db.cleanup().await.unwrap();
 }

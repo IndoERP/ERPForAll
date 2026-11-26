@@ -695,7 +695,7 @@ test("systray user menu displays company and CSRF-protected logout", async () =>
   expect(header.querySelector(".company-menu-name")?.textContent).not.toBe("");
   const rowLabels = [...dropdown.querySelectorAll(".user-menu-row")].map(row => row.textContent ?? "");
   expect(rowLabels[0]).toContain("Shortcuts");
-  expect(rowLabels.slice(1)).toEqual(["My preferences", "Sign out"]);
+  expect(rowLabels.slice(1)).toEqual(["My preferences", "Review approval", "Sign out"]);
 
   const logoutForm = dropdown.querySelector<HTMLFormElement>("form")!;
   expect(logoutForm.action).toContain("/erp/session/logout");

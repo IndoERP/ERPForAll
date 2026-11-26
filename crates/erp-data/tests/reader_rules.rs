@@ -2022,3 +2022,38 @@ fn csv_header_pragma_physical_line_numbering() {
         format!("{prefix}line 3: row has 1 columns, expected 2")
     );
 }
+
+#[test]
+fn xml_record_protection_requires_an_external_id() {
+    let operations = parse_xml_str(
+        r#"<erp>
+            <record id="plain" model="x.test"/>
+            <record id="master" model="x.test" protect="1"/>
+            <record id="released" model="x.test" protect="0"/>
+        </erp>"#,
+        "records.xml",
+        "x",
+        false,
+    )
+    .unwrap();
+    let declarations: Vec<_> = operations
+        .iter()
+        .filter_map(|op| match op {
+            DataOperation::Record(record) => Some(record.protect()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(declarations, [None, Some(true), Some(false)]);
+    let anonymous = parse_xml_str(
+        r#"<erp><record model="x.test" protect="1"/></erp>"#,
+        "records.xml",
+        "x",
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        anonymous
+            .to_string()
+            .contains("'protect' on <record> requires an 'id'")
+    );
+}

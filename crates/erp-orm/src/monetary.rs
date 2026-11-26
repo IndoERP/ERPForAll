@@ -1370,9 +1370,15 @@ pub(crate) async fn normalize(
                 }
             };
             if let Some(id) = id {
-                if id.is_new() {
+                let known_draft_currency = || {
+                    stage.ids.is_some_and(|ids| ids[i].is_new())
+                        && tx.registry().model("res.currency").is_some_and(|currency| {
+                            tx.engine.new_records.get(&id) == Some(&currency.id)
+                        })
+                };
+                if id.is_new() && !known_draft_currency() {
                     return Err(Error::programming(format!(
-                        "Cannot normalize {}.{} using an in-memory currency until a later release",
+                        "Cannot normalize {}.{} using an in-memory currency outside a known draft",
                         stage.spec.name, fs.name,
                     )));
                 }

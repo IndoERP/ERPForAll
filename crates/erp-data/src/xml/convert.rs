@@ -322,7 +322,7 @@ pub(crate) fn operation(
 
 // ---------------------------------------------------------------- record and field
 
-const RECORD_ATTRS: &[&str] = &["id", "model", "forcecreate", "uid", "context"];
+const RECORD_ATTRS: &[&str] = &["id", "model", "forcecreate", "protect", "uid", "context"];
 
 fn record(cx: &Cx<'_>, node: &Node, container: &OpEnv) -> Result<RecordOp, ParseError> {
     check_attrs(cx, node, RECORD_ATTRS)?;
@@ -335,6 +335,10 @@ fn record(cx: &Cx<'_>, node: &Node, container: &OpEnv) -> Result<RecordOp, Parse
         ));
     }
     let forcecreate = bool_attr(cx, node, "forcecreate")?;
+    let protect = bool_attr(cx, node, "protect")?;
+    if protect.is_some() && id.is_none() {
+        return Err(cx.conflict(node, "'protect' on <record> requires an 'id'"));
+    }
     let uid = opt_xml_id(cx, node, "uid")?;
     let context = opt(node, "context").map(Expr::new);
     no_text(cx, node)?;
@@ -357,6 +361,7 @@ fn record(cx: &Cx<'_>, node: &Node, container: &OpEnv) -> Result<RecordOp, Parse
         id,
         model,
         forcecreate,
+        protect,
         fields,
         translations,
         env: container.with_own(uid, context),

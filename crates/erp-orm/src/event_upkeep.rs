@@ -12,8 +12,8 @@
 //! is [`crate::OrmConfig::partition_lock_timeout`]: `CREATE TABLE ... PARTITION OF` locks the
 //! parent, so live inserts queue behind it for at most that long, and a wait cut by the timeout
 //! is the reported outcome [`EventTableUpkeep::Busy`], retried at the next tick. A table that is
-//! not installed is reported, not an error. Nothing is retired here: both tables keep every
-//! partition until the retention slice.
+//! not installed is reported, not an error. This upkeep creates partitions. The owner-side
+//! outbox retention API separately deletes acknowledged rows in bounded batches.
 
 use erp_fields::{Error, Result};
 

@@ -227,7 +227,8 @@ pub type WriteHookFn = for<'a> fn(&'a mut Transaction, &'a WriteBatch) -> BoxFut
 
 /// A hook on the writes of some fields of a model (design note §4.4; and
 /// register theirs): every flush `UPDATE` and upsert update of those fields returns their old
-/// values in the same statement and passes them to the hook. Register it with
+/// values in the same statement and passes them to the hook. For company-dependent fields the
+/// values are projected in each row's writing company. Register it with
 /// [`crate::OrmBuilder::write_hook`].
 #[derive(Clone, Copy)]
 #[non_exhaustive]
@@ -383,14 +384,6 @@ impl WriteHooks {
                         hook.model
                     ))
                 })?;
-                if field.company_dependent {
-                    return Err(crate::company_dependent_runtime::unsupported(
-                        spec.name,
-                        field.name,
-                        "write-hook registration",
-                        crate::company_dependent_runtime::Owner::Hooks,
-                    ));
-                }
                 if field.inherited.is_some() || field.column().is_none() {
                     return Err(Error::programming(format!(
                         "write hook on '{}': field '{name}' is not a column of the model's own \

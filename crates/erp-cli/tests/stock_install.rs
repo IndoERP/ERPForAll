@@ -138,6 +138,76 @@ async fn strings(orm: &Orm, sql: &str) -> Vec<String> {
     rows.iter().map(|row| row.get::<_, String>(0)).collect()
 }
 
+#[test]
+fn package_date_default_uses_the_active_company_across_the_date_line() {
+    run(async {
+        use erp_fields::Value;
+        use erp_orm::BeginOptions;
+        let db = TestDb::create().await.unwrap();
+        let orm = install(&db).await;
+        let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+        let companies = setup.env().records("res.company").unwrap();
+        let currency: i64 = setup
+            .query(
+                "SELECT currency_id FROM res_company ORDER BY id LIMIT 1",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        let zones = ["Pacific/Kiritimati", "Pacific/Pago_Pago"];
+        let mut ids = Vec::new();
+        for zone in zones {
+            ids.push(
+                companies
+                    .create(
+                        &mut setup,
+                        vec![
+                            RawVals::new()
+                                .set_cell("name", Cell::Str(zone.into()))
+                                .set_cell("tz", Cell::Str(zone.into()))
+                                .set_cell("currency_id", Cell::Id(currency)),
+                        ],
+                    )
+                    .await
+                    .unwrap()
+                    .ids()[0],
+            );
+        }
+        setup.commit().await.unwrap();
+        let mut days = Vec::new();
+        for (company, zone) in ids.into_iter().zip(zones) {
+            let context =
+                Context::from_pairs([("allowed_company_ids", Value::list([Value::Int(company)]))]);
+            let mut tx = orm
+                .begin_opts(BeginOptions::new(SUPERUSER_ID).context(context))
+                .await
+                .unwrap();
+            let packages = tx.env().records("stock.package").unwrap();
+            let defaults: erp_fields::ValueMap = packages
+                .call(&mut tx, "default_get", (vec!["pack_date".to_owned()],))
+                .await
+                .unwrap();
+            let Value::Date(default) = defaults["pack_date"] else {
+                panic!("expected a local package date")
+            };
+            let row = tx
+                .query(
+                    "SELECT ((transaction_timestamp() AT TIME ZONE $1)::date)::text",
+                    &[&zone],
+                )
+                .await
+                .unwrap();
+            assert_eq!(default.to_string(), row[0].get::<_, &str>(0));
+            days.push(default);
+            tx.rollback().await.unwrap();
+        }
+        assert_ne!(days[0], days[1]);
+        drop(setup);
+        db.cleanup().await.unwrap();
+    });
+}
+
 /// one topology version row at generation 0; generated warehouse roles, a second install pass and
 /// extension retirement come with the warehouse and route slices)
 /// the raw-insert trigger, the verifier and the usage-change refusals come later)

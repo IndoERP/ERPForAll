@@ -110,6 +110,61 @@ async fn bigint_database_roundtrip_keeps_zero_and_full_width() {
 }
 
 #[tokio::test]
+async fn nullable_bigint_export_distinguishes_missing_zero_and_exact_values() {
+    use erp_data::{ImpexExt, SuperuserOnly};
+
+    let h = Harness::builder([&base_users::ADDON, &fixture::ADDON])
+        .build()
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    let records = tx
+        .env()
+        .model::<fixture::Counter>()
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                Vals::new(),
+                Vals::new().set(fixture::Counter::OPTIONAL, Some(BigInt::from_i64(0))),
+                Vals::new().set(fixture::Counter::OPTIONAL, Some(BigInt::from_i64(i64::MAX))),
+            ],
+        )
+        .await
+        .unwrap();
+    let export = records
+        .as_records()
+        .export_data(&mut tx, &["optional"], &SuperuserOnly)
+        .await
+        .unwrap();
+    assert_eq!(
+        export.datas,
+        [
+            vec![Value::str("")],
+            vec![Value::str("0")],
+            vec![Value::str(i64::MAX.to_string())],
+        ]
+    );
+    for aggregate in ["optional:count", "optional:min", "optional:sum"] {
+        let error = records
+            .as_records()
+            ._read_group(
+                &mut tx,
+                erp_orm::ReadGroup::new(Domain::TRUE).aggregates([aggregate]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Programming);
+        assert_eq!(
+            error.message(),
+            "test.bigint.optional: bigint aggregation requires a later release"
+        );
+    }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
 async fn bigint_search_and_cached_predicates_agree_without_lexical_order() {
     let h = Harness::builder([&base_users::ADDON, &fixture::ADDON])
         .build()

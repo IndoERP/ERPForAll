@@ -34,12 +34,14 @@ pub mod cooldown_policy;
 pub mod credential;
 mod dummy;
 pub mod emergency;
+pub mod external;
 pub mod gc;
 pub mod gc_schedule;
 pub mod hooks;
 pub mod login;
 pub mod password;
 pub mod pool;
+mod post_login;
 pub mod retry;
 pub mod schema;
 pub mod secret;
@@ -70,11 +72,12 @@ pub use login::{
     Auth, AuthStats, COOLDOWN_MESSAGE, ClientAddr, IdentityCheck, Login, LoginDomain, LoginError,
     LoginLookup, LoginOrder, LoginOrderTerm, LoginRequest, LoginSelectionContext,
     LoginSelectionLimits, NewSession, OrderDirection, PasswordAuthorization, PasswordReset,
-    SESSIONS_PER_USER, SelectionWitness, SessionAuthorization, SessionBegin, SettingsView,
-    missing_reset_target,
+    PasswordTransactionAuthorization, SESSIONS_PER_USER, SelectionWitness, SessionAuthorization,
+    SessionBegin, SettingsView, missing_reset_target, validate_login_plan,
 };
 pub use password::{CostComparison, HashParams, PasswordError, Scheme, StoredHash};
 pub use pool::{HashPool, HashPoolConfig, HashPoolError, HashPoolStats};
+pub use post_login::SessionLogin;
 pub use retry::DeadlockRetries;
 pub use schema::{check_orm, core_tables};
 pub use session::{CheckedSession, Refusal, SessionId, SessionSecret, Touch};

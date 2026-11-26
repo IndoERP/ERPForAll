@@ -74,6 +74,17 @@ pub fn select_spec(
     columns: &[FieldId],
     clauses: &SearchSql<'_>,
 ) -> String {
+    select_spec_projected(registry, spec, columns, &[], clauses)
+}
+
+/// A model search that also selects scalar expressions produced by the SQL compilers.
+pub fn select_spec_projected(
+    registry: &Registry,
+    spec: &ModelSpec,
+    columns: &[FieldId],
+    expressions: &[(&str, erp_fields::ColumnType)],
+    clauses: &SearchSql<'_>,
+) -> String {
     let mut out = String::with_capacity(
         64 + spec.quoted_table().len() * (columns.len() + 2) + columns.len() * 20,
     );
@@ -91,6 +102,10 @@ pub fn select_spec(
             Some(item) => out.push_str(&item),
             None => out.push_str(&column),
         }
+    }
+    for (expression, _) in expressions {
+        out.push_str(", ");
+        out.push_str(expression);
     }
     out.push_str(" FROM ");
     out.push_str(spec.quoted_table());
@@ -117,6 +132,24 @@ pub fn selection_catalog(
     let table = spec.quoted_table();
     let key = spec.field_by_id(fields[0]).quoted_name();
     let label = spec.field_by_id(fields[1]).quoted_name();
+    selection_catalog_projected(
+        spec,
+        [&format!("{table}.{key}"), &format!("{table}.{label}")],
+        clauses,
+        byte_parameter,
+        pair_parameter,
+    )
+}
+
+/// Bounded selection catalog over two stored scalar expressions from the SQL compilers.
+pub fn selection_catalog_projected(
+    spec: &ModelSpec,
+    [key, label]: [&str; 2],
+    clauses: &SearchSql<'_>,
+    byte_parameter: usize,
+    pair_parameter: usize,
+) -> String {
+    let table = spec.quoted_table();
     let order = clauses.order.unwrap_or("");
     let order = if order.is_empty() {
         format!("{table}.\"id\"")
@@ -124,7 +157,7 @@ pub fn selection_catalog(
         format!("{order}, {table}.\"id\"")
     };
     let mut sql = format!(
-        "WITH candidates AS MATERIALIZED (SELECT {table}.{key} AS k, {table}.{label} AS l, row_number() OVER (ORDER BY {order}) AS pos FROM {table}"
+        "WITH candidates AS MATERIALIZED (SELECT {key} AS k, {label} AS l, row_number() OVER (ORDER BY {order}) AS pos FROM {table}"
     );
     if let Some(joins) = clauses.joins {
         sql.push_str(joins);

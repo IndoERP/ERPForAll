@@ -1,6 +1,7 @@
 //! Login selection types, validation and contracts for dispatched `_get_login_domain`
 //! and `_get_login_order` hooks (H58 login selection).
 
+use super::{TokenPlan, TokenValues};
 use erp_domain::{Condition, Domain, DomainKind, Operator, Value};
 use erp_fields::{Error, FieldType, Result};
 use erp_orm::{Transaction, UserId};
@@ -33,7 +34,7 @@ pub struct LoginSelectionLimits {
 }
 
 /// The candidate user record selected by candidate selection:
-/// `(uid, stored_password, lang, tz, canonical_login, witness)`. The stored hash and the
+/// `(uid, stored_password, lang, tz, canonical_login, witness, token fields)`. The stored hash and the
 /// canonical login are [`Zeroizing`] so the copies handed to the login attempt are wiped when it
 /// ends, like the witness's own (LD3).
 pub(super) type CandidateRecord = (
@@ -43,6 +44,7 @@ pub(super) type CandidateRecord = (
     Option<String>,
     Zeroizing<String>,
     SelectionWitness,
+    TokenValues,
 );
 
 impl Default for LoginSelectionLimits {
@@ -690,6 +692,7 @@ impl LoginSelectionPlan {
         &self,
         env: &erp_orm::Env,
         limits: &LoginSelectionLimits,
+        token: &TokenPlan,
     ) -> Result<(String, Vec<DynamicParam>)> {
         use erp_sql::filter::{Unaccent, WhereContext, compile_where};
         let registry = env.registry();
@@ -744,7 +747,8 @@ impl LoginSelectionPlan {
             ));
         }
         sql.push_str(&format!(
-            ", ({admitted}) FROM res_users u WHERE u.active AND ({}) ORDER BY ",
+            ", ({admitted}){} FROM res_users u WHERE u.active AND ({}) ORDER BY ",
+            token.select_list("u"),
             filter.sql.replace("\"res_users\".", "u.")
         ));
         for (i, term) in self.order.terms().iter().enumerate() {
@@ -823,9 +827,10 @@ pub(super) async fn select_candidate(
     tx: &mut Transaction,
     plan: &LoginSelectionPlan,
     limits: &LoginSelectionLimits,
+    token: &TokenPlan,
 ) -> Result<Option<CandidateRecord>> {
     let env = tx.env();
-    let (sql, params) = plan.compile_sql(&env, limits)?;
+    let (sql, params) = plan.compile_sql(&env, limits, token)?;
     let param_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p.as_to_sql()).collect();
     let rows = tx.query(&sql, &param_refs).await?;
     let Some(row) = rows.first() else {
@@ -880,7 +885,16 @@ pub(super) async fn select_candidate(
     };
     witness.validate_size(limits.max_witness_bytes)?;
 
-    Ok(Some((uid, stored_hash, lang, tz, canonical_login, witness)))
+    let extra = token.read_values(row, 7 + plan.dependencies.len())?;
+    Ok(Some((
+        uid,
+        stored_hash,
+        lang,
+        tz,
+        canonical_login,
+        witness,
+        extra,
+    )))
 }
 
 /// Witness of the selected candidate and plan.

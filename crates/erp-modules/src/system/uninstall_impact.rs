@@ -1,5 +1,6 @@
 //! Bounded, schema-only confirmed uninstall. One immutable plan governs digest and effects.
 use super::*;
+use erp_data::RECORD_PROTECTION_BINDING_TABLE;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -503,7 +504,9 @@ impl ModuleSystem {
                     "row-security membership source '{name}'"
                 )));
             }
-            if kind != "r" {
+            // The protection root is a private partitioned table, with every ordinary child
+            // locked by the same inventory. It can protect records unrelated to this removal.
+            if kind != "r" && (kind != "p" || name != RECORD_PROTECTION_BINDING_TABLE) {
                 return Err(unsupported(format!(
                     "partitioned or foreign table '{name}'"
                 )));
@@ -1634,6 +1637,30 @@ async fn check_database_effects(
         else {
             continue;
         };
+        if target == "ir_model_data"
+            && source_schema == schema
+            && constraint == "erp_record_protection_binding"
+            && (source == RECORD_PROTECTION_BINDING_TABLE
+                || source
+                    .strip_prefix(RECORD_PROTECTION_BINDING_TABLE)
+                    .is_some_and(|suffix| suffix.starts_with('_')))
+        {
+            let references = tx
+                .query(
+                    &format!(
+                        "SELECT EXISTS (SELECT FROM {} WHERE xid_id OPERATOR(pg_catalog.=) ANY($1))",
+                        qualified(schema, &source)
+                    ),
+                    &[&deletion.ids],
+                )
+                .await?;
+            if references[0].try_get::<_, bool>(0).map_err(shape)? {
+                return Err(unsupported(
+                    "releasing addon record protection through the data loader",
+                ));
+            }
+            continue;
+        }
         let source_keys: Vec<i16> = fk.try_get(5).map_err(shape)?;
         let target_keys: Vec<i16> = fk.try_get(6).map_err(shape)?;
         let source_column: Option<String> = fk.try_get(7).map_err(shape)?;

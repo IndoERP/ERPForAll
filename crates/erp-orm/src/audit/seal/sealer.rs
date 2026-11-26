@@ -132,9 +132,10 @@ impl Transaction {
         // markers retain the first excluded/invalid row; later small rows cannot fill a gap.
         // The text cursor is aliased xid_text and the final ORDER BY is qualified: a bare `xid` there
         // would bind to a `xid::text` output column and sort decimal text ("100" < "99").
+        let source = super::super::retention::evidence_source(self).await?;
         let sql=format!("WITH candidates AS MATERIALIZED (
-            SELECT tableoid AS relation_id,ctid AS tuple_id,id,xid,encoded_bytes
-            FROM erp_event.ir_audit_entry
+            SELECT source_relation AS relation_id,source_tuple AS tuple_id,id,xid,encoded_bytes
+            FROM {source}
             WHERE (xid,id)>($1::text::xid8,$2) AND xid<pg_catalog.pg_snapshot_xmin(pg_catalog.pg_current_snapshot())
             ORDER BY xid,id LIMIT ($3::bigint+1)
         ), estimates AS (
@@ -147,7 +148,7 @@ impl Transaction {
                 OR (stored_total-CASE WHEN encoded_bytes>0 THEN encoded_bytes::bigint ELSE 0 END)<=$4::bigint)
         ), payloads AS (
             SELECT e.xid,e.id,e.encoded_bytes,e.stored_total,e.bad_estimate,e.cursor_count,pg_catalog.row_to_json(p)::text AS payload
-            FROM prefix e JOIN erp_event.ir_audit_entry a ON a.tableoid=e.relation_id AND a.ctid=e.tuple_id
+            FROM prefix e JOIN {source} a ON a.source_relation=e.relation_id AND a.source_tuple=e.tuple_id
             CROSS JOIN LATERAL (SELECT {}) p
         ), sizes AS (
             SELECT *,pg_catalog.octet_length(payload)::bigint AS payload_bytes FROM payloads

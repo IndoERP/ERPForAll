@@ -18,6 +18,11 @@ static NOTE: AddonDescriptor = AddonDescriptor {
     depends: &["base"],
     exact_only: false,
 };
+static KEEPER: AddonDescriptor = AddonDescriptor {
+    name: "keeper",
+    depends: &["base"],
+    exact_only: false,
+};
 struct Authorizer {
     deny: bool,
     uid: i64,
@@ -52,9 +57,18 @@ async fn preview_is_read_only_and_confirmed_uninstall_drops_exact_model() {
     let db = TestDb::create().await.unwrap();
     let addons = Addons::new();
     addons.add("note", "name='Note'\ndepends=['base']\n");
+    addons.add(
+        "keeper",
+        "name='Keeper'\ndepends=['base']\ndata=['data/keep.xml']\n",
+    );
+    addons.file(
+        "keeper",
+        "data/keep.xml",
+        r#"<erp><record id="kept" model="test.kept" protect="1"/></erp>"#,
+    );
     let system = builder(&db, &addons)
-        .code([&NOTE])
-        .decls([model("note", "test.note")])
+        .code([&NOTE, &KEEPER])
+        .decls([model("note", "test.note"), model("keeper", "test.kept")])
         .build()
         .unwrap();
     let init = system
@@ -73,7 +87,7 @@ async fn preview_is_read_only_and_confirmed_uninstall_drops_exact_model() {
         calls: AtomicUsize::new(0),
     };
     let installed = system
-        .install_authorized(&[n("note")], &authorizer)
+        .install_authorized(&[n("note"), n("keeper")], &authorizer)
         .await
         .unwrap();
     exec(
@@ -137,6 +151,15 @@ async fn preview_is_read_only_and_confirmed_uninstall_drops_exact_model() {
     assert_eq!(state(&removed.orm, "note").await, "uninstalled");
     assert!(!table_exists(&removed.orm, "test_note").await);
     assert_eq!(state(&removed.orm, "base").await, "installed");
+    assert_eq!(state(&removed.orm, "keeper").await, "installed");
+    assert_eq!(
+        rows(
+            &removed.orm,
+            "SELECT module FROM \"erp_record_protection.binding\" WHERE model = 'test.kept'"
+        )
+        .await,
+        [[Some("keeper".to_owned())]]
+    );
     assert_eq!(rows(&removed.orm, "SELECT actor_uid::text, session_id::text, operation, requested::text, resolved::text, fingerprint, outcome FROM erp_module_lifecycle_audit WHERE operation='uninstall'").await,
         vec![vec![Some("2".into()), Some("019a0000-0000-7000-8000-000000000001".into()), Some("uninstall".into()), Some("{note}".into()), Some("{note}".into()), Some(impact.fingerprint().as_str().into()), Some("committed".into())]]);
     committed(removed);

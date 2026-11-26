@@ -11,7 +11,7 @@ erp-sdk.workspace = true
 erp-addon-base.workspace = true
 getrandom.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["net", "time"] }
 url = "2.5.9"
 serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true

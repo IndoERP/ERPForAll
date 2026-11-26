@@ -1488,6 +1488,23 @@ impl Transaction {
             .collect()
     }
 
+    pub(crate) fn o2m_capture_relevant(&self, model: ModelId, field: FieldId) -> bool {
+        let fs = self.registry().model_by_id(model).field_by_id(field);
+        fs.has_column()
+            && fs.inherited.is_none()
+            && !fs.company_dependent
+            && matches!(fs.ty, FieldType::Many2one { .. })
+            && self
+                .shared
+                .relations
+                .inverses(model, field)
+                .iter()
+                .any(|(owner, inverse)| {
+                    let owner = self.registry().model_by_id(*owner);
+                    owner.eventful && owner.field_by_id(*inverse).store
+                })
+    }
+
     /// After many2one `field` of `records` became `new` (REL §4.4.4): remove the records from the
     /// cached one2many values of their old targets, append them to the new target's when it is
     /// cached and they satisfy the one2many's domain. The dependents of those one2many fields are
@@ -1506,10 +1523,39 @@ impl Transaction {
             return Ok(());
         }
         let ids: Vec<RecId> = records.rec_ids().to_vec();
+        let capture = self.o2m_capture_relevant(model, field) && ids.iter().any(|id| !id.is_new());
         let id_set: FxHashSet<RecId> = ids.iter().copied().collect();
         let registry = Arc::clone(records.env().registry());
         for (co_model, o2m) in inverses {
-            let storage = registry.model_by_id(co_model).field_by_id(o2m).storage();
+            let inverse = registry.model_by_id(co_model).field_by_id(o2m);
+            let storage = inverse.storage();
+            if capture && inverse.store && registry.model_by_id(co_model).eventful {
+                let mut changed = FxHashSet::default();
+                let to = id_of(new);
+                for (record, previous) in ids.iter().zip(old) {
+                    if record.is_new() {
+                        continue;
+                    }
+                    let previous = previous.as_ref().ok_or_else(|| {
+                        Error::programming("outbox: missing previous inverse relation")
+                    })?;
+                    let from = id_of(previous);
+                    if from != to {
+                        changed.extend(from.into_iter().chain(to).filter(|id| !id.is_new()));
+                    }
+                }
+                if changed.len() > crate::outbox::MAX_INDIRECT_IDS {
+                    return Err(crate::outbox::limit(
+                        "inverse relation change exceeds 16384 captured record ids",
+                    ));
+                }
+                self.capture_indirect_change(
+                    co_model,
+                    crate::outbox::Kind::Write,
+                    vec![inverse.name.to_owned()],
+                    changed.into_iter().collect(),
+                )?;
+            }
             // remove from the old targets (all cached values when an old value is unknown): the
             // known old targets are looked up, not found by scanning every cached value, so
             // relinking lines owner by owner (nested onchange lines) stays linear

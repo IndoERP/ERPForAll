@@ -856,7 +856,7 @@ impl MailActivity {
     /// `Validation` when `attachment_ids` is not empty (attachments come with) or the
     /// feedback is over the limit; `Access` as `write`.
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     async fn action_feedback(
         this: &RecordSet<MailActivity>,
         tx: &mut Transaction,

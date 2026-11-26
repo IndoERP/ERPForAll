@@ -17,6 +17,9 @@ erp-server.workspace = true
 image = { workspace = true, features = ["gif", "webp"] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 tower = { version = "=0.5.3", features = ["util"] }
+base64.workspace = true
+ring = "0.17.14"
+url = "2.5.9"
 # Private impex served-floor capture reuses the existing PostgreSQL wire recorder.
 tempfile = { workspace = true }
 # delta_sql: date and timestamp grain values

@@ -12,8 +12,7 @@
 //! [`resolve`] selects the one most specific active revision of a call (exact company before all
 //! companies, then exact model and method, exact model, wildcard) and, for Approve, the humans who
 //! may decide it now. Policies control RPC entry calls, not records: writes a method
-//! makes on other models, jobs and `System` calls never consult them. Nothing consults them before
-//! the approval dispatch exists.
+//! makes on other models, jobs and `System` calls never consult them.
 
 use std::collections::BTreeMap;
 
@@ -117,8 +116,7 @@ pub struct IrApprovalPolicy {
 const IMMUTABLE: &str =
     "Approval policy revisions cannot be changed; archive this revision and create a new one.";
 const UNDELETABLE: &str = "Approval policy revisions cannot be deleted; archive them instead.";
-const AGENT_UNSUPPORTED: &str = "Approval policies for agent and service principals are not \
-     supported until accepts their parts (a later release).";
+const SERVICE_UNSUPPORTED: &str = "Approval policies for service principals are unavailable.";
 
 /// The identity of a policy revision (its `ir.approval.policy` row id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -149,25 +147,28 @@ impl PolicyRevisionId {
 
 /// The humans who may decide a request under a revision, in id order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EligibleApprovers(Box<[UserId]>);
+pub struct EligibleApprovers {
+    users: Box<[UserId]>,
+    pub(crate) companies: Box<[CompanyId]>,
+}
 
 impl EligibleApprovers {
     /// The users, in id order.
     #[must_use]
     pub fn ids(&self) -> &[UserId] {
-        &self.0
+        &self.users
     }
 
     /// Whether `user` may decide.
     #[must_use]
     pub fn contains(&self, user: UserId) -> bool {
-        self.0.binary_search(&user).is_ok()
+        self.users.binary_search(&user).is_ok()
     }
 
     /// Whether nobody may decide.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.users.is_empty()
     }
 }
 
@@ -357,7 +358,7 @@ enum Outcome {
 }
 
 /// One stored revision as read back for checks and resolution.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Stored {
     id: i64,
     name: String,
@@ -380,15 +381,6 @@ impl Stored {
             "Approval policy revision {}: {reason}",
             self.label()
         ))
-    }
-
-    /// An Approve or Deny revision for users: nothing consults policies, dispatches or executes
-    /// approvals yet, so an active one would state a control that silently does nothing (Allow
-    /// restricts nothing; agent and service revisions are a separate open decision). Temporary fence (create and
-    /// activation both pass `check_revisions`), removed by the slice that ships enforcement
-    /// (and). Archiving is never refused.
-    fn is_user_restriction(&self) -> bool {
-        self.outcome != Outcome::Allow && self.kind == PrincipalKind::User
     }
 
     /// The specificity of the selector after the company: method 2, model 1, wildcard 0 (B8).
@@ -469,10 +461,9 @@ fn check_combination(revision: &Stored) -> Result<()> {
             "requiring approval for external calls of users is not supported until external-effect \
              admission is accepted.",
         )),
-        (Outcome::Allow, _, PrincipalKind::Agent | PrincipalKind::Service) => Err(revision.refuse(
-            "an Allow exception for agent and service principals is not supported until \
-             accepts it (D2, a later release).",
-        )),
+        (Outcome::Allow, _, PrincipalKind::Service) => {
+            Err(revision.refuse("an Allow exception for service principals is unavailable."))
+        }
         _ => Ok(()),
     }
 }
@@ -488,7 +479,7 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
     );
     let rows = tx.query(&sql, &[&ids]).await?;
     let mut labels = BTreeMap::new();
-    let mut fenced = None;
+    let mut needs_approval_schema = false;
     for row in &rows {
         let revision = stored(row)?;
         let named: i64 = row.try_get(9).map_err(|_| unreadable("approvers"))?;
@@ -511,9 +502,9 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
             );
         }
         labels.insert(revision.id, revision.label());
-        if fenced.is_none() && revision.active && revision.is_user_restriction() {
-            fenced = Some(revision.label());
-        }
+        needs_approval_schema |= revision.active
+            && revision.kind == PrincipalKind::User
+            && revision.outcome != Outcome::Allow;
     }
     let inactive = tx
         .query(
@@ -533,12 +524,21 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
             labels.get(&policy).ok_or_else(|| unreadable("policy_id"))?
         )));
     }
-    // after every other refusal, so a revision that is wrong in another way still says so first
-    if let Some(label) = fenced {
-        return Err(Error::validation(format!(
-            "Approval policy revision {label}: requiring approval for or denying calls of users is not \
-             available yet in this release. Save the revision archived to prepare it."
-        )));
+    if needs_approval_schema {
+        let schema = tx
+            .query(
+                "SELECT pg_catalog.to_regclass('ir_approval_request') IS NOT NULL",
+                &[],
+            )
+            .await?;
+        if !schema[0]
+            .try_get::<_, bool>(0)
+            .map_err(|_| unreadable("request schema"))?
+        {
+            return Err(Error::validation(
+                "Upgrade base before activating user approval restrictions.",
+            ));
+        }
     }
     Ok(())
 }
@@ -778,7 +778,7 @@ impl IrApprovalPolicy {
 
 /// The users a decision must never come from: the subject and the original principal of an
 /// impersonation (B7: by `res.users` identity).
-fn requesters(env: &Env) -> Result<Vec<UserId>> {
+pub(crate) fn requesters(env: &Env) -> Result<Vec<UserId>> {
     let principal = env.principal();
     let mut ids = vec![principal.subject()];
     match principal.actor() {
@@ -849,10 +849,10 @@ fn config(revisions: Vec<i64>, detail: Error) -> Refusal {
 /// The kinds of principal whose calls pass the approval phase (and acceptance).
 fn admit(kind: PrincipalKind) -> Result<()> {
     match kind {
-        PrincipalKind::User => Ok(()),
-        PrincipalKind::Agent | PrincipalKind::Service => Err(Error::validation(AGENT_UNSUPPORTED)),
+        PrincipalKind::User | PrincipalKind::Agent => Ok(()),
+        PrincipalKind::Service => Err(Error::validation(SERVICE_UNSUPPORTED)),
         kind => Err(Error::programming(format!(
-            "Approval policies apply to user principals only; a {} call does not pass the \
+            "Approval policies apply to user and agent principals; a {} call does not pass the \
              approval phase.",
             kind.as_str()
         ))),
@@ -860,7 +860,7 @@ fn admit(kind: PrincipalKind) -> Result<()> {
 }
 
 /// The method's current effect, from the registry's RPC exposure (never the caller's).
-fn current_effect(env: &Env, tx: &Transaction, call: &ApprovalCall) -> Result<Effect> {
+pub(crate) fn current_effect(env: &Env, tx: &Transaction, call: &ApprovalCall) -> Result<Effect> {
     let exposed = env
         .registry()
         .model_id(call.model())
@@ -912,8 +912,8 @@ fn current_effect(env: &Env, tx: &Transaction, call: &ApprovalCall) -> Result<Ef
 ///
 /// # Errors
 ///
-/// `Validation` for an agent or service principal (not supported until accepts their
-/// parts), a call without companies or with more than [`MAX_COMPANIES`] (a widened call counts
+/// `Validation` for a service principal, a call without companies or with more than
+/// [`MAX_COMPANIES`] (a widened call counts
 /// every company the subject is allowed in); for companies that
 /// select different revisions, two revisions of equal specificity, a stale method revision, a
 /// stored revision with an unknown or unsupported value, and an Approve revision without any
@@ -956,20 +956,56 @@ async fn decide(
     tx: &mut Transaction,
     call: &ApprovalCall,
 ) -> std::result::Result<PolicyOutcome, Refusal> {
-    admit(env.principal().kind())?;
+    let kind = env.principal().kind();
+    admit(kind)?;
     let excluded = requesters(env)?;
     let effect = current_effect(env, tx, call)?;
     let mut companies = tx.companies(env).await?;
     if call.widened() {
-        companies.extend(allowed_companies(env, tx).await?);
+        companies.extend(allowed_companies(env.principal().subject(), tx).await?);
     }
     companies.extend_from_slice(call.target_companies());
     companies.sort_unstable();
     companies.dedup();
-    let company_ids = bounded(&companies)?;
+    let Some(chosen) = select_revision(tx, call, kind, effect, &companies).await? else {
+        return Ok(PolicyOutcome::Unmanaged);
+    };
+    let revision = PolicyRevisionId::new(chosen.id)?;
+    Ok(match chosen.outcome {
+        Outcome::Allow => PolicyOutcome::Allow { revision },
+        Outcome::Deny => PolicyOutcome::Deny { revision },
+        Outcome::Approve => {
+            let approvers = eligible_approvers(tx, revision, &excluded, &companies)
+                .await
+                .map_err(|e| config(vec![chosen.id], e))?;
+            if approvers.is_empty() {
+                return Err(config(
+                    vec![chosen.id],
+                    chosen.refuse(
+                        "no eligible approver other than the requester is configured for this \
+                         call.",
+                    ),
+                ));
+            }
+            PolicyOutcome::Approve {
+                revision,
+                approvers,
+            }
+        }
+    })
+}
+
+async fn select_revision(
+    tx: &mut Transaction,
+    call: &ApprovalCall,
+    kind: PrincipalKind,
+    effect: Effect,
+    companies: &[CompanyId],
+) -> std::result::Result<Option<Stored>, Refusal> {
+    let company_ids = bounded(companies)?;
     // method revisions of any effect: one of another effect than the method's is stale
     let sql = format!(
-        "SELECT {COLUMNS} FROM ir_approval_policy p WHERE p.active AND p.principal_kind = 'user' \
+        "SELECT {COLUMNS} FROM ir_approval_policy p WHERE p.active AND p.principal_kind = $5 \
          AND (p.effect = $1 OR (p.model = $3 AND p.method = $4)) \
          AND (p.company_id IS NULL OR p.company_id = ANY($2::int8[])) \
          AND (p.model IS NULL OR p.model = $3) AND (p.method IS NULL OR p.method = $4) ORDER BY p.id"
@@ -982,6 +1018,7 @@ async fn decide(
                 &company_ids,
                 &call.model(),
                 &call.method(),
+                &kind.as_str(),
             ],
         )
         .await?;
@@ -1031,35 +1068,47 @@ async fn decide(
             ));
         }
     }
-    let Some(chosen) = choice else {
-        return Ok(PolicyOutcome::Unmanaged);
-    };
-    let revision = PolicyRevisionId::new(chosen.id)?;
-    Ok(match chosen.outcome {
-        Outcome::Allow => PolicyOutcome::Allow { revision },
-        Outcome::Deny => PolicyOutcome::Deny { revision },
-        Outcome::Approve => {
-            let approvers = eligible_approvers(tx, revision, &excluded, &companies)
-                .await
-                .map_err(|e| config(vec![chosen.id], e))?;
-            if approvers.is_empty() {
-                return Err(config(
-                    vec![chosen.id],
-                    chosen.refuse(
-                        "no eligible approver other than the requester is configured for this \
-                         call.",
-                    ),
-                ));
-            }
-            PolicyOutcome::Approve {
-                revision,
-                approvers,
-            }
-        }
-    })
+    Ok(choice.cloned())
 }
 
-/// Every company the subject of `env` is allowed in (`res_company_users_rel`), read with plain SQL
+/// Wait for current policy before obtaining the final session authorization.
+#[doc(hidden)]
+pub async fn prepare_managed_password(tx: &mut Transaction) -> Result<()> {
+    crate::approval_settings::lock_policy_read(tx).await
+}
+
+/// Refuse a managed password operation when applicable policy denies it or requires approval.
+/// `subject` came from a fresh session check because Auth owns some write transactions as
+/// System. The gate receives only the RPC route and effect.
+pub async fn check_managed_password(
+    tx: &mut Transaction,
+    subject: UserId,
+    model: &str,
+    method: &str,
+    effect: Effect,
+) -> Result<()> {
+    let refused = || Error::access("An approval policy does not permit this password operation.");
+    if !crate::approval_request::has_restrictions(tx).await? {
+        return Ok(());
+    }
+    let call = ApprovalCall::model_level(model, method)?;
+    if current_effect(&tx.env(), tx, &call)? != effect {
+        return Err(refused());
+    }
+    let companies = allowed_companies(subject, tx).await?;
+    match select_revision(tx, &call, PrincipalKind::User, effect, &companies).await {
+        Ok(None) => Ok(()),
+        Ok(Some(revision)) if revision.outcome == Outcome::Allow => Ok(()),
+        Ok(Some(_)) => Err(refused()),
+        Err(Refusal::Other(error)) => Err(error),
+        Err(Refusal::Config { detail, .. }) => {
+            tracing::warn!(target: "erp::approvals", detail = %detail, "approval policy refused a managed password operation");
+            Err(refused())
+        }
+    }
+}
+
+/// Every company the subject is allowed in (`res_company_users_rel`), read with plain SQL
 /// in `tx`. The same source as the principal resolver's company list
 /// (`erp_security::resolver::SUBJECT_SQL`), without its filter on archived companies: a superset,
 /// which can only add refusals, never turn one into `Unmanaged`. The user's default company
@@ -1068,7 +1117,7 @@ async fn decide(
 /// set (review RVFIX r1, finding 2). The subject is the user whose
 /// authority the call uses (the impersonated user under impersonation). At most
 /// [`MAX_COMPANIES`] + 1 rows are read: one more than the bound is enough for [`bounded`] to refuse.
-async fn allowed_companies(env: &Env, tx: &mut Transaction) -> Result<Vec<CompanyId>> {
+async fn allowed_companies(subject: UserId, tx: &mut Transaction) -> Result<Vec<CompanyId>> {
     let limit = i64::try_from(MAX_COMPANIES + 1)
         .map_err(|_| Error::internal("The company bound does not fit a statement limit."))?;
     let rows = tx
@@ -1076,7 +1125,7 @@ async fn allowed_companies(env: &Env, tx: &mut Transaction) -> Result<Vec<Compan
             "SELECT c.cid FROM (SELECT r.cid::int8 AS cid FROM res_company_users_rel r \
              WHERE r.user_id = $1::int8 UNION SELECT u.company_id::int8 FROM res_users u \
              WHERE u.id = $1::int8 AND u.company_id IS NOT NULL) c ORDER BY 1 LIMIT $2::int8",
-            &[&env.principal().subject().get(), &limit],
+            &[&subject.get(), &limit],
         )
         .await?;
     rows.iter()
@@ -1218,7 +1267,10 @@ pub async fn eligible_approvers(
         let id: i64 = row.try_get(0).map_err(|_| unreadable("res_users.id"))?;
         ids.push(UserId::new(id)?);
     }
-    Ok(EligibleApprovers(ids.into_boxed_slice()))
+    Ok(EligibleApprovers {
+        users: ids.into_boxed_slice(),
+        companies: companies.into(),
+    })
 }
 
 #[cfg(test)]
@@ -1230,16 +1282,14 @@ mod tests {
     /// builder cannot build agent, service, public or link principals before and
     /// )
     #[test]
-    fn only_user_principals_pass_the_approval_phase() {
+    fn user_and_agent_principals_pass_the_approval_phase() {
         assert!(admit(PrincipalKind::User).is_ok());
-        for kind in [PrincipalKind::Agent, PrincipalKind::Service] {
-            let refused = admit(kind).err();
-            assert_eq!(
-                refused.as_ref().map(|e| (e.kind(), e.message())),
-                Some((ErrorKind::Validation, AGENT_UNSUPPORTED)),
-                "{kind:?}"
-            );
-        }
+        assert!(admit(PrincipalKind::Agent).is_ok());
+        let refused = admit(PrincipalKind::Service).err();
+        assert_eq!(
+            refused.as_ref().map(|e| (e.kind(), e.message())),
+            Some((ErrorKind::Validation, SERVICE_UNSUPPORTED))
+        );
         for kind in [
             PrincipalKind::System,
             PrincipalKind::Public,
@@ -1247,7 +1297,7 @@ mod tests {
         ] {
             let refused = admit(kind).err();
             let message = format!(
-                "Approval policies apply to user principals only; a {} call does not pass the \
+                "Approval policies apply to user and agent principals; a {} call does not pass the \
                  approval phase.",
                 kind.as_str()
             );

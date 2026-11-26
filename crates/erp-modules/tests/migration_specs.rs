@@ -13,10 +13,11 @@ use erp_modules::artifact_identity::ArtifactSnapshot;
 use erp_modules::error::{Error, ModuleStep};
 use erp_modules::graph::DropReason;
 use erp_modules::migrations::{MigrationImpl, MigrationSqlRefusal, MigrationStage};
-use erp_modules::system::{InitOptions, ModuleSystemBuilder};
+use erp_modules::system::{InitOptions, ModuleSystem, ModuleSystemBuilder};
 use erp_modules::version::SemverVersion;
-use erp_orm::{BoxFuture, Transaction};
+use erp_orm::{BoxFuture, ImplKind, MethodFn, MethodImpl, Records, Super, Transaction};
 use erp_testkit::TestDb;
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -36,6 +37,116 @@ fn migration_builder(db: &TestDb, addons: &Addons) -> ModuleSystemBuilder {
         })
         .collect::<BTreeMap<_, _>>();
     builder(db, addons).identity_previous(previous)
+}
+
+#[tokio::test]
+async fn required_migration_from_snapshot_refuses_missing_and_then_runs_once() {
+    let addons = Addons::new();
+    let db = TestDb::create().await.unwrap();
+    let (system, orm, admin) = installed_x(&addons, &db, &[]).await;
+    setup_migration_probe(&orm).await;
+    addons.add(
+        "x",
+        &format!("version = '1.1'\n{REQUIRED_MIGRATION_DECLARATION}"),
+    );
+
+    let error = system
+        .button_immediate_upgrade(&admin, &[n("x")])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::RequiredMigrationMissing { module, name, .. } if module == n("x") && name == "bump")
+    );
+    assert_migration_probe(&orm, "x", "1.0.0", "0").await;
+
+    addons.file("x", REQUIRED_MIGRATION_PATH, REQUIRED_MIGRATION_SQL);
+    let alternate = "migrations/20.0.1.1/post-bump.sql";
+    addons.file("x", alternate, REQUIRED_MIGRATION_SQL);
+    let error = system
+        .button_immediate_upgrade(&admin, &[n("x")])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::MigrationDuplicate { module, name, .. } if module == n("x") && name == "bump")
+    );
+    assert_migration_probe(&orm, "x", "1.0.0", "0").await;
+    std::fs::remove_file(addons.path().join("x").join(alternate)).unwrap();
+
+    let outcome = system
+        .button_immediate_upgrade(&admin, &[n("x")])
+        .await
+        .unwrap();
+    assert_migration_probe(&outcome.orm, "x", "1.1.0", "1").await;
+    db.cleanup().await.unwrap();
+}
+
+fn bump_migration<'a>(
+    tx: &'a mut Transaction,
+    _: &'a SemverVersion,
+) -> BoxFuture<'a, erp_fields::Result<()>> {
+    Box::pin(async { tx.batch(REQUIRED_MIGRATION_SQL).await })
+}
+
+static REQUIRED_BUMP: MigrationImpl =
+    MigrationImpl::new("x", "1.1", MigrationStage::Post, "bump", bump_migration)
+        .at(file!(), line!());
+
+#[tokio::test]
+async fn embedded_release_resolves_required_step_by_native_name() {
+    let addons = Addons::new();
+    let db = TestDb::create().await.unwrap();
+    let base = ArtifactSnapshot::capture("base", &addons.path().join("base")).unwrap();
+    let identities = |hex: &str| {
+        BTreeMap::from([
+            (n("base"), base.digest().to_owned()),
+            (n("x"), format!("addon-v1:{}", hex.repeat(64))),
+        ])
+    };
+    let build = |manifest: &str, hex: &str, migrations: &[&'static MigrationImpl]| {
+        let mut index = addons.index();
+        index
+            .add_embedded(
+                erp_modules::Manifest::from_toml("x", manifest).unwrap(),
+                "embedded:x",
+            )
+            .unwrap();
+        ModuleSystem::builder(db.pool().clone(), index)
+            .linked_hooks(false)
+            .native_artifact_identities(identities(hex))
+            .identity_previous(identities("a"))
+            .migrations(migrations.iter().copied())
+            .build()
+            .unwrap()
+    };
+    let old = build("version = '1.0'", "a", &[]);
+    let init = old
+        .initialize(InitOptions::new().with_skip_auto_install(true))
+        .await
+        .unwrap();
+    let installed = old
+        .button_immediate_install(&su(&init.orm), &[n("x")])
+        .await
+        .unwrap();
+    setup_migration_probe(&installed.orm).await;
+    let release = format!("version = '1.1'\n{REQUIRED_MIGRATION_DECLARATION}");
+    let incomplete = build(&release, "b", &[]);
+    let error = incomplete
+        .button_immediate_upgrade(&incomplete.system_env(erp_orm::Context::new()), &[n("x")])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::RequiredMigrationMissing { ref addon_source, .. } if addon_source == "embedded"),
+        "{error:?}"
+    );
+    assert_migration_probe(&installed.orm, "x", "1.0.0", "0").await;
+
+    let candidate = build(&release, "c", &[&REQUIRED_BUMP]);
+    let updated = candidate
+        .button_immediate_upgrade(&candidate.system_env(erp_orm::Context::new()), &[n("x")])
+        .await
+        .unwrap();
+    assert_migration_probe(&updated.orm, "x", "1.1.0", "1").await;
+    db.cleanup().await.unwrap();
 }
 
 // ----: migration script selection ---------------------------------------------
@@ -1363,6 +1474,48 @@ async fn max_migration_files_out_of_range_is_refused_at_build() {
 
 // ---- schema steps of one run wait for a later module's pre-migration --------------------------
 
+fn init_migration_item<'a>(
+    tx: &'a mut Transaction,
+    records: &'a Records,
+    args: (),
+    sup: Super<(), ()>,
+) -> BoxFuture<'a, erp_fields::Result<()>> {
+    Box::pin(async move {
+        let probe = tx
+            .query(
+                "SELECT to_regclass('migration_holder_log') IS NOT NULL",
+                &[],
+            )
+            .await?;
+        if probe[0].get(0) {
+            tx.batch(
+                "INSERT INTO migration_holder_log (step) SELECT 'init' \
+                FROM mig_item WHERE code = 'legacy-first' AND EXISTS (\
+                  SELECT 1 FROM information_schema.columns WHERE table_name = 'mig_item' \
+                    AND column_name = 'code' AND is_nullable = 'NO')",
+            )
+            .await?;
+        }
+        sup.call(tx, records, args).await
+    })
+}
+
+fn migration_item_init_entry() -> &'static (dyn Any + Send + Sync) {
+    static INIT: MethodFn<(), ()> = init_migration_item;
+    &INIT
+}
+
+static MIGRATION_ITEM_INIT: MethodImpl = MethodImpl {
+    addon: "y",
+    model: "mig.item",
+    method: "init",
+    kind: ImplKind::Override,
+    sig_name: std::any::type_name::<MethodFn<(), ()>>,
+    entry: migration_item_init_entry,
+    file: file!(),
+    line: line!(),
+};
+
 /// `y` declares `mig.item` with rows; `x` 1.1 extends it with a required column that its
 /// pre-migration adds and fills. Upgraded together, `y`'s schema step comes first and must leave
 /// the column to `x`'s step: syncing it there would refuse a required column without default on
@@ -1378,10 +1531,12 @@ async fn pre_migration_runs_before_an_earlier_module_syncs_its_column() {
          [[model.field]]\nname = \"name\"\ntype = \"char\"\n",
     );
     let db = TestDb::create().await.unwrap();
-    let (system, orm, admin) = installed_y_x(&addons, &db, |b| b).await;
+    let (system, orm, admin) =
+        installed_y_x(&addons, &db, |b| b.impls([&MIGRATION_ITEM_INIT])).await;
     exec(
         &orm,
-        "INSERT INTO mig_item (name) VALUES ('first'), ('second')",
+        "INSERT INTO mig_item (name) VALUES ('first'), ('second'); \
+         CREATE TABLE migration_holder_log (step text PRIMARY KEY, position bigint GENERATED ALWAYS AS IDENTITY);",
     )
     .await;
     addons.file(
@@ -1394,8 +1549,36 @@ async fn pre_migration_runs_before_an_earlier_module_syncs_its_column() {
         "x",
         "migrations/1.1/pre-a.sql",
         "ALTER TABLE mig_item ADD COLUMN code varchar;\n\
-         UPDATE mig_item SET code = 'legacy-' || name;\n",
+         UPDATE mig_item SET code = 'legacy-' || name;\n\
+         INSERT INTO migration_holder_log (step) VALUES ('pre');",
     );
+
+    let post_sql = "INSERT INTO migration_holder_log (step) SELECT 'post' \
+                    WHERE EXISTS (SELECT 1 FROM migration_holder_log WHERE step = 'init');";
+    addons.file(
+        "x",
+        "migrations/1.1/post-z.sql",
+        &format!("{post_sql} SELECT 'invalid'::integer;"),
+    );
+    let err = upgrade_y_x(&addons, &system, &admin).await.unwrap_err();
+    migration_step_failed(err, MigrationStage::Post, "migrations/1.1/post-z.sql");
+    y_x_unchanged(&orm).await;
+    assert!(
+        rows(&orm, "SELECT step FROM migration_holder_log")
+            .await
+            .is_empty()
+    );
+    assert!(
+        rows(
+            &orm,
+            "SELECT column_name FROM information_schema.columns \
+                        WHERE table_name = 'mig_item' AND column_name = 'code'"
+        )
+        .await
+        .is_empty()
+    );
+
+    addons.file("x", "migrations/1.1/post-z.sql", post_sql);
 
     let outcome = upgrade_y_x(&addons, &system, &admin)
         .await
@@ -1415,6 +1598,14 @@ async fn pre_migration_runs_before_an_earlier_module_syncs_its_column() {
     )
     .await;
     assert_eq!(nullable, vec![vec![Some("NO".to_owned())]]);
+    assert_eq!(
+        rows(
+            &outcome.orm,
+            "SELECT step FROM migration_holder_log ORDER BY position"
+        )
+        .await,
+        ["pre", "init", "post"].map(|step| vec![Some(step.to_owned())])
+    );
     drop(system);
     db.cleanup().await.unwrap();
 }

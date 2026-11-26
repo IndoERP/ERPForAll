@@ -41,6 +41,7 @@ const READ_CHUNK: usize = 64 * 1024;
 pub struct LocalStore {
     root: PathBuf,
     fingerprint: String,
+    accel_prefix: Option<String>,
 }
 
 async fn make_dirs(path: &Path) -> Result<(), BlobError> {
@@ -78,6 +79,10 @@ fn part_path(path: &Path) -> PathBuf {
 }
 
 impl LocalStore {
+    pub(crate) fn set_accel_prefix(&mut self, prefix: Option<String>) {
+        self.accel_prefix = prefix;
+    }
+
     /// Open the store at `root`, creating the directory (`0700`) and its `.store-id` when they
     /// do not exist.
     ///
@@ -124,7 +129,11 @@ impl LocalStore {
                 }
             }
         };
-        Ok(Self { root, fingerprint })
+        Ok(Self {
+            root,
+            fingerprint,
+            accel_prefix: None,
+        })
     }
 
     fn check_id(text: &str) -> Result<String, BlobError> {
@@ -188,6 +197,31 @@ impl AttachmentStore for LocalStore {
             create_only: true,
             if_match_put: cfg!(any(target_os = "linux", target_os = "macos")),
         }
+    }
+
+    fn download_handoff<'a>(
+        &'a self,
+        request: crate::DownloadRequest<'a>,
+    ) -> BoxFuture<'a, Result<Option<crate::DownloadHandoff>, BlobError>> {
+        Box::pin(async move {
+            let Some(prefix) = &self.accel_prefix else {
+                return Ok(None);
+            };
+            let relative = request.key.path();
+            let metadata = fs::symlink_metadata(self.full(&relative))
+                .await
+                .map_err(|error| {
+                    BlobError::from_io("read offload object metadata", "<object>", error)
+                })?;
+            if !metadata.is_file() || metadata.len() != request.size {
+                return Err(BlobError::config(
+                    "the local offload object is not a regular file of the expected size",
+                ));
+            }
+            Ok(Some(crate::DownloadHandoff::InternalProxy(format!(
+                "{prefix}{relative}"
+            ))))
+        })
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

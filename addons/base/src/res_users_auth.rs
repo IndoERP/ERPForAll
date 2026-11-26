@@ -22,8 +22,9 @@
 
 use erp_sdk::auth::{
     AuthInfo, CheckEnv, Credential, EndReason, LoginCooldownContext, LoginCooldownPolicy,
-    LoginDomain, LoginLookup, LoginOrder, SessionTokenFields, StoredHash, end_user_sessions,
-    hash_all_with_params, load_hash_params, log_plaintext_replaced, user_context,
+    LoginDomain, LoginLookup, LoginOrder, SessionLogin, SessionTokenFields, StoredHash,
+    end_user_sessions, hash_all_with_params, load_hash_params, log_plaintext_replaced,
+    user_context,
 };
 use erp_sdk::prelude::*;
 use erp_sdk::{Cell, UserId, ValueMap};
@@ -267,6 +268,26 @@ impl ResUsersAuth {
             log_plaintext_replaced(*id);
         }
         Ok(())
+    }
+
+    #[method(override, sealed)]
+    async fn _register_hook(
+        this: &RecordSet<ResUsers>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        sup.call(tx, this.as_records(), ()).await?;
+        erp_sdk::auth::validate_login_plan(tx).await
+    }
+
+    /// Called inside the active session's transaction under the signing-in user.
+    #[method(sealed)]
+    async fn _after_session_login(
+        _this: &RecordSet<ResUsers>,
+        _tx: &mut Transaction,
+        login: SessionLogin,
+    ) -> Result<SessionLogin> {
+        Ok(login)
     }
 
     #[method(sealed)]

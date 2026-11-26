@@ -423,6 +423,21 @@ fn contacts_demo_partners_load_with_demo() {
             ["Lumbung Teknik:true:2", "Tirta Logistik:true:1"]
         );
         assert_eq!(
+            strings(
+                &orm,
+                "SELECT c.name || ':' || c.city || ':' || c.vat FROM res_partner c \
+                JOIN ir_model_data d ON d.res_id=c.id AND d.model='res.partner' \
+                WHERE d.module='contacts' AND d.name IN ('partner_demo_lumbung_sari', \
+                  'partner_demo_lumbung_budi', 'partner_demo_tirta_dewi') ORDER BY c.name"
+            )
+            .await,
+            [
+                "Budi Prasetyo:Bandung:DEMO-LT-0001",
+                "Dewi Anggraini:Surabaya:DEMO-TL-0002",
+                "Sari Wulandari:Bandung:DEMO-LT-0001"
+            ]
+        );
+        assert_eq!(
             xml_ids(&orm, "contacts", "res.partner.category")
                 .await
                 .len(),

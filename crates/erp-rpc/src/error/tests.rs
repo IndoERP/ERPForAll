@@ -71,6 +71,26 @@ fn every_body_has_references_keys_in_order() {
 }
 
 #[test]
+fn approval_context_is_reserved_for_pre_dispatch_refusals() {
+    let context = Value::Map(Arc::new(ValueMap::from([
+        ("approval_key_required".to_owned(), Value::Bool(true)),
+        ("approval_request_id".to_owned(), Value::Int(13)),
+        ("allowed_detail".to_owned(), Value::Bool(true)),
+    ])));
+    let ordinary: RpcFailure = Error::validation("ordinary").with_context(context).into();
+    let (_, _, _, _, context, _) = parts(&ordinary.body("", 1, None));
+    assert_eq!(context, r#"{"allowed_detail":true}"#);
+
+    let key: RpcFailure = InfraError::ApprovalKeyRequired.into();
+    let (_, _, _, _, context, _) = parts(&key.body("", 1, None));
+    assert_eq!(key.status(), 422);
+    assert_eq!(context, r#"{"approval_key_required":true}"#);
+
+    let (_, _, _, _, context, _) = parts(&ordinary.body_with_approval("", 1, None, Some(42)));
+    assert_eq!(context, r#"{"approval_request_id":42}"#);
+}
+
+#[test]
 fn the_request_id_is_one_more_key_after_references_and_only_when_there_is_one() {
     let failure: RpcFailure = ProtocolError::BadRequest("b".into()).into();
     let id = "0194f5a0-7b1c-7d2e-8f3a-123456789abc";

@@ -915,6 +915,23 @@ async fn demo_and_neutralize() {
         )
         .await
         .unwrap();
+    client
+        .batch_execute(
+            "INSERT INTO erp_external_provider (issuer) VALUES ('https://identity.example.test');
+             INSERT INTO erp_external_login_intent (state, issuer, browser, nonce, verifier, destination)
+             VALUES (sha256('test-state'), 'https://identity.example.test', decode(repeat('01',16),'hex'),
+                     repeat('a',43), repeat('b',43), '/erp');",
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "INSERT INTO erp_external_identity (issuer, subject, user_id)
+             VALUES ('https://identity.example.test','fixture-subject',$1)",
+            &[&user],
+        )
+        .await
+        .unwrap();
     let secret_before = scalar_text(
         &client,
         "SELECT value FROM ir_config_parameter WHERE key = 'database.secret'",
@@ -951,6 +968,10 @@ async fn demo_and_neutralize() {
     live_node(&client).await;
     refused(&neutralize(), &secrets, &[db.name(), "fixture-node"]);
     assert_eq!(count(&client, "SELECT count(*) FROM erp_session").await, 1);
+    assert_eq!(
+        count(&client, "SELECT count(*) FROM erp_external_identity").await,
+        1
+    );
     client.batch_execute("DELETE FROM erp_node").await.unwrap();
 
     // from its original: refused by name, and nothing changes
@@ -1010,13 +1031,27 @@ async fn demo_and_neutralize() {
         }
         let flags: &[&str] = if run == 1 { &["--physical-copy"] } else { &[] };
         ok(&neutralize_with(flags), &secrets);
-        for table in ["erp_session", "res_users_apikeys", "erp_login_throttle"] {
+        for table in [
+            "erp_session",
+            "res_users_apikeys",
+            "erp_login_throttle",
+            "erp_external_identity",
+            "erp_external_login_intent",
+        ] {
             assert_eq!(
                 count(&client, &format!("SELECT count(*) FROM {table}")).await,
                 0,
                 "run {run}: {table}"
             );
         }
+        assert_eq!(
+            count(
+                &client,
+                "SELECT count(*) FROM erp_external_provider WHERE NOT enabled"
+            )
+            .await,
+            1
+        );
         assert_eq!(
             count(&client, "SELECT count(*) FROM ir_cron WHERE active").await,
             0

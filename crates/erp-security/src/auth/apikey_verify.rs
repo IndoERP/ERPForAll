@@ -216,7 +216,7 @@ SELECT {},
        k.id::int8,
        CASE WHEN octet_length(k.name) BETWEEN 1 AND 128 AND length(btrim(k.name))>0 THEN k.name ELSE NULL END,
        CASE WHEN octet_length(k.kind)<=7 THEN k.kind ELSE NULL END,
-       (k.models IS NULL AND k.methods IS NULL AND k.read_only IS FALSE AND k.capabilities='subject'),
+       (k.models IS NULL AND k.methods IS NULL AND k.read_only IS FALSE AND ((k.kind='user' AND k.scope='rpc' AND k.capabilities='subject') OR (k.kind='agent' AND k.scope='mcp' AND k.capabilities='none'))),
        0::int4, NULL::int4, NULL::float8,
        (k.last_used_at IS NULL
         OR k.last_used_at < (now() AT TIME ZONE 'utc') - make_interval(secs => {secs}))
@@ -418,8 +418,9 @@ impl CredentialCheck for KeyCheck<'_> {
             return denied(invalid_key(), true);
         }
         let kind: Option<String> = col(row, first + 2)?;
-        match kind.as_deref() {
-            Some("user") => {}
+        let agent_key = match kind.as_deref() {
+            Some("user") if self.request.scope == KeyScope::Rpc => false,
+            Some("agent") if self.request.scope == KeyScope::Mcp => true,
             Some(kind @ ("agent" | "service")) => {
                 return denied(
                     Error::new(
@@ -430,7 +431,7 @@ impl CredentialCheck for KeyCheck<'_> {
                 );
             }
             _ => return Err(stored_authority()),
-        }
+        };
         if col::<Option<bool>>(row, first + 3)? != Some(true) {
             return Err(stored_authority());
         }
@@ -452,7 +453,12 @@ impl CredentialCheck for KeyCheck<'_> {
                 false,
             );
         }
-        let principal = PrincipalBuilder::user(principal.subject())
+        let builder = if agent_key {
+            PrincipalBuilder::agent(principal.subject(), id)?
+        } else {
+            PrincipalBuilder::user(principal.subject())
+        };
+        let principal = builder
             .resolution(principal.resolution().as_ref().clone())
             .companies(principal.companies().allowed().to_vec())
             .scope(scope)

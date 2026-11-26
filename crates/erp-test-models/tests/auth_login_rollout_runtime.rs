@@ -498,7 +498,7 @@ async fn inactive_unbound_base_retains_its_semantic_flight_contract() {
 }
 
 #[tokio::test]
-async fn bound_constructor_preserves_session_composition_refusal() {
+async fn bound_selection_and_credentials_require_enabled_membership() {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_data::model_data::ADDON,
@@ -511,21 +511,20 @@ async fn bound_constructor_preserves_session_composition_refusal() {
     .await
     .unwrap();
     let fixture = Fixture::from_h(h).await;
-    let error = Auth::with_membership(
-        fixture.h.orm().clone(),
-        AuthConfig::DEFAULT,
-        fixture.pool,
-        fixture.member.admission(),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(
-        (error.kind(), error.message()),
-        (
-            ErrorKind::Programming,
-            "custom login selection combined with credential override is unsupported until a later release"
-        )
+    let auth = fixture.auth().await;
+    let uid = user_with_password(&fixture.h, "canonical", "pw").await;
+    serve(&fixture.member).await;
+    programming(
+        login(&auth, "canonical", "pw").await,
+        "login selection rollout is disabled",
     );
+    fixture.enable(&[&fixture.member]).await;
+    let session = login(&auth, "canonical", "pw").await.unwrap();
+    assert_eq!(session.auth().uid().get(), uid);
+    auth.confirm_identity(session.session().secret(), "pw", IN_PROCESS)
+        .await
+        .unwrap();
+    drop(auth);
     fixture.cleanup().await;
 }
 
@@ -678,7 +677,7 @@ async fn identity_confirmation_uses_the_same_principal_budget() {
 }
 
 #[tokio::test]
-async fn bound_base_credential_override_requires_session_support() {
+async fn bound_credentials_commit_with_the_session_and_rollback_on_denial() {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_data::model_data::ADDON,
@@ -706,26 +705,18 @@ async fn bound_base_credential_override_requires_session_support() {
     );
     user_with_password(&fixture.h, "canonical", "correct").await;
     serve(&fixture.member).await;
-    let jobs = fixture.pool.stats().jobs;
-    programming(
-        login(&auth, "canonical", "correct").await,
-        "membership-bound credential overrides are unsupported until a later release",
-    );
+    login(&auth, "canonical", "correct").await.unwrap();
     fixture.enable(&[&fixture.member]).await;
-    programming(
-        login(&auth, "canonical", "correct").await,
-        "active login principal accounting combined with credential override is unsupported until a later release",
-    );
-    assert_eq!(fixture.pool.stats().jobs, jobs);
-    assert_eq!(count(&fixture.h, "erp_session").await, 0);
-    assert_eq!(
-        count(
-            &fixture.h,
-            "pg_class WHERE relnamespace='public'::regnamespace AND relname='test_auth_check'"
-        )
-        .await,
-        0
-    );
+    let session = login(&auth, "canonical", "correct").await.unwrap();
+    assert_eq!(count(&fixture.h, "test_auth_check").await, 2);
+    auth.confirm_identity(session.session().secret(), "correct", IN_PROCESS)
+        .await
+        .unwrap();
+    assert_eq!(count(&fixture.h, "test_auth_check").await, 3);
+    user_with_password(&fixture.h, "gated-user", "correct").await;
+    denied(login(&auth, "gated-user", "correct").await);
+    assert_eq!(count(&fixture.h, "test_auth_check").await, 3);
+    assert_eq!(count(&fixture.h, "erp_session").await, 2);
     drop(auth);
     fixture.cleanup().await;
 }

@@ -164,6 +164,8 @@ pub struct AuthMethod(Cow<'static, str>);
 impl AuthMethod {
     /// `password`.
     pub const PASSWORD: Self = Self(Cow::Borrowed("password"));
+    /// `oidc`, for a verified OpenID Connect identity.
+    pub const OIDC: Self = Self(Cow::Borrowed("oidc"));
 
     /// A method name: 1 to 32 lowercase ASCII letters, digits and `_`.
     ///

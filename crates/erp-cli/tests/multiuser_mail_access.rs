@@ -19,6 +19,25 @@ use multiuser_mail::{Mail, NO_SUCH_ID, OUTSIDE, record_denied, records, slot};
 use serde_json::json;
 
 #[test]
+fn protected_mail_subtype_returns_a_validation_error_over_http() {
+    run(|fixture| {
+        let comment = fixture.xmlid("mail", "mt_comment");
+        let reply = fixture.rpc(
+            Subject::Admin,
+            "mail.message.subtype",
+            "unlink",
+            json!({"ids":[comment]}),
+        );
+        error(
+            &reply,
+            422,
+            "erp.exceptions.ValidationError",
+            "An addon protects this record from deletion or external ID changes.",
+        );
+    });
+}
+
+#[test]
 fn message_sharing_does_not_grant_access_to_the_entire_thread() {
     run(|f| {
         let m = Mail::new(f);
@@ -422,5 +441,112 @@ fn saved_thread_websocket_wakes_authorized_reader_on_another_nodes_commit() {
             panic!("A responsive peer must not retain an incomplete data message");
         };
         assert_eq!(denial.code, CloseCode::Policy);
+    });
+}
+
+#[test]
+fn saved_socket_filters_hidden_wakes_and_closes_after_role_change() {
+    use std::{io::ErrorKind, time::Duration};
+    use tungstenite::{Message, protocol::frame::coding::CloseCode};
+    run(|f| {
+        let m = Mail::new(f);
+        let a = f.user(Subject::A);
+        let b = f.user(Subject::B);
+        let peer = f.native.peer();
+        let mut socket = a.thread_socket(f.native.port);
+        let csrf = f.bootstrap(Subject::A)["csrf"]["logout"].clone();
+        socket
+            .send(Message::Text(
+                json!({"type":"subscribe","model":"product.template",
+            "id":m.shared,"company":a.company,"csrf":csrf})
+                .to_string()
+                .into(),
+            ))
+            .unwrap();
+        let resync = Message::Text(r#"{"type":"resync"}"#.into());
+        assert_eq!(socket.read().unwrap(), resync);
+
+        let post = |id| {
+            success(&b.rpc_on(
+                peer.port,
+                "product.template",
+                "thread_post",
+                json!({"ids":[id],"post":{"body":"cross-node notification test"}}),
+            ))
+        };
+        post(m.b);
+        socket
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(350)))
+            .unwrap();
+        let error = socket.read().unwrap_err();
+        assert!(matches!(error, tungstenite::Error::Io(error)
+            if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)));
+
+        socket
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        post(m.shared);
+        assert_eq!(socket.read().unwrap(), resync);
+
+        const BURST: usize = 16;
+        let barrier = std::sync::Barrier::new(BURST);
+        std::thread::scope(|scope| {
+            let post = &post;
+            let barrier = &barrier;
+            let record = m.shared;
+            let threads: Vec<_> = (0..BURST)
+                .map(|_| {
+                    scope.spawn(move || {
+                        barrier.wait();
+                        post(record)["message_id"].as_i64().unwrap()
+                    })
+                })
+                .collect();
+            let ids: std::collections::BTreeSet<_> = threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect();
+            assert_eq!(ids.len(), BURST);
+        });
+        assert_eq!(socket.read().unwrap(), resync);
+        socket
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(350)))
+            .unwrap();
+        let mut wakeups = 1;
+        loop {
+            match socket.read() {
+                Ok(message) => {
+                    assert_eq!(message, resync);
+                    wakeups += 1;
+                }
+                Err(tungstenite::Error::Io(error))
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("Thread delivery failed during the burst: {error}"),
+            }
+        }
+        assert!((1..=BURST).contains(&wakeups));
+        eprintln!("Thread socket observed {wakeups} resyncs for {BURST} committed posts");
+
+        socket
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let portal = f.xmlid("base", "group_portal");
+        success(&f.user(Subject::Admin).rpc_on(
+            peer.port,
+            "res.users",
+            "write",
+            json!({"ids":[a.id],"vals":{"group_ids":[[6,0,[portal]]]}}),
+        ));
+        let Message::Close(Some(close)) = socket.read().unwrap() else {
+            panic!("Expected subscription revalidation after group membership changed");
+        };
+        assert_eq!(close.code, CloseCode::Policy);
     });
 }

@@ -107,6 +107,9 @@ pub enum Commands {
     /// The audit trail (`erp audit maintain`)
     Audit(AuditCommand),
 
+    /// Inspect and maintain durable event delivery on the owner connection.
+    Outbox(OutboxCommand),
+
     /// Operator credential actions on the owner connection (`erp auth emergency-revoke`)
     Auth(AuthCommand),
 
@@ -497,6 +500,72 @@ pub enum AuditAction {
     /// Install or verify the audit table and refresh its partition window (today plus 31 days),
     /// as the owner role. Idempotent; runtime grant publication does the same.
     Maintain(ServerArgs),
+    /// Archive one eligible partition using the owner policy and witness configuration.
+    Retain(ServerArgs),
+    /// Keep a UTC day in the live audit trail, or release its existing hold.
+    Hold {
+        #[command(flatten)]
+        server: ServerArgs,
+        /// Date YYYY-MM-DD in UTC.
+        #[arg(long)]
+        day: String,
+        /// Release an existing hold.
+        #[arg(long)]
+        release: bool,
+    },
+    /// Verify and restore an archived UTC day and place a hold on it.
+    Restore {
+        #[command(flatten)]
+        server: ServerArgs,
+        /// Date YYYY-MM-DD in UTC.
+        #[arg(long)]
+        day: String,
+    },
+}
+
+/// `erp outbox` subcommand container.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OutboxCommand {
+    #[command(subcommand)]
+    pub action: OutboxAction,
+}
+
+/// Owner-side durable delivery operations.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutboxAction {
+    /// Show the retention floor, hold state and a named consumer's acknowledgement.
+    Status {
+        #[command(flatten)]
+        server: ServerArgs,
+        #[arg(long)]
+        consumer: String,
+    },
+    /// Pause deletion while delivery continues.
+    Hold(ServerArgs),
+    /// Allow retention again.
+    ReleaseHold(ServerArgs),
+    /// Delete one bounded batch of old events acknowledged by every consumer.
+    Retain {
+        #[command(flatten)]
+        server: ServerArgs,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=36500))]
+        days: u32,
+        #[arg(long, default_value_t = 128, value_parser = clap::value_parser!(u32).range(1..=128))]
+        limit: u32,
+    },
+    /// Rewind an acknowledgement to a retained cursor during a hold.
+    Restore {
+        #[command(flatten)]
+        server: ServerArgs,
+        #[arg(long)]
+        consumer: String,
+        #[arg(long)]
+        xid: u64,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+        id: i64,
+    },
 }
 
 /// `erp auth` subcommand container.

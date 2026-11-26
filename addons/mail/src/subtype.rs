@@ -160,27 +160,35 @@ impl MailMessageSubtype {
         sup.call(tx, this.as_records(), (vals,)).await
     }
 
-    /// A master subtype cannot be deleted.
+    /// Databases from before the XML declaration still have the old guard until they upgrade.
     #[method(override)]
     async fn unlink(
         this: &RecordSet<MailMessageSubtype>,
         tx: &mut Transaction,
         sup: Super,
     ) -> Result<()> {
-        if !this.as_records().is_empty() {
-            let master: Vec<i64> = protected_records(tx, this.as_records())
+        let records = this.as_records();
+        if !records.is_empty()
+            && !erp_sdk::load_state::protection_declarations_loaded(
+                tx,
+                "mail",
+                "mail.message.subtype",
+            )
+            .await?
+        {
+            let master: Vec<i64> = protected_records(tx, records)
                 .await?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect();
             if !master.is_empty() {
-                let names = subtype_names(tx, this.as_records(), &master).await?;
+                let names = subtype_names(tx, records, &master).await?;
                 return Err(Error::user(format!(
                     "Subtypes {names} cannot be deleted: other apps rely on them."
                 )));
             }
         }
-        sup.call(tx, this.as_records(), ()).await
+        sup.call(tx, records, ()).await
     }
 }
 

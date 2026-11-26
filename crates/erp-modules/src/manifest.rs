@@ -221,6 +221,7 @@ struct RawManifest {
     icon: Option<String>,
     data: Option<Vec<String>>,
     demo: Option<Vec<String>>,
+    required_migrations: Option<Vec<String>>,
     pre_init_hook: Option<String>,
     post_init_hook: Option<String>,
     uninstall_hook: Option<String>,
@@ -270,6 +271,8 @@ pub struct Manifest {
     depends: Vec<ModuleName>,
     data: Vec<String>,
     demo: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    required_migrations: Vec<crate::migrations::RequiredMigration>,
     pre_init_hook: Option<HookName>,
     post_init_hook: Option<HookName>,
     uninstall_hook: Option<HookName>,
@@ -574,6 +577,10 @@ impl Manifest {
             None
         };
 
+        let required_migrations = crate::migrations::required_migrations(
+            &mod_name,
+            raw.required_migrations.unwrap_or_default(),
+        )?;
         Ok(Self {
             name: mod_name,
             shortdesc,
@@ -592,6 +599,7 @@ impl Manifest {
             depends,
             data,
             demo,
+            required_migrations,
             pre_init_hook,
             post_init_hook,
             uninstall_hook,
@@ -604,6 +612,10 @@ impl Manifest {
             extra,
             wasm,
         })
+    }
+
+    pub(crate) fn required_migrations(&self) -> &[crate::migrations::RequiredMigration] {
+        &self.required_migrations
     }
 
     /// Internal helper used by discovery to attach detected filesystem assets.

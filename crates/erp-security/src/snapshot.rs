@@ -1963,6 +1963,9 @@ impl AccessPolicy for PolicySnapshot {
     /// when the mapped spec does not compile (the build report lists it).
     fn has_capability(&self, b: &PrincipalBinding<'_>, cap: &Capability) -> Result<bool> {
         let cap = self.registered(cap)?;
+        if b.principal().kind() == erp_orm::PrincipalKind::Agent {
+            return Ok(false);
+        }
         match self.capability_specs.get(cap.name()) {
             Some(Ok(spec)) => Ok(spec.satisfied_by(b.resolution().groups(), b.principal().debug())),
             Some(Err(error)) => Err(Error::access(format!(

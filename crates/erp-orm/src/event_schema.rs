@@ -1107,7 +1107,7 @@ impl Transaction {
 
     /// Every attached partition: a logged plain table of ours, named for one UTC day with that day
     /// as its range, with no trigger, rule, row-level security or policy; no default partition.
-    async fn check_event_partitions(&mut self, def: &TableDef) -> Result<()> {
+    pub(crate) async fn check_event_partitions(&mut self, def: &TableDef) -> Result<()> {
         self.with_catalog_view(async |tx| {
             let rows = tx
                 .query(

@@ -81,6 +81,30 @@ REVOKE ALL ON ir_blob_store, ir_blob, ir_blob_inline, ir_blob_upload, ir_blob_gc
 
 /// The part that refers to `ir_attachment`, run after the models' tables.
 pub const ATTACHMENT_LINK_DDL: &str = "\
+ALTER TABLE ir_attachment ADD COLUMN IF NOT EXISTS blob_id int8 REFERENCES ir_blob (id) ON DELETE RESTRICT;
+CREATE TABLE IF NOT EXISTS ir_attachment_content_grant (
+    attachment_id bigint NOT NULL REFERENCES ir_attachment(id) ON DELETE CASCADE,
+    public_read boolean NOT NULL,
+    issuer_id bigint NOT NULL REFERENCES res_users(id) ON DELETE CASCADE,
+    company_id bigint NOT NULL REFERENCES res_company(id) ON DELETE CASCADE,
+    expires_at timestamptz NOT NULL,
+    secret_hash bytea CHECK (octet_length(secret_hash) = 32),
+    PRIMARY KEY (attachment_id, public_read),
+    CHECK (public_read = (secret_hash IS NULL))
+);
+REVOKE ALL ON ir_attachment_content_grant FROM PUBLIC;
+CREATE OR REPLACE FUNCTION ir_attachment_revoke_content_grants() RETURNS trigger
+LANGUAGE plpgsql AS $revoke$
+BEGIN
+    DELETE FROM ir_attachment_content_grant WHERE attachment_id = OLD.id;
+    RETURN NULL;
+END $revoke$;
+DROP TRIGGER IF EXISTS ir_attachment_revoke_content_grants ON ir_attachment;
+CREATE TRIGGER ir_attachment_revoke_content_grants
+AFTER UPDATE OF blob_id,res_model,res_field,res_id,company_id,public,type ON ir_attachment
+FOR EACH ROW WHEN ((OLD.blob_id,OLD.res_model,OLD.res_field,OLD.res_id,OLD.company_id,OLD.public,OLD.type)
+    IS DISTINCT FROM (NEW.blob_id,NEW.res_model,NEW.res_field,NEW.res_id,NEW.company_id,NEW.public,NEW.type))
+EXECUTE FUNCTION ir_attachment_revoke_content_grants();
 CREATE TABLE IF NOT EXISTS ir_attachment_pending_guard (
     subject_user int8 NOT NULL REFERENCES res_users(id) ON DELETE CASCADE,
     placeholder_model text NOT NULL CHECK (octet_length(placeholder_model) BETWEEN 1 AND 128),
@@ -88,7 +112,6 @@ CREATE TABLE IF NOT EXISTS ir_attachment_pending_guard (
     PRIMARY KEY(subject_user, placeholder_model)
 );
 REVOKE ALL ON ir_attachment_pending_guard FROM PUBLIC;
-ALTER TABLE ir_attachment ADD COLUMN IF NOT EXISTS blob_id int8 REFERENCES ir_blob (id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS ir_attachment_blob_id ON ir_attachment (blob_id) WHERE blob_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION ir_attachment_enqueue_gc_delete() RETURNS trigger LANGUAGE plpgsql AS $fn$
@@ -143,6 +166,7 @@ core_ddl!(
         "ir_blob_peer_probe",
         "ir_blob_owner_claim",
         "ir_blob_owner_recovery",
+        "ir_attachment_content_grant",
         "ir_attachment_pending_guard"
     ],
     sql = BLOB_DDL,

@@ -424,8 +424,11 @@ impl Exporter {
             (FieldType::BigInt, Cell::BigInt(value)) => Value::str(value.to_string()),
             (FieldType::Xid8, Cell::Xid8(value)) => Value::str(value.to_string()),
             (FieldType::TimestampTz, Cell::TimestampTz(value)) => Value::str(value.to_string()),
-            (FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz, Cell::Null) => blank(),
-            (FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz, _) => {
+            (
+                FieldType::Uuid | FieldType::BigInt | FieldType::Xid8 | FieldType::TimestampTz,
+                Cell::Null,
+            ) => blank(),
+            (FieldType::Uuid | FieldType::BigInt | FieldType::Xid8 | FieldType::TimestampTz, _) => {
                 return Err(Error::programming(format!(
                     "export cache value does not match native field {model}.{} ({})",
                     field.name,
@@ -630,7 +633,7 @@ mod tests {
 mod native_fields_tests {
     #![allow(clippy::unwrap_used, reason = "tests")]
     use super::*;
-    use erp_fields::{TimestampTz, Uuid, Xid8};
+    use erp_fields::{BigInt, TimestampTz, Uuid, Xid8};
     use erp_registry::{AddonDescriptor, FieldDecl, ModelDecl, RegistryBuilder};
     #[test]
     fn native_fields_export_exact_text_and_refuse_wrong_cache_kinds() {
@@ -643,6 +646,7 @@ mod native_fields_tests {
             const {
                 &[
                     FieldDecl::uuid("u"),
+                    FieldDecl::bigint("b"),
                     FieldDecl::xid8("x"),
                     FieldDecl::timestamptz("t"),
                 ]
@@ -661,6 +665,11 @@ mod native_fields_tests {
         let instant = TimestampTz::parse("2024-03-01T01:00:00.123456+07:00").unwrap();
         for (name, cell, text) in [
             ("u", Cell::Uuid(Uuid::NIL), Uuid::NIL.to_string()),
+            (
+                "b",
+                Cell::BigInt(BigInt::from_i64(i64::MAX)),
+                i64::MAX.to_string(),
+            ),
             (
                 "x",
                 Cell::Xid8(Xid8::from_u64(u64::MAX)),

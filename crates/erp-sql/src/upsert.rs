@@ -71,6 +71,11 @@ pub(crate) fn key_match(
 pub enum SetAction {
     /// `c = EXCLUDED.c` when it differs (`update`).
     Overwrite,
+    /// Replace one key in the current company map. The proposed map contains at most that key.
+    CompanyOverwrite {
+        /// Placeholder of the writing company id, bound as text.
+        company: usize,
+    },
     /// `c = COALESCE(t.c, 0) + EXCLUDED.c` (`accumulate`: the row carries a delta).
     Accumulate,
     /// `c = GREATEST($floor, COALESCE(t.c, 0) + EXCLUDED.c)` (`accumulate_floor`); the floor is
@@ -302,6 +307,13 @@ pub fn upsert(s: &Upsert<'_>) -> String {
                     SetAction::Overwrite => {
                         assigns.push(format!("{col} = {proposed}"));
                         changed.push(format!("{current} IS DISTINCT FROM {proposed}"));
+                    }
+                    SetAction::CompanyOverwrite { company } => {
+                        let value = format!(
+                            "NULLIF((COALESCE({current}, '{{}}'::jsonb) - ${company}::text) || COALESCE({proposed}, '{{}}'::jsonb), '{{}}'::jsonb)"
+                        );
+                        changed.push(format!("{current} IS DISTINCT FROM {value}"));
+                        assigns.push(format!("{col} = {value}"));
                     }
                     SetAction::Accumulate => {
                         assigns.push(format!("{col} = COALESCE({current}, 0) + {proposed}"));

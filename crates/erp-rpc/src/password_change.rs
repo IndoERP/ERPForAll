@@ -1,7 +1,10 @@
 //! Closed managed password boundary; no browser credential or arbitrary executor is stored here.
 use crate::RpcFailure;
 use erp_fields::{Error, Result, Value, ValueMap};
-use erp_orm::{Context, Principal, rpc::RpcArgs};
+use erp_orm::{
+    Context, Principal, Transaction,
+    rpc::{Effect, RpcArgs},
+};
 use std::sync::{Mutex, PoisonError};
 
 /// Fixed session operations whose authentication service owns the transaction.
@@ -56,6 +59,8 @@ pub struct PasswordCall<'a> {
     pub(crate) args: RpcArgs,
     pub(crate) context: Context,
     pub(crate) gate: &'a (dyn Fn(&Principal) -> std::result::Result<(), RpcFailure> + Send + Sync),
+    pub(crate) attempt_gate: Option<&'a dyn crate::AttemptGate>,
+    pub(crate) effect: Effect,
     pub(crate) failure: &'a Mutex<Option<RpcFailure>>,
 }
 impl std::fmt::Debug for PasswordCall<'_> {
@@ -100,6 +105,37 @@ impl PasswordCall<'_> {
                 Err(Error::access("Password operation denied by RPC policy."))
             }
         }
+    }
+
+    /// Take the policy lock before Auth refreshes its final session authorization.
+    #[doc(hidden)]
+    pub async fn prepare_transaction(&self, tx: &mut Transaction) -> Result<()> {
+        if let Some(gate) = self.attempt_gate {
+            gate.prepare_managed_password(tx).await?;
+        }
+        Ok(())
+    }
+
+    /// Reuse the password transaction for stateful admission without passing credentials
+    /// or constructing an idempotent call.
+    #[doc(hidden)]
+    pub async fn authorize_transaction(
+        &self,
+        tx: &mut Transaction,
+        principal: &Principal,
+    ) -> Result<()> {
+        self.authorize(principal)?;
+        if let Some(gate) = self.attempt_gate {
+            gate.check_managed_password(
+                tx,
+                principal,
+                self.route.model(),
+                self.route.method(),
+                self.effect,
+            )
+            .await?;
+        }
+        Ok(())
     }
 }
 

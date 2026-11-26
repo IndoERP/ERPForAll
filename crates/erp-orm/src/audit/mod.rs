@@ -52,6 +52,7 @@ mod persist;
 pub mod reader;
 mod reader_connection;
 mod reader_grants;
+mod retention;
 mod schema;
 pub mod seal;
 mod store;
@@ -69,6 +70,7 @@ pub use persist::AuditAttempt;
 /// Isolated reader transport; authorization and projection remain separate from raw storage.
 pub use reader_connection::AuditReaderConnection;
 pub use reader_grants::AuditReaderRoles;
+pub use retention::AuditRetention;
 pub(crate) use schema::AUDIT_TABLE;
 pub use store::AuditStoreState;
 pub(crate) use store::StoreCell;
@@ -221,6 +223,10 @@ pub(crate) fn limit(what: impl Into<String>) -> AuditError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AuditOrigin {
+    /// A write received through the server's signed inbound callback transport.
+    InboundCallback,
+    /// An assistant tool invoked through the authenticated MCP transport.
+    Mcp,
     /// A JSON-2 call.
     Rpc,
     /// A server action run.
@@ -244,7 +250,9 @@ impl AuditOrigin {
     /// The `origin` column text.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::InboundCallback => "inbound_callback",
             Self::Assistant => "assistant",
+            Self::Mcp => "mcp",
             Self::Rpc => "rpc",
             Self::ServerAction => "server_action",
             Self::Job => "job",

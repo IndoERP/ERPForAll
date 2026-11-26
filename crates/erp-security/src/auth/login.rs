@@ -50,6 +50,7 @@ use super::dummy;
 use super::hooks::EndReason;
 use super::password::{self, HashParams};
 use super::pool::{self, HashPool, HashPoolError};
+use super::post_login::PostLoginPolicy;
 use super::retry::{DEADLOCK, DeadlockRetries, RetryCounters, absorb, is_retried, retry};
 use super::schema;
 use super::session::{
@@ -61,13 +62,16 @@ use super::store;
 use super::throttle::{self, AddressKey, Prefilter, ThrottleHasher, ThrottleKey};
 use super::warn::WarnLimit;
 
+mod external;
 mod identity;
 mod selection;
 use super::token_plan::{
     COLUMNS_MARKER, GUARD_MARKER, SessionTokenFields, TokenPlan, TokenValues, replace_once,
 };
 use crate::resolver::Resolver;
-pub use identity::{IdentityCheck, PasswordAuthorization, PasswordReset};
+pub use identity::{
+    IdentityCheck, PasswordAuthorization, PasswordReset, PasswordTransactionAuthorization,
+};
 use selection::{CandidateRecord, LoginSelectionPlan, select_candidate};
 pub use selection::{
     LoginDomain, LoginLookup, LoginOrder, LoginOrderTerm, LoginSelectionContext,
@@ -602,6 +606,7 @@ pub struct Auth {
     identity_lock_sql: String,
     has_languages: bool,
     checks_overridden: bool,
+    post_login: Option<PostLoginPolicy>,
     /// An addon overrides `_on_login_cooldown`.
     cooldown_overridden: bool,
     /// An addon overrides `_get_login_domain` or `_get_login_order` (H58).
@@ -1084,15 +1089,14 @@ impl Attempt {
             }
         };
         let user = candidate.map(
-            |(uid, stored, lang, tz, canonical_login, witness)| LoginUser {
+            |(uid, stored, lang, tz, canonical_login, witness, token_extra)| LoginUser {
                 uid,
                 stored,
                 lang,
                 tz,
                 canonical_login: Some(canonical_login),
                 witness: Some(witness),
-                // custom selection with added token fields is refused at construction
-                token_extra: TokenValues::empty(),
+                token_extra,
             },
         );
         let codes: Option<Vec<String>> = col(row, 5)?;
@@ -1605,6 +1609,76 @@ async fn dispatch_selection(
     LoginSelectionPlan::admit(validated_domain, validated_order, limits, registry)
 }
 
+/// Validate the fully composed selection and token plan before publishing an install or upgrade.
+///
+/// # Errors
+/// Returns the offending hook or field error, or a validation timeout.
+pub async fn validate_login_plan(tx: &mut Transaction) -> Result<()> {
+    let registry = Arc::clone(tx.registry());
+    tokio::time::timeout(AuthConfig::DEFAULT.token_plan_hook_deadline(), async {
+        let fields = dispatch_token_fields(tx).await?;
+        TokenPlan::compile(&fields, &registry)?;
+        dispatch_selection(
+            tx,
+            "registry-check",
+            &LoginSelectionLimits::default(),
+            &registry,
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| Error::validation("Login plan validation exceeded its deadline"))?
+}
+
+/// Check both the current plan and the selected account, including the values that
+/// participated in selection. Callers hold the user-table guard until their verdict commits.
+async fn selection_matches(
+    tx: &mut Transaction,
+    login: &str,
+    limits: &LoginSelectionLimits,
+    orm: &Orm,
+    plan: &LoginSelectionPlan,
+    uid: UserId,
+    witness: &SelectionWitness,
+) -> Result<bool> {
+    let fresh = dispatch_selection(tx, login, limits, orm.registry()).await?;
+    if fresh.domain.domain() != plan.domain.domain() || fresh.order != plan.order {
+        return Ok(false);
+    }
+    Ok(select_candidate(tx, &fresh, limits, &TokenPlan::base())
+        .await?
+        .is_some_and(|(current, _, _, _, _, selected, _)| uid == current && *witness == selected))
+}
+
+/// An override owns a repeatable-read snapshot. Its own transaction sees its pending
+/// writes. A second primary reader sees committed changes since the initial selection.
+/// Checking both under the same table lock also covers newly inserted matching accounts.
+async fn lock_login_selection(
+    tx: &mut Transaction,
+    orm: &Orm,
+    login: &str,
+    limits: &LoginSelectionLimits,
+    plan: &LoginSelectionPlan,
+    uid: UserId,
+    witness: &SelectionWitness,
+) -> Result<bool> {
+    tx.execute("LOCK TABLE res_users IN SHARE ROW EXCLUSIVE MODE", &[])
+        .await?;
+    if !selection_matches(tx, login, limits, orm, plan, uid, witness).await? {
+        return Ok(false);
+    }
+    if tx.isolation_level() == Isolation::ReadCommitted {
+        return Ok(true);
+    }
+    let mut primary = orm
+        .begin_opts(read_committed().read_only(PHASE_A_ENTRY))
+        .await?;
+    let result = selection_matches(&mut primary, login, limits, orm, plan, uid, witness).await;
+    primary.rollback().await?;
+    result
+}
+
 impl PhaseARead<'_> {
     async fn run(
         &self,
@@ -1616,24 +1690,23 @@ impl PhaseARead<'_> {
         let (address, trusted) = (keys.address(), keys.trusted());
 
         if self.principal_accounting {
-            if self.overridden {
-                return Err(LoginError::Failed(Error::programming(
-                    "active login principal accounting combined with credential override is unsupported until a later release",
-                )));
-            }
+            let options = if self.overridden {
+                repeatable_read()
+            } else {
+                repeatable_read().read_only(PHASE_A_ENTRY)
+            };
             let mut tx = self
                 .orm
-                .begin_opts(repeatable_read().read_only(PHASE_A_ENTRY))
+                .begin_opts(options)
                 .await
                 .map_err(LoginError::Failed)?;
-
             let plan =
                 match dispatch_selection(&mut tx, login, &self.limits, self.orm.registry()).await {
                     Ok(p) => p,
                     Err(e) => return Err(LoginError::Failed(abandon(&mut tx, e).await)),
                 };
 
-            let candidate = match select_candidate(&mut tx, &plan, &self.limits).await {
+            let candidate = match select_candidate(&mut tx, &plan, &self.limits, self.plan).await {
                 Ok(c) => c,
                 Err(e) => return Err(LoginError::Failed(abandon(&mut tx, e).await)),
             };
@@ -1672,8 +1745,13 @@ impl PhaseARead<'_> {
                 Err(e) => return Err(LoginError::Failed(abandon(&mut tx, e).await)),
             };
 
-            tx.rollback().await.map_err(LoginError::Failed)?;
-            return Ok((attempt, PhaseA::Flight, Some(plan)));
+            let phase = if self.overridden {
+                PhaseA::Open(Box::new(tx))
+            } else {
+                tx.rollback().await.map_err(LoginError::Failed)?;
+                PhaseA::Flight
+            };
+            return Ok((attempt, phase, Some(plan)));
         }
 
         let params: [(&(dyn ToSql + Sync), Type); 5] = [
@@ -1807,7 +1885,6 @@ impl Auth {
     /// malformed `database.secret`; the read transaction's errors. Custom domain/order overrides
     /// return `Programming` requiring an active membership-bound rollout; use [`Self::with_membership`]
     /// to supply real rollout admission.
-    /// A combined selection/credential override instead names first.
     pub async fn new(orm: Orm, config: AuthConfig, pool: &'static HashPool) -> Result<Self> {
         Self::construct(orm, config, pool, SelectionAdmission::Serving).await
     }
@@ -1829,10 +1906,8 @@ impl Auth {
     ///
     /// # Errors
     /// The errors of [`Self::new`], except its custom-selection rollout refusal; invalid membership,
-    /// helper/schema identity or binary capability refuses. SESSION composition retains precedence.
-    /// Membership-bound credential overrides refuse verification pending SESSION support, including
-    /// while disabled: their open transaction cannot precede the later feature protection lock.
-    /// Construction and ordinary validation of existing sessions remain available.
+    /// helper/schema identity or binary capability refuses. Credential overrides share a
+    /// transaction with their guarded verdict. An accepted override commits with the session.
     pub async fn with_membership(
         orm: Orm,
         config: AuthConfig,
@@ -1891,6 +1966,7 @@ impl Auth {
         });
         let counters = Counters::default();
         bump(&counters.settings_loads);
+        let post_login = PostLoginPolicy::for_registry(&orm, &config);
         let checks_overridden = orm
             .registry()
             .model_id("res.users")
@@ -1908,19 +1984,9 @@ impl Auth {
             .model_id("res.users")
             .is_some_and(|id| !orm.dispatch().is_base_method(id, "_get_login_order"));
         let selection_overridden = domain_overridden || order_overridden;
-        if selection_overridden && checks_overridden {
-            return Err(Error::programming(
-                "custom login selection combined with credential override is unsupported until a later release",
-            ));
-        }
         if selection_overridden && matches!(&selection_admission, SelectionAdmission::Serving) {
             return Err(Error::programming(
                 "custom login selection requires an active membership-bound rollout",
-            ));
-        }
-        if selection_overridden && !token_plan.is_base() {
-            return Err(Error::programming(
-                "custom login selection combined with a session token plan that adds fields is unsupported until a later release",
             ));
         }
         let feature = match selection_admission {
@@ -1959,6 +2025,7 @@ impl Auth {
             token_plan,
             has_languages,
             checks_overridden,
+            post_login,
             cooldown_overridden,
             selection_overridden,
             selection_limits: LoginSelectionLimits::default(),
@@ -2230,26 +2297,14 @@ impl Auth {
         }
     }
 
-    /// Shared by every password-verification entry, including identity confirmation. A bound
-    /// credential override cannot retain user locks before later feature protection, even while
-    /// disabled; SESSION must integrate that transaction ownership before it can be supported.
+    /// Snapshot membership before password verification; finalization revalidates this generation.
     async fn feature_attempt(&self) -> Result<Option<AttemptFeature>, LoginError> {
         match &self.feature {
             Some(member) => {
                 let snapshot = member.snapshot(&self.orm).await?;
-                if snapshot.enabled() && self.checks_overridden {
-                    return Err(LoginError::Failed(Error::programming(
-                        "active login principal accounting combined with credential override is unsupported until a later release",
-                    )));
-                }
                 if self.selection_overridden && !snapshot.enabled() {
                     return Err(LoginError::Failed(Error::programming(
                         "login selection rollout is disabled",
-                    )));
-                }
-                if self.checks_overridden {
-                    return Err(LoginError::Failed(Error::programming(
-                        "membership-bound credential overrides are unsupported until a later release",
                     )));
                 }
                 Ok(Some(AttemptFeature {
@@ -2283,11 +2338,6 @@ impl Auth {
     /// [`LoginError::Failed`] for anything that is not a decision about the credential (nothing
     /// is counted then).
     pub async fn authenticate(&self, request: LoginRequest) -> Result<Login, LoginError> {
-        if self.selection_overridden && self.checks_overridden {
-            return Err(LoginError::Failed(Error::programming(
-                "custom login selection combined with credential override is unsupported until a later release",
-            )));
-        }
         let LoginRequest {
             login,
             password,
@@ -2345,6 +2395,7 @@ impl Auth {
             sql: Arc::clone(&self.sql),
             has_languages: self.has_languages,
             checks_overridden: self.checks_overridden,
+            post_login: self.post_login,
             cooldown_overridden: self.cooldown_overridden,
             principal_accounting,
             feature,
@@ -2785,6 +2836,7 @@ struct Verdict {
     sql: Arc<PlanSql>,
     has_languages: bool,
     checks_overridden: bool,
+    post_login: Option<PostLoginPolicy>,
     cooldown_overridden: bool,
     principal_accounting: bool,
     feature: Option<AttemptFeature>,
@@ -3078,6 +3130,9 @@ impl Verdict {
                 .abandon_phase_a(phase_a, LoginError::Failed(error))
                 .await);
         }
+        if auth.mfa() == super::Mfa::Enforce {
+            return Err(self.abandon_phase_a(phase_a, LoginError::Denied).await);
+        }
         // Hashing remains outside the finalization transaction. No DB guard is held
         // while waiting for the hashing pool (accepted contract §4).
         let rehash = match self.rehash(&auth).await {
@@ -3106,7 +3161,7 @@ impl Verdict {
         let outcome = loop {
             let mut phase_a_failed = false;
             let error = match self
-                .finalize_once(&user, rehash_hash, &mut phase_a, &mut phase_a_failed)
+                .finalize_once(&user, &auth, rehash_hash, &mut phase_a, &mut phase_a_failed)
                 .await
             {
                 Ok(outcome) => break outcome,
@@ -3166,17 +3221,72 @@ impl Verdict {
     async fn finalize_once(
         &self,
         user: &LoginUser,
+        auth: &AuthInfo,
         rehash: Option<&str>,
         phase_a: &mut Option<PhaseA>,
         phase_a_failed: &mut bool,
     ) -> Result<Option<(NewSession, UserContext, i64)>> {
-        let mut selection_tx = if let Some(feature) = &self.feature {
-            let mut tx = self.orm.begin_opts(read_committed()).await?;
-            if let Err(error) = feature
-                .member
-                .binding
-                .protect_in(&mut tx, &feature.snapshot)
-                .await
+        // Keep a guarded override's writes, its checked identity and the session in
+        // one commit. A transaction aborted by contention must rerun the override too.
+        if let Some(PhaseA::Open(mut tx)) =
+            phase_a.take_if(|phase| matches!(phase, PhaseA::Open(_)))
+        {
+            *phase_a_failed = true;
+            let checked = async {
+                if let Some(feature) = &self.feature {
+                    feature
+                        .member
+                        .binding
+                        .protect_in(&mut tx, &feature.snapshot)
+                        .await
+                        .map_err(rollout_error)?;
+                }
+                if let (Some(witness), Some(plan)) = (&user.witness, &self.plan)
+                    && !lock_login_selection(
+                        &mut tx,
+                        &self.orm,
+                        self.login(),
+                        &self.limits,
+                        plan,
+                        user.uid,
+                        witness,
+                    )
+                    .await?
+                {
+                    return Ok(None);
+                }
+                self.write_success(user, auth, rehash, Some(&mut tx)).await
+            }
+            .await;
+            return match checked {
+                Ok(Some(login)) => {
+                    tx.commit().await?;
+                    Ok(Some(login))
+                }
+                Ok(None) => {
+                    tx.rollback().await?;
+                    Ok(None)
+                }
+                Err(error) if matches!(error.sqlstate(), Some("40P01" | "40001")) => {
+                    tx.rollback().await?;
+                    Ok(None)
+                }
+                Err(error) => Err(abandon(&mut tx, error).await),
+            };
+        }
+        let mut selection_tx = if self.post_login.is_some() || self.feature.is_some() {
+            let options = if self.post_login.is_some() {
+                repeatable_read()
+            } else {
+                read_committed()
+            };
+            let mut tx = self.orm.begin_opts(options).await?;
+            if let Some(feature) = &self.feature
+                && let Err(error) = feature
+                    .member
+                    .binding
+                    .protect_in(&mut tx, &feature.snapshot)
+                    .await
             {
                 return Err(abandon(&mut tx, rollout_error(error)).await);
             }
@@ -3194,28 +3304,20 @@ impl Verdict {
                 Some(tx) => tx,
                 None => self.orm.begin_opts(read_committed()).await?,
             };
-            if let Err(error) = tx
-                .execute("LOCK TABLE res_users IN SHARE ROW EXCLUSIVE MODE", &[])
-                .await
+            let matches = match lock_login_selection(
+                &mut tx,
+                &self.orm,
+                self.login(),
+                &self.limits,
+                plan,
+                user.uid,
+                witness,
+            )
+            .await
             {
-                return Err(abandon(&mut tx, error).await);
-            }
-            let fresh =
-                match dispatch_selection(&mut tx, self.login(), &self.limits, self.orm.registry())
-                    .await
-                {
-                    Ok(plan) => plan,
-                    Err(error) => return Err(abandon(&mut tx, error).await),
-                };
-            let candidate = match select_candidate(&mut tx, &fresh, &self.limits).await {
-                Ok(candidate) => candidate,
+                Ok(result) => result,
                 Err(error) => return Err(abandon(&mut tx, error).await),
             };
-            let matches = fresh.domain.domain() == plan.domain.domain()
-                && fresh.order == plan.order
-                && candidate.is_some_and(|(uid, _, _, _, _, new_witness)| {
-                    uid == user.uid && new_witness == *witness
-                });
             if !matches {
                 tx.rollback().await?;
                 end_phase_a(phase_a.take().unwrap_or(PhaseA::Flight), false).await?;
@@ -3232,7 +3334,7 @@ impl Verdict {
             });
         }
         let written = self
-            .write_success(user, rehash, selection_tx.as_mut())
+            .write_success(user, auth, rehash, selection_tx.as_mut())
             .await;
         let outcome = match written {
             Ok(outcome) => outcome,
@@ -3327,12 +3429,13 @@ impl Verdict {
     async fn write_success(
         &self,
         user: &LoginUser,
+        auth: &AuthInfo,
         rehash: Option<&str>,
-        selection_tx: Option<&mut Transaction>,
+        mut selection_tx: Option<&mut Transaction>,
     ) -> Result<Option<(NewSession, UserContext, i64)>> {
         let prepared = self.new_session(user, rehash)?;
         let rows = self
-            .success_flight(user, rehash, &prepared, selection_tx)
+            .success_flight(user, rehash, &prepared, selection_tx.as_deref_mut())
             .await?;
         let Some(row) = rows.first() else {
             return Ok(None);
@@ -3342,6 +3445,34 @@ impl Verdict {
             secret, id, lang, ..
         } = prepared;
         let context = UserContext::new(user.uid, lang, user.tz.clone());
+        if let Some(policy) = self.post_login {
+            let tx = selection_tx
+                .ok_or_else(|| Error::programming("Session hook requires a transaction"))?;
+            let login = user
+                .canonical_login
+                .as_deref()
+                .map(String::as_str)
+                .unwrap_or_else(|| self.login());
+            policy
+                .run(tx, &id, &context, login, auth, &self.cached.token_plan)
+                .await?;
+            if let (Some(witness), Some(plan)) = (&user.witness, &self.plan)
+                && !selection_matches(
+                    tx,
+                    self.login(),
+                    &self.limits,
+                    &self.orm,
+                    plan,
+                    user.uid,
+                    witness,
+                )
+                .await?
+            {
+                return Err(Error::validation(
+                    "Selected account changed during login hook",
+                ));
+            }
+        }
         let session = NewSession {
             secret,
             id,
@@ -3585,7 +3716,7 @@ fn cleanup_sql(plan: &TokenPlan) -> Result<std::borrow::Cow<'static, str>> {
         return Ok(CLEANUP_BATCH.into());
     }
     let sql = replace_once(CLEANUP_BATCH, "/*token_cols_cte*/", &plan.select_list(""))?;
-    let sql = replace_once(&sql, "/*token_cols_meta*/", &plan.select_list("u"))?;
+    let sql = replace_once(&sql, "/*token_cols_meta*/", &plan.projected_list("u"))?;
     Ok(replace_once(&sql, "/*token_cols_pad*/", &plan.null_list())?.into())
 }
 
@@ -3802,9 +3933,16 @@ async fn check_credentials(
         .browse([uid.get()])?
         .with_user(uid.get())
         .sudo(true);
-    users
-        .call::<(Arc<Credential>, CheckEnv), AuthInfo>(tx, "_check_credentials", (credential, env))
-        .await
+    let mut hook = tx.hook_scope("res.users._check_credentials");
+    let result = users
+        .call::<(Arc<Credential>, CheckEnv), AuthInfo>(
+            &mut hook,
+            "_check_credentials",
+            (credential, env),
+        )
+        .await;
+    hook.finish()?;
+    result
 }
 
 /// A read-only view of the current database settings.
@@ -4730,7 +4868,7 @@ mod sensitive_copy_ownership_tests {
     #[test]
     fn candidate_record_and_login_user_copies_are_wiped_on_drop() {
         fn record(candidate: CandidateRecord) {
-            let (_uid, stored, _lang, _tz, canonical, _witness) = candidate;
+            let (_uid, stored, _lang, _tz, canonical, _witness, _extra) = candidate;
             let stored: Option<Zeroizing<String>> = stored;
             let canonical: Zeroizing<String> = canonical;
             wiped_on_drop(&canonical);

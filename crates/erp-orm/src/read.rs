@@ -908,6 +908,9 @@ impl Transaction {
             self.active_languages().await?;
         }
         self.ensure(records, fid).await?;
+        if field.store && matches!(field.ty, FieldType::Many2many { .. }) {
+            return self.x2many_cells(records, fid).await;
+        }
         self.cells_of(records.env(), records.model_id(), fid, records.rec_ids())
     }
 }
@@ -1423,6 +1426,16 @@ pub struct BoundedBinary {
     size: usize,
     bytes: Option<Arc<[u8]>>,
 }
+/// The snapshot of a readable, non-null binary field selected for a download.
+#[derive(Debug)]
+pub struct ContentBinary {
+    /// Full length, including values above the configured limit.
+    pub size: usize,
+    /// Validator computed in PostgreSQL for a bounded metadata-only read.
+    pub digest: Option<[u8; 32]>,
+    /// Full payload for GET, or at most the first 8192 bytes for HEAD.
+    pub bytes: Option<Arc<[u8]>>,
+}
 impl BoundedBinary {
     /// Persisted record ID.
     pub fn id(&self) -> i64 {
@@ -1454,6 +1467,69 @@ impl Records {
         per_value: usize,
         total: usize,
     ) -> Result<Vec<BoundedBinary>> {
+        self.bounded_binary_column(tx, name, per_value, total, false)
+            .await
+    }
+
+    /// Read one stored download field or a local stored image derivative. HEAD computes
+    /// the validator in PostgreSQL and returns only the prefix needed to detect the media type.
+    /// Above the limit the exact size is returned with an empty payload and no digest.
+    /// # Errors
+    /// Propagates access and database errors; requires a singleton and a direct stored field.
+    pub async fn read_content_binary(
+        &self,
+        tx: &mut Transaction,
+        name: &str,
+        limit: usize,
+        headers_only: bool,
+    ) -> Result<Option<ContentBinary>> {
+        let id = self.ensure_one()?.int()?;
+        let cap = i64::try_from(limit)
+            .map_err(|_| Error::validation("binary download limit overflows int8"))?;
+        if cap == 0 {
+            return Err(Error::validation("binary download limit must be positive"));
+        }
+        let (table, column) = self.binary_column(tx, name, true).await?;
+        let sql = format!("SELECT octet_length({column}), CASE WHEN octet_length({column}) <= $2::bigint AND $3 THEN sha256({column}) END,
+            CASE WHEN octet_length({column}) <= $2::bigint THEN CASE WHEN $3 THEN substring({column} FROM 1 FOR 8192) ELSE {column} END END
+            FROM {table} WHERE id=$1 AND {column} IS NOT NULL");
+        let rows = tx.query(&sql, &[&id, &cap, &headers_only]).await?;
+        rows.first()
+            .map(|row| {
+                let size = usize::try_from(
+                    row.try_get::<_, i32>(0)
+                        .map_err(|e| Error::db(format!("download size: {e}")))?,
+                )
+                .map_err(|_| Error::db("invalid download size"))?;
+                let digest = row
+                    .try_get::<_, Option<Vec<u8>>>(1)
+                    .map_err(|e| Error::db(format!("download digest: {e}")))?
+                    .map(|bytes| {
+                        bytes
+                            .try_into()
+                            .map_err(|_| Error::db("invalid download digest size"))
+                    })
+                    .transpose()?;
+                let bytes = row
+                    .try_get::<_, Option<Vec<u8>>>(2)
+                    .map_err(|e| Error::db(format!("download payload: {e}")))?;
+                Ok(ContentBinary {
+                    size,
+                    digest,
+                    bytes: bytes.map(Arc::from),
+                })
+            })
+            .transpose()
+    }
+
+    async fn bounded_binary_column(
+        &self,
+        tx: &mut Transaction,
+        name: &str,
+        per_value: usize,
+        total: usize,
+        content: bool,
+    ) -> Result<Vec<BoundedBinary>> {
         let cap = i64::try_from(per_value)
             .map_err(|_| Error::validation("binary per-value byte limit overflows int8"))?;
         let total = i64::try_from(total)
@@ -1461,41 +1537,14 @@ impl Records {
         if cap == 0 || total == 0 {
             return Err(Error::validation("binary byte limits must be positive"));
         }
-        let registry = Arc::clone(self.env().registry());
-        let spec = registry.model_by_id(self.model_id());
-        let field = field_of(spec, name)?;
-        // Check field/model/record policy without loading contents, even for an unsupported kind.
-        tx.check_report_field(self, field.id)?;
-        tx.admit_records(self).await?;
-        if !self.env().su() {
-            tx.prepare_access(self.env()).await?;
-        }
-        tx.check_model(self.env(), self.model_id(), Operation::Read)?;
-        tx.check_field(self.env(), self.model_id(), field.id, FieldOp::Read)?;
-        tx.field_record_read_checks(self, field.id, false).await?;
-        if !sized_by_column(spec, field)
-            || field.compute.is_some()
-            || field.related.is_some()
-            || field.is_generated()
-            || field.translate
-            || field.company_dependent
-            || field.company_default_for.is_some()
-            || self.rec_ids().iter().any(|id| id.is_new())
-        {
-            return Err(Error::validation(
-                "bounded binary reads require persisted records and a direct stored binary field",
-            ));
-        }
-        tx.flush_fields(self.model_id(), &[field.id]).await?;
+        let (table, column) = self.binary_column(tx, name, content).await?;
         let ids: Vec<i64> = self.rec_ids().iter().map(|id| id.get()).collect();
-        let column = erp_sql::quote(field.name);
         // The window computes only lengths. CASE prevents excess bytea values entering result rows.
         // One statement avoids a concurrent size-read/content-read race; no eager payload CTE.
         let sql = format!(
             "SELECT id, octet_length({column}), CASE WHEN octet_length({column}) <= $2::bigint \
             AND sum(CASE WHEN octet_length({column}) <= $2::bigint THEN octet_length({column})::bigint ELSE 0 END) OVER () <= $3::bigint \
-            THEN {column} ELSE NULL END FROM {} WHERE id = ANY($1) ORDER BY id",
-            erp_sql::quote(&spec.table)
+            THEN {column} ELSE NULL END FROM {table} WHERE id = ANY($1) ORDER BY id"
         );
         let rows = tx.query(&sql, &[&ids, &cap, &total]).await?;
         rows.iter()
@@ -1521,5 +1570,55 @@ impl Records {
                 })
             })
             .collect()
+    }
+    async fn binary_column(
+        &self,
+        tx: &mut Transaction,
+        name: &str,
+        content: bool,
+    ) -> Result<(String, String)> {
+        let registry = Arc::clone(self.env().registry());
+        let spec = registry.model_by_id(self.model_id());
+        let field = field_of(spec, name)?;
+        // Check field/model/record policy without loading contents, even for an unsupported kind.
+        tx.check_report_field(self, field.id)?;
+        tx.admit_records(self).await?;
+        if !self.env().su() {
+            tx.prepare_access(self.env()).await?;
+        }
+        tx.check_model(self.env(), self.model_id(), Operation::Read)?;
+        tx.check_field(self.env(), self.model_id(), field.id, FieldOp::Read)?;
+        tx.field_record_read_checks(self, field.id, false).await?;
+        let derivative = if content
+            && matches!(field.ty, FieldType::Binary { image: Some(_) })
+            && let Some(source) = field.related.and_then(|path| spec.field(path))
+            && sized_by_column(spec, source)
+            && matches!(source.ty, FieldType::Binary { image: Some(_) })
+            && source.related.is_none()
+            && source.compute.is_none()
+            && !source.company_dependent
+        {
+            tx.check_report_field(self, source.id)?;
+            tx.check_field(self.env(), self.model_id(), source.id, FieldOp::Read)?;
+            tx.field_record_read_checks(self, source.id, false).await?;
+            true
+        } else {
+            false
+        };
+        if !sized_by_column(spec, field)
+            || field.compute.is_some()
+            || (field.related.is_some() && !derivative)
+            || field.is_generated()
+            || field.translate
+            || field.company_dependent
+            || field.company_default_for.is_some()
+            || self.rec_ids().iter().any(|id| id.is_new())
+        {
+            return Err(Error::validation(
+                "bounded binary reads require persisted records and a direct stored binary field",
+            ));
+        }
+        tx.flush_fields(self.model_id(), &[field.id]).await?;
+        Ok((erp_sql::quote(&spec.table), erp_sql::quote(field.name)))
     }
 }

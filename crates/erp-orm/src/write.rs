@@ -37,7 +37,7 @@ use erp_registry::{
 };
 use erp_sql::NOW_UTC;
 use erp_sql::dml::{IdSource, insert_rows, insert_rows_checked};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio_postgres::types::ToSql;
 
 use crate::Transaction;
@@ -1904,6 +1904,11 @@ pub(crate) async fn write_records(
         if matches!(cell, Cell::Bytes(_)) && field.ty.image_bounds().is_some() {
             tx.ensure_image_policy(spec).await?;
         }
+        // Draft owner maps can carry local relation ids. A persisted owner has to refuse the
+        // unsaved target before ordinary many2one validation discards the draft-specific error.
+        if field.company_dependent && !all_new && matches!(field.ty, FieldType::Many2one { .. }) {
+            crate::company_dependent_runtime::refuse_draft_link(spec, field, cell)?;
+        }
         let mut cell = if field.translate {
             cell.clone()
         } else if matches!(field.ty, FieldType::Html) {
@@ -2133,7 +2138,6 @@ async fn write_protected(
         let mut changed = Vec::new();
         if field.company_dependent {
             // drafts keep their map in the cache only: never dirty, no baseline
-            crate::company_dependent_runtime::refuse_draft_link(spec, field, &cell)?;
             tx.ensure(records, fid).await?;
             let (company, fallback) = tx.property_context(&env, model, fid)?;
             for (i, id) in records.rec_ids().iter().enumerate() {
@@ -2154,8 +2158,13 @@ async fn write_protected(
                 let old = tx.cache.get(model, fid, *id).ok_or_else(|| {
                     Error::programming("Company-dependent write lost its loaded map")
                 })?;
-                let new =
-                    crate::company_dependent::apply(&field.ty, &old, company, scalar, &fallback)?;
+                let new = if id.is_new() {
+                    crate::company_dependent::apply_draft(
+                        &field.ty, &old, company, scalar, &fallback,
+                    )?
+                } else {
+                    crate::company_dependent::apply(&field.ty, &old, company, scalar, &fallback)?
+                };
                 if !force && old.same_value(&new) {
                     continue;
                 }
@@ -2796,6 +2805,30 @@ impl Transaction {
             let hooked = crate::version::hooked_fields(self, spec.id, &group_fields);
             let hooked_names: Vec<&str> =
                 hooked.iter().map(|f| spec.field_by_id(*f).name).collect();
+            let hook_origins = if hooked
+                .iter()
+                .any(|f| spec.field_by_id(*f).company_dependent)
+            {
+                let mut origins = FxHashMap::default();
+                for id in &rec_ids {
+                    let origin = self
+                        .engine
+                        .properties
+                        .origins
+                        .get(&(spec.id, *id))
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::programming(
+                                "company-dependent write hook is missing its writer origin",
+                            )
+                        })?;
+                    self.prepare_properties(&origin, spec).await?;
+                    origins.insert(*id, origin);
+                }
+                origins
+            } else {
+                FxHashMap::default()
+            };
             // Database flags include owned generated outputs; automatic audit/version columns
             // alone never manufacture a business write event.
             let mut changed_fields: Vec<FieldId> = if spec.eventful {
@@ -2923,7 +2956,8 @@ impl Transaction {
                     }
                     let mut values = Vec::with_capacity(hooked.len());
                     for (i, f) in hooked.iter().enumerate() {
-                        let col = spec.field_by_id(*f).column().ok_or_else(|| {
+                        let field = spec.field_by_id(*f);
+                        let col = field.column().ok_or_else(|| {
                             Error::programming(format!(
                                 "hooked field {}.{} has no column",
                                 spec.name,
@@ -2932,6 +2966,20 @@ impl Transaction {
                         })?;
                         let mut old = crate::read::decode(row, 1 + 2 * i, col)?;
                         let mut new = crate::read::decode(row, 2 + 2 * i, col)?;
+                        if field.company_dependent {
+                            let origin = hook_origins.get(&id).ok_or_else(|| {
+                                Error::programming(
+                                    "company-dependent write hook is missing its writer origin",
+                                )
+                            })?;
+                            let (company, fallback) = self.property_context(origin, spec.id, *f)?;
+                            old = crate::company_dependent::project(
+                                &field.ty, &old, company, &fallback,
+                            )?;
+                            new = crate::company_dependent::project(
+                                &field.ty, &new, company, &fallback,
+                            )?;
+                        }
                         // a hook sees the clear values, as it would read them
                         if let Some(sealed) =
                             crate::field_encryption::Sealed::of(spec, spec.field_by_id(*f))
@@ -2960,6 +3008,10 @@ impl Transaction {
                     // catches this error must not commit the partial write (review SF-M1)
                     self.poison_with(&error);
                     return Err(error);
+                }
+                if !hook_origins.is_empty() {
+                    self.clear_dangling_hook_targets(spec, &hooked, &mut hook_rows)
+                        .await?;
                 }
                 self.versions.consume(spec.id, &ids);
             } else {
@@ -3073,6 +3125,53 @@ impl Transaction {
             }
         }
         self.modified(spec.id, audit_changes).await?;
+        Ok(())
+    }
+
+    async fn clear_dangling_hook_targets(
+        &mut self,
+        spec: &ModelSpec,
+        hooked: &[FieldId],
+        rows: &mut [(RecId, Vec<(Cell, Cell)>)],
+    ) -> Result<()> {
+        let env = self.env();
+        for (position, fid) in hooked.iter().enumerate() {
+            let field = spec.field_by_id(*fid);
+            let FieldType::Many2one { comodel, .. } = &field.ty else {
+                continue;
+            };
+            if !field.company_dependent {
+                continue;
+            }
+            let mut ids: Vec<_> = rows
+                .iter()
+                .flat_map(|(_, values)| {
+                    let (old, new) = &values[position];
+                    [old, new].into_iter().filter_map(|cell| match cell {
+                        Cell::Id(id) => Some(*id),
+                        _ => None,
+                    })
+                })
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            let live: FxHashSet<_> = self
+                .existing_property_targets(&env, comodel, &ids)
+                .await?
+                .into_iter()
+                .collect();
+            for (_, values) in rows.iter_mut() {
+                let (old, new) = &mut values[position];
+                for cell in [old, new] {
+                    if matches!(cell, Cell::Id(id) if !live.contains(id)) {
+                        *cell = Cell::Null;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

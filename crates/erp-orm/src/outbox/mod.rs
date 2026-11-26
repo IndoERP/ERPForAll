@@ -1,7 +1,7 @@
-//! Private transactional event capture and ordered final persistence.
+//! Transactional event capture, ordered persistence and owner-side delivery.
 //! Create, scalar/stored-compute writes and supported root unlinks are captured here.
-//! Unsupported indirect deletion effects, upsert, relational commands and delivery remain
-//! explicit implementation boundaries.
+//! Each mutation path admits the supported capture operations before making changes. Delivery
+//! replays persisted envelopes through durable consumer acknowledgements.
 
 use erp_fields::{Error, ErrorKind, Result};
 use erp_registry::MAX_EVENT_FIELD_NAMES;
@@ -9,6 +9,7 @@ use erp_registry::MAX_EVENT_FIELD_NAMES;
 use crate::correlation::{CorrelationId, OperationId};
 
 mod capture;
+pub(crate) mod delivery;
 mod pending;
 mod persist;
 pub(crate) use capture::{CaptureContext, actor_details};
@@ -19,6 +20,7 @@ pub(crate) const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_TRANSACTION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_ENVELOPES: usize = 4096;
 pub(crate) const MAX_ID_ENTRIES: usize = 256;
+pub(crate) const MAX_INDIRECT_IDS: usize = 16_384;
 
 /// One actual inserted id. Reserved-block range compression is deferred to S9.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -376,7 +378,7 @@ impl Buffer {
     }
 }
 
-fn limit(message: &str) -> Error {
+pub(crate) fn limit(message: &str) -> Error {
     Error::new(
         ErrorKind::ResourceExhausted,
         format!("outbox CaptureLimit: {message}"),

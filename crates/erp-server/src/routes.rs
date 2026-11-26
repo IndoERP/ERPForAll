@@ -30,6 +30,14 @@ pub const ERP: &str = "/erp";
 pub const ACTION_PREFIX: &str = "/erp/action-";
 /// Sign-in page and form post.
 pub const LOGIN: &str = "/erp/login";
+/// Starts an OpenID Connect authorization code request or explicit account link.
+pub const EXTERNAL_LOGIN: &str = "/erp/login/external";
+/// OpenID Connect authorization code callback.
+pub const EXTERNAL_CALLBACK: &str = "/erp/login/external/callback";
+/// Revoke the signed-in user's external identity and provider-issued sessions.
+pub const EXTERNAL_REVOKE: &str = "/erp/session/external/revoke";
+/// Settings administrator enables or disables the external provider.
+pub const EXTERNAL_PROVIDER: &str = "/erp/session/external/provider";
 /// Landing page of a signed-in user without web client access.
 pub const LOGIN_SUCCESS: &str = "/erp/login_successful";
 /// Sign-out.
@@ -62,6 +70,8 @@ pub const BRAND_LOGIN_CSS_PATH: &str = "/erp/brand/login.css";
 pub const ASSETS_PREFIX: &str = "/erp/assets/";
 /// Prefix of the JSON-2 RPC surface.
 pub const JSON2_PREFIX: &str = "/erp/json/2/";
+/// Prefix of configured provider callback routes.
+pub const CALLBACK_PREFIX: &str = "/erp/callback/";
 /// Prefix of the authenticated attachment content route (`/erp/content/<id>`).
 pub const CONTENT_PREFIX: &str = "/erp/content/";
 /// Prefix of the printed reports (`/erp/report/<pdf|html>/<report>/<ids>`).
@@ -72,6 +82,8 @@ pub const PIVOT_EXPORT: &str = "/erp/pivot/export";
 pub const REPORTING_EXPORT: &str = "/erp/reporting/export";
 /// Interactive assistant availability for this user.
 pub const ASSISTANT_STATUS: &str = "/erp/ai/assistant/status";
+/// Authenticated streamable HTTP endpoint for assistant tool discovery and invocation.
+pub const MCP: &str = "/erp/mcp";
 /// A single authenticated assistant text turn.
 pub const ASSISTANT_TURN: &str = "/erp/ai/assistant/turn";
 /// Text that selects the addon static asset branch.
@@ -83,6 +95,10 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp"),
     RouteMatch::Prefix("/erp/action-"),
     RouteMatch::Exact("/erp/login"),
+    RouteMatch::Exact("/erp/login/external"),
+    RouteMatch::Exact("/erp/login/external/callback"),
+    RouteMatch::Exact("/erp/session/external/revoke"),
+    RouteMatch::Exact("/erp/session/external/provider"),
     RouteMatch::Exact("/erp/login_successful"),
     RouteMatch::Exact("/erp/session/logout"),
     RouteMatch::Exact("/erp/session/api-key"),
@@ -92,6 +108,7 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/reporting/export"),
     RouteMatch::Exact("/erp/bus/websocket"),
     RouteMatch::Exact("/erp/ai/assistant/status"),
+    RouteMatch::Exact("/erp/mcp"),
     RouteMatch::Exact("/erp/ai/assistant/turn"),
     RouteMatch::Exact("/erp/module/install"),
     RouteMatch::Exact("/erp/module/upgrade"),
@@ -104,6 +121,7 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/brand/login.css"),
     RouteMatch::Prefix("/erp/assets/"),
     RouteMatch::Prefix("/erp/json/2/"),
+    RouteMatch::Prefix("/erp/callback/"),
     RouteMatch::Prefix("/erp/content/"),
     RouteMatch::Prefix("/erp/report/"),
     RouteMatch::Segment("/static/"),
@@ -150,6 +168,10 @@ mod tests {
         ROOT,
         ERP,
         LOGIN,
+        EXTERNAL_LOGIN,
+        EXTERNAL_CALLBACK,
+        EXTERNAL_REVOKE,
+        EXTERNAL_PROVIDER,
         LOGIN_SUCCESS,
         LOGOUT,
         SESSION_API_KEY,
@@ -158,6 +180,7 @@ mod tests {
         PIVOT_EXPORT,
         REPORTING_EXPORT,
         ASSISTANT_STATUS,
+        MCP,
         ASSISTANT_TURN,
         MODULE_INSTALL,
         MODULE_UPGRADE,

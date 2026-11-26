@@ -238,6 +238,7 @@ pub struct BlobHandle {
     size: u64,
     mimetype: String,
     checksum: String,
+    sha256: [u8; 32],
     source: HandleSource,
 }
 
@@ -262,11 +263,32 @@ impl std::fmt::Debug for BlobHandle {
 }
 
 impl BlobHandle {
+    pub(crate) async fn download_handoff(
+        &self,
+        media_type: &str,
+        attachment_disposition: &str,
+        allow_presign: bool,
+    ) -> std::result::Result<Option<erp_sdk::blob::DownloadHandoff>, erp_sdk::blob::BlobError> {
+        let HandleSource::Store { store, key } = &self.source else {
+            return Ok(None);
+        };
+        store
+            .download_handoff(erp_sdk::blob::DownloadRequest {
+                key,
+                size: self.size,
+                media_type,
+                attachment_disposition,
+                allow_presign,
+            })
+            .await
+    }
+
     pub(crate) fn new(
         attachment: i64,
         size: u64,
         mimetype: String,
         checksum: String,
+        sha256: [u8; 32],
         source: HandleSource,
     ) -> Self {
         Self {
@@ -274,6 +296,7 @@ impl BlobHandle {
             size,
             mimetype,
             checksum,
+            sha256,
             source,
         }
     }
@@ -295,6 +318,11 @@ impl BlobHandle {
 
     pub fn checksum(&self) -> &str {
         &self.checksum
+    }
+
+    /// SHA-256 of the stored bytes.
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
     }
 
     /// Open the bytes, or a range of them.

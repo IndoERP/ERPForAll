@@ -2073,6 +2073,7 @@ dependencies = [
  "getrandom 0.4.3",
  "infer 0.22.0",
  "object_store",
+ "reqwest",
  "rustix",
  "serde",
  "sha1 0.11.0",
@@ -2089,6 +2090,7 @@ name = "erp-cli"
 version = "0.1.0"
 dependencies = [
  "addon-acceptance_notes",
+ "base64 0.23.1",
  "clap",
  "deadpool-postgres",
  "erp-addon-account",
@@ -2147,6 +2149,7 @@ dependencies = [
  "erp-testkit",
  "erp-views",
  "erp-wasm-host",
+ "hmac",
  "libc",
  "lopdf",
  "rustix",
@@ -2494,7 +2497,11 @@ dependencies = [
  "linkme",
  "pbkdf2",
  "proptest",
+ "reqwest",
+ "ring",
  "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
  "sha2 0.11.1",
  "subtle",
  "thiserror",
@@ -2502,6 +2509,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "url",
  "zeroize",
 ]
 
@@ -2637,6 +2645,7 @@ name = "erp-test-models"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "bytes",
  "dhat",
  "erp-addon-account",
@@ -2679,6 +2688,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "image",
+ "ring",
  "rust_decimal",
  "serde_json",
  "syn 2.0.119",
@@ -2688,6 +2698,7 @@ dependencies = [
  "tokio-postgres",
  "tower",
  "tracing",
+ "url",
  "wasmtime",
 ]
 

@@ -1882,6 +1882,14 @@ impl StagedSteps {
             MigrationStage::End => self.end.push(step),
         }
     }
+
+    fn steps(&self, stage: MigrationStage) -> &[MigrationStep] {
+        match stage {
+            MigrationStage::Pre => &self.pre,
+            MigrationStage::Post => &self.post,
+            MigrationStage::End => &self.end,
+        }
+    }
 }
 
 /// How an operation failed.
@@ -2403,7 +2411,7 @@ impl ModuleSystem {
     }
 
     /// The migration steps selected for `module`, upgraded from `installed` to `target`, per
-    /// stage: its native migrations and the SQL scripts of its development folder.
+    /// stage: its native migrations and the SQL scripts of its admitted source.
     /// Only the selected version folders are read, each selected file charged to the
     /// operation's `budget` before it is read. `None` when the module has no migrations.
     ///
@@ -2415,6 +2423,7 @@ impl ModuleSystem {
     async fn migrations_for(
         &self,
         module: &ModuleName,
+        manifest: &Manifest,
         entries: &IndexMap<ModuleName, AddonEntry>,
         installed: Option<SemverVersion>,
         target: SemverVersion,
@@ -2426,42 +2435,54 @@ impl ModuleSystem {
             .iter()
             .filter(|m| &m.module == module)
             .collect();
-        // SQL scripts come from a development folder only: an embedded or packaged addon has no
-        // file tree to read, its migrations are native ones (as its data files, which
-        // `read_data_bytes` refuses for these sources).
-        let dir: Option<PathBuf> = match entries.get(module).map(AddonEntry::source_kind) {
+        let entry = entries.get(module);
+        let dir: Option<PathBuf> = match entry.map(AddonEntry::source_kind) {
             Some(AddonSourceKind::DevFolder(dir)) => Some(dir.clone()),
             Some(AddonSourceKind::Embedded | AddonSourceKind::Package { .. }) | None => None,
         };
-        let snapshot = entries
-            .get(module)
-            .and_then(AddonEntry::artifact_snapshot)
-            .cloned();
-        let snapshot_folders = match &snapshot {
-            Some(snapshot) => Some(crate::migrations::snapshot_version_folders(
+        let snapshot = entry.and_then(AddonEntry::artifact_snapshot);
+        let package_data = entry.and_then(AddonEntry::package_data);
+        let admitted = if let Some(snapshot) = snapshot {
+            let folders = crate::migrations::snapshot_version_folders(
                 snapshot,
                 module,
                 self.parts.max_migration_files,
-            )?),
-            None => None,
-        };
-        let has_sql = if let Some(folders) = &snapshot_folders {
-            !folders.is_empty()
+            )?;
+            Some((snapshot.files(), snapshot.root_path(), folders))
+        } else if let Some(data) = package_data {
+            let folders = crate::migrations::package_version_folders(
+                &data.migration_files,
+                module,
+                self.parts.max_migration_files,
+            )?;
+            let location = entry.map_or(module.as_str(), AddonEntry::source_location);
+            Some((&data.migration_files, Path::new(location), folders))
         } else {
-            match &dir {
-                Some(dir) => {
-                    let (dir, name) = (dir.clone(), module.clone());
-                    let max_folders = self.parts.max_migration_files;
-                    !blocking(move || {
-                        crate::migrations::migration_version_folders(&dir, &name, max_folders)
-                    })
-                    .await?
-                    .is_empty()
-                }
-                None => false,
-            }
+            None
         };
-        if natives.is_empty() && !has_sql {
+        let direct = if admitted.is_none()
+            && let Some(dir) = dir
+        {
+            let name = module.clone();
+            let max_folders = self.parts.max_migration_files;
+            Some(
+                blocking(move || {
+                    let folders =
+                        crate::migrations::migration_version_folders(&dir, &name, max_folders)?;
+                    Ok((dir, folders))
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+        let has_sql = admitted
+            .as_ref()
+            .is_some_and(|(_, _, folders)| !folders.is_empty())
+            || direct
+                .as_ref()
+                .is_some_and(|(_, folders)| !folders.is_empty());
+        if natives.is_empty() && !has_sql && manifest.required_migrations().is_empty() {
             return Ok(None);
         }
         let Some(installed) = installed else {
@@ -2478,11 +2499,12 @@ impl ModuleSystem {
                 staged.push(MigrationStep::native(native));
             }
         }
-        if let (Some(snapshot), Some(folders)) = (snapshot, snapshot_folders) {
+        if let Some((files, root, folders)) = admitted {
             for folder in folders {
                 if crate::migrations::should_run_migration(&folder.version, &installed, &target) {
-                    for step in crate::migrations::read_snapshot_version_folder(
-                        &snapshot,
+                    for step in crate::migrations::read_admitted_version_folder(
+                        files,
+                        root,
                         module,
                         &folder,
                         self.parts.max_data_file_bytes,
@@ -2492,16 +2514,13 @@ impl ModuleSystem {
                     }
                 }
             }
-        } else if let Some(dir) = dir {
+        } else if let Some((dir, folders)) = direct {
             let name = module.clone();
             let limit = self.parts.max_data_file_bytes;
-            let max_folders = self.parts.max_migration_files;
             let budget = budget.clone();
             let steps = blocking(move || {
                 let mut steps = Vec::new();
-                for folder in
-                    crate::migrations::migration_version_folders(&dir, &name, max_folders)?
-                {
+                for folder in folders {
                     if crate::migrations::should_run_migration(&folder.version, &installed, &target)
                     {
                         steps.extend(crate::migrations::read_version_folder(
@@ -2514,6 +2533,37 @@ impl ModuleSystem {
             .await?;
             for step in steps {
                 staged.push(step);
+            }
+        }
+        for required in manifest.required_migrations() {
+            if !crate::migrations::should_run_migration(&required.version, &installed, &target) {
+                continue;
+            }
+            let mut providers = staged
+                .steps(required.stage)
+                .iter()
+                .filter(|step| step.provides(required));
+            let first = providers
+                .next()
+                .ok_or_else(|| Error::RequiredMigrationMissing {
+                    module: module.clone(),
+                    version: required.version,
+                    stage: required.stage,
+                    name: required.name.clone(),
+                    addon_source: entry.map_or_else(
+                        || "the available addon source".to_owned(),
+                        |entry| entry.source_kind().to_string(),
+                    ),
+                })?;
+            if let Some(second) = providers.next() {
+                return Err(Error::MigrationDuplicate {
+                    module: module.clone(),
+                    version: required.version,
+                    stage: required.stage,
+                    name: required.name.clone(),
+                    first: first.origin.clone(),
+                    second: second.origin.clone(),
+                });
             }
         }
         Ok(Some(staged))
@@ -5724,6 +5774,7 @@ impl<'s> Run<'s> {
                     .system
                     .migrations_for(
                         module,
+                        manifest,
                         &self.entries,
                         row.latest_version(),
                         target_version,
@@ -10134,5 +10185,70 @@ mod sql_object_option_tests {
         let builder = super::ModuleSystem::builder(pool, crate::AddonIndex::new(true))
             .schema_sync_options(erp_orm::SchemaSyncOptions::new().lifecycle(true));
         assert!(!builder.schema_sync.is_lifecycle());
+    }
+}
+
+#[cfg(test)]
+mod migration_source_tests {
+    #![allow(clippy::unwrap_used, reason = "test fixtures")]
+    use super::*;
+
+    #[tokio::test]
+    async fn development_folder_supplies_required_step_without_snapshot() {
+        let db = erp_testkit::TestDb::create().await.unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let dir = root.path().join("migration_probe");
+        let module = ModuleName::new("migration_probe").unwrap();
+        let declaration = include_str!("../tests/fixtures/required_migration/required.toml");
+        let manifest = Arc::new(
+            Manifest::from_toml(module.as_str(), &format!("version = '1.1'\n{declaration}"))
+                .unwrap(),
+        );
+        let entry = AddonEntry::new(
+            Arc::clone(&manifest),
+            AddonSourceKind::DevFolder(dir.clone()),
+            "migration_probe",
+        );
+        let entries = IndexMap::from([(module.clone(), entry)]);
+        let system = ModuleSystem::builder(db.pool().clone(), crate::AddonIndex::new(true))
+            .build()
+            .unwrap();
+        let installed = SemverVersion::new(1, 0, 0);
+        let target = SemverVersion::new(1, 1, 0);
+        let budget = MigrationBudget::new(10, Arc::new(std::sync::atomic::AtomicU64::new(0)), 1024);
+        let plan = || {
+            system.migrations_for(
+                &module,
+                &manifest,
+                &entries,
+                Some(installed),
+                target,
+                &budget,
+            )
+        };
+        assert!(matches!(
+            plan().await,
+            Err(Error::RequiredMigrationMissing { .. })
+        ));
+
+        let version_dir = dir.join("migrations/1.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let sql = include_str!("../tests/fixtures/required_migration/migrations/1.1/post-bump.sql");
+        std::fs::write(version_dir.join("post-bump.sql"), sql).unwrap();
+        let staged = plan().await.unwrap().unwrap();
+        assert_eq!(staged.post.len(), 1);
+        let mut tx = system.root.begin(SUPERUSER_ID).await.unwrap();
+        tx.batch("CREATE TABLE migration_probe (applications int NOT NULL); INSERT INTO migration_probe VALUES (0)").await.unwrap();
+        staged.post[0]
+            .run(&mut tx, &staged.installed)
+            .await
+            .unwrap();
+        let result = tx
+            .query("SELECT applications FROM migration_probe", &[])
+            .await
+            .unwrap();
+        assert_eq!(result[0].get::<_, i32>(0), 1);
+        tx.commit().await.unwrap();
+        db.cleanup().await.unwrap();
     }
 }

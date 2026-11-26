@@ -95,25 +95,16 @@ pub(crate) struct State {
 /// The board task that lifts a refusal of this module's callers. Each refusal names its own
 /// task; the ids of this crate's refusals exist once, here. Two refusals of crates below this one
 /// carry their task id in their own message (`erp-registry`, the declaration refusal in
-/// `compose.rs`; `erp-sql`, the keyset refusal in `keyset.rs`:
-/// ); a test pins each of those messages.
+/// `compose.rs`); a test pins each of those messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Owner {
-    Upsert,
-    Hooks,
     StoredCompute,
-    Catalog,
-    DraftLinks,
 }
 
 impl Owner {
     const fn task(self) -> &'static str {
         match self {
-            Self::Upsert => "a later release",
-            Self::Hooks => "a later release",
             Self::StoredCompute => "a later release",
-            Self::Catalog => "a later release",
-            Self::DraftLinks => "a later release",
         }
     }
 }
@@ -169,6 +160,7 @@ impl Transaction {
             for row in rows.iter_mut() {
                 // Absent values inherit the fallback; explicit null is preserved.
                 let scalar = row[field.id.index()].as_ref().unwrap_or(&fallback);
+                refuse_draft_link(spec, field, scalar)?;
                 check_required(spec, field, scalar)?;
                 row[field.id.index()] = Some(crate::company_dependent::apply(
                     &field.ty,
@@ -485,7 +477,9 @@ impl Transaction {
                 spec.name, field.name
             )));
         }
-        refuse_draft_link(spec, field, scalar)?;
+        if matches!(scalar, Cell::Id(id) if *id < 0) {
+            crate::newrec::new_record_cell(spec, field, scalar.clone(), self)?;
+        }
         // prepares the fallbacks and copies the origin's map (or the default) first
         self.ensure(record, field.id).await?;
         let base = self
@@ -493,7 +487,7 @@ impl Transaction {
             .get(spec.id, field.id, id)
             .ok_or_else(|| Error::programming("a draft company map was not cached by ensure"))?;
         let (company, fallback) = self.property_context(record.env(), spec.id, field.id)?;
-        crate::company_dependent::apply(&field.ty, &base, company, scalar, &fallback)
+        crate::company_dependent::apply_draft(&field.ty, &base, company, scalar, &fallback)
     }
 
     /// Never attribute a previous company's dirty map to a later writer. Flush at origin changes.
@@ -542,7 +536,7 @@ fn starts_with_keyword(sql: &str, keyword: &str) -> bool {
             .is_none_or(|next| !(next.is_alphanumeric() || next == '_'))
 }
 
-/// A company map stores database ids only: a many2one to an unsaved record has no id to store.
+/// A persisted company map stores database ids only.
 pub(crate) fn refuse_draft_link(
     spec: &ModelSpec,
     field: &erp_registry::FieldSpec,
@@ -550,10 +544,8 @@ pub(crate) fn refuse_draft_link(
 ) -> Result<()> {
     if matches!(value, Cell::Id(raw) if *raw < 0) {
         return Err(Error::validation(format!(
-            "{}.{}: a company-dependent many2one to an unsaved record is not supported until {}",
-            spec.name,
-            field.name,
-            Owner::DraftLinks.task()
+            "{}.{}: save the related record before writing a company-dependent many2one",
+            spec.name, field.name,
         )));
     }
     Ok(())
@@ -581,6 +573,46 @@ pub(crate) fn check_required(
 }
 
 impl Transaction {
+    /// Build a selection catalog's company document without implicit writes or native method
+    /// dispatch. Only the catalog's own, validated scalar dependencies are prepared.
+    pub(crate) async fn catalog_company_values(
+        &mut self,
+        env: &Env,
+        spec: &ModelSpec,
+        fields: &[FieldId],
+    ) -> Result<Option<erp_sql::company::CompanyValues>> {
+        let company_fields: Vec<_> = fields
+            .iter()
+            .map(|id| spec.field_by_id(*id))
+            .filter(|field| field.company_dependent)
+            .collect();
+        if company_fields.is_empty() {
+            return Ok(None);
+        }
+        let company = self.companies_now(env)?.first().copied().ok_or_else(|| {
+            Error::validation("company-dependent fields require a current company")
+        })?;
+        let defaults = if crate::ir_default::is_available(env.registry()) {
+            crate::ir_default::catalog_property_defaults(self, env, spec.name).await?
+        } else {
+            FxHashMap::default()
+        };
+        let mut values = erp_sql::company::CompanyValues::new(company.get())?;
+        for field in company_fields {
+            if crate::precision::usage(field).is_some() && defaults.contains_key(field.name) {
+                return Err(Error::programming(format!(
+                    "selection catalog {}.{} cannot resolve a named precision default",
+                    spec.name, field.name,
+                )));
+            }
+            let fallback = self
+                .property_fallback_cell(env, spec, field, defaults.get(field.name))
+                .await?;
+            values.insert(spec, field, &fallback)?;
+        }
+        Ok(Some(values))
+    }
+
     /// Prepare only the physical property dependencies of a query component. Fallback identity,
     /// precision admission and snapshot invalidation stay shared with ordinary property reads.
     pub(crate) async fn company_query_values(

@@ -123,6 +123,7 @@ impl UsersToken {
             "badname" => fields.with_field("tok_a; DROP TABLE res_users"),
             "unstored" => fields.with_field("tok_calc"),
             "relation" => fields.with_field("tok_rel"),
+            "groups" => fields.with_field("group_ids"),
             "datetime" => fields.with_field("tok_dt"),
             "float" => fields.with_field("tok_f"),
             "text" => fields.with_field("tok_txt"),

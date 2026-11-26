@@ -15,6 +15,12 @@
 //!   depends only on `erp-sdk` reaches it), or given to
 //!   [`crate::system::ModuleSystemBuilder::migrations`];
 //! - SQL files: files in `migrations/<version>/<stage>-*.sql` below the addon directory.
+//!   An admitted filesystem snapshot supplies its recorded bytes. A verified package supplies
+//!   archived files when `migrations-sql` is approved.
+//!
+//! A release can list essential steps in `required_migrations` in its manifest. Every selected
+//! declaration needs exactly one provider. For example `migrations/1.1/post-backfill.sql` can be
+//! supplied by the matching SQL script or a native `backfill` migration for `1.1` at `post`.
 //!
 //! Version folders are mapped:
 //! - `0.0.0` -> `0.0.0`
@@ -42,7 +48,7 @@ use crate::manifest::ModuleName;
 use crate::migration_sql::MigrationSql;
 use crate::version::{ModuleVersion, SemverVersion};
 use erp_orm::Transaction;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -52,6 +58,66 @@ pub use crate::migration_sql::MigrationSqlRefusal;
 /// The native migration declarations (`erp_data::migration`, the element type of the slice that
 /// `#[erp_sdk::migration]` fills), re-exported under this module's path.
 pub use erp_data::migration::{MIGRATIONS, MigrationFn, MigrationImpl, MigrationStage};
+
+/// A release step listed independently of the source that supplies its implementation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub(crate) struct RequiredMigration {
+    pub(crate) version: SemverVersion,
+    pub(crate) stage: MigrationStage,
+    pub(crate) name: String,
+}
+
+pub(crate) fn required_migrations(
+    module: &ModuleName,
+    paths: Vec<String>,
+) -> Result<Vec<RequiredMigration>> {
+    let mut required = BTreeSet::new();
+    for path in paths {
+        let step = parse_migration_path(&path).map(|(_, version, stage, name)| RequiredMigration {
+            version,
+            stage,
+            name: name.to_owned(),
+        });
+        let Some(step) = step else {
+            return Err(Error::InvalidManifest {
+                name: module.clone(),
+                message: format!(
+                    "invalid required migration '{path}': use migrations/<version>/<stage>-<name>.sql"
+                ),
+            });
+        };
+        if !required.insert(step) {
+            return Err(Error::InvalidManifest {
+                name: module.clone(),
+                message: format!("duplicate required migration '{path}'"),
+            });
+        }
+    }
+    Ok(required.into_iter().collect())
+}
+
+fn sql_step_name(file: &str) -> Option<(MigrationStage, &str, &str)> {
+    let step = file.strip_suffix(".sql")?;
+    let (stage, name) = step.split_once('-')?;
+    let stage = match stage {
+        "pre" => MigrationStage::Pre,
+        "post" => MigrationStage::Post,
+        "end" => MigrationStage::End,
+        _ => return None,
+    };
+    Some((stage, step, name))
+}
+
+pub(crate) fn parse_migration_path(
+    path: &str,
+) -> Option<(&str, SemverVersion, MigrationStage, &str)> {
+    let (folder, file) = path.strip_prefix("migrations/")?.split_once('/')?;
+    if file.contains(['/', '\\']) {
+        return None;
+    }
+    let (stage, _, name) = sql_step_name(file)?;
+    (!name.is_empty()).then_some((folder, parse_migration_folder_version(folder)?, stage, name))
+}
 
 /// A native migration whose addon name and version were checked when the module system was
 /// built ([`validate_native`]).
@@ -211,6 +277,17 @@ pub(crate) struct MigrationStep {
 }
 
 impl MigrationStep {
+    pub(crate) fn provides(&self, required: &RequiredMigration) -> bool {
+        let name = match &self.source {
+            MigrationStepSource::Native(_) => self.name.as_str(),
+            MigrationStepSource::Sql(_) => self
+                .name
+                .split_once('-')
+                .map_or(self.name.as_str(), |(_, name)| name),
+        };
+        self.version == required.version && self.stage == required.stage && name == required.name
+    }
+
     /// The step of a validated native migration.
     pub(crate) fn native(native: &NativeMigration) -> Self {
         Self {
@@ -534,16 +611,7 @@ pub(crate) fn read_version_folder(
         if !file_type.is_file() {
             continue;
         }
-        let Some(step_name) = file_name.strip_suffix(".sql") else {
-            continue;
-        };
-        let stage = if step_name.starts_with("pre-") {
-            MigrationStage::Pre
-        } else if step_name.starts_with("post-") {
-            MigrationStage::Post
-        } else if step_name.starts_with("end-") {
-            MigrationStage::End
-        } else {
+        let Some((stage, step_name, _)) = sql_step_name(&file_name) else {
             continue;
         };
         let origin = rel_path.to_string_lossy().to_string();
@@ -605,9 +673,37 @@ pub(crate) fn snapshot_version_folders(
     Ok(folders)
 }
 
-/// Stage SQL from exactly the bytes admitted and hashed for this lifecycle operation.
-pub(crate) fn read_snapshot_version_folder(
-    snapshot: &crate::artifact_identity::ArtifactSnapshot,
+/// Version folders represented by the SQL paths retained from a consented package.
+pub(crate) fn package_version_folders(
+    files: &BTreeMap<String, Vec<u8>>,
+    module: &ModuleName,
+    max_folders: usize,
+) -> Result<Vec<VersionFolder>> {
+    let mut folders = BTreeMap::new();
+    for path in files.keys() {
+        if let Some((name, version, _, _)) = parse_migration_path(path) {
+            folders.insert(name, version);
+            if folders.len() > max_folders {
+                return Err(Error::MigrationFoldersTooMany {
+                    module: module.clone(),
+                    limit: max_folders,
+                });
+            }
+        }
+    }
+    Ok(folders
+        .into_iter()
+        .map(|(name, version)| VersionFolder {
+            name: name.to_owned(),
+            version,
+        })
+        .collect())
+}
+
+/// Stage SQL from the immutable bytes of a filesystem snapshot or a verified archive.
+pub(crate) fn read_admitted_version_folder(
+    files: &BTreeMap<String, Vec<u8>>,
+    root: &Path,
     module: &ModuleName,
     folder: &VersionFolder,
     limit: u64,
@@ -615,23 +711,15 @@ pub(crate) fn read_snapshot_version_folder(
 ) -> Result<Vec<MigrationStep>> {
     let prefix = format!("migrations/{}/", folder.name);
     let mut steps = Vec::new();
-    for (path, bytes) in snapshot.files() {
-        let Some(file_name) = path.strip_prefix(&prefix) else {
-            continue;
-        };
+    for (path, bytes) in files
+        .range(prefix.clone()..)
+        .take_while(|(path, _)| path.starts_with(&prefix))
+    {
+        let file_name = &path[prefix.len()..];
         if file_name.contains('/') {
             continue;
         }
-        let Some(step_name) = file_name.strip_suffix(".sql") else {
-            continue;
-        };
-        let stage = if step_name.starts_with("pre-") {
-            MigrationStage::Pre
-        } else if step_name.starts_with("post-") {
-            MigrationStage::Post
-        } else if step_name.starts_with("end-") {
-            MigrationStage::End
-        } else {
+        let Some((stage, step_name, _)) = sql_step_name(file_name) else {
             continue;
         };
         budget.charge_file(module, path)?;
@@ -644,7 +732,7 @@ pub(crate) fn read_snapshot_version_folder(
         }
         let sql = std::str::from_utf8(bytes).map_err(|error| {
             io_error(
-                &snapshot.root_path().join(path),
+                &root.join(path),
                 std::io::Error::new(std::io::ErrorKind::InvalidData, error),
             )
         })?;
@@ -675,6 +763,32 @@ mod tests {
 
     fn module() -> ModuleName {
         ModuleName::new("x").unwrap()
+    }
+
+    #[test]
+    fn required_release_steps_reject_invalid_paths_and_normalized_duplicates() {
+        let invalid = [
+            "migrations/1.1/post-.sql",
+            "migrations/1.1/../post-a.sql",
+            "migrations/1.1/other-a.sql",
+        ];
+        for path in invalid {
+            assert!(
+                matches!(
+                    required_migrations(&module(), vec![path.to_owned()]),
+                    Err(Error::InvalidManifest { .. })
+                ),
+                "{path}"
+            );
+        }
+        let aliases = [
+            "migrations/1.1/post-a.sql",
+            "migrations/20.0.1.1/post-a.sql",
+        ];
+        let err = required_migrations(&module(), aliases.map(str::to_owned).to_vec()).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidManifest { message, .. } if message.contains("duplicate"))
+        );
     }
 
     /// An addon folder `x` with `migrations/1.1/<name>` holding `content`.

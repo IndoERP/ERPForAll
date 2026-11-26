@@ -109,6 +109,9 @@ pub mod onchange;
 mod optimize;
 mod ormcache;
 mod outbox;
+pub use outbox::delivery::{
+    OutboxCursor, OutboxEvent, OutboxReplay, OutboxRetention, OutboxStatus,
+};
 mod parent_store;
 mod partition;
 pub mod pool;
@@ -247,7 +250,7 @@ pub use principal::{
     Resolution, ResolutionEpoch, SUPERUSER_ID, Scope, ScopeBuilder, ScopeItem, SnapshotId,
     TxSerial, UserId, missing_reset_target, registered_capability,
 };
-pub use read::{BoundedBinary, Load, read_value};
+pub use read::{BoundedBinary, ContentBinary, Load, read_value};
 pub use read_group::{Granularity, GroupValue, Groups, ReadGroup, ReadGroupingSets, RecordsAs};
 pub use records::{
     Base, Field, Ids, Inherits, Model, RecordSet, Records, ResCompany, ResUsers, Token,

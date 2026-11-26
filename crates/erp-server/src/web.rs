@@ -263,7 +263,10 @@ pub trait WebLifecycle: Send + Sync {
 }
 
 mod assistant;
+pub(crate) mod callback;
 mod content;
+mod external_identity;
+mod mcp;
 mod page_brand;
 mod password_change;
 mod pivot_export;
@@ -272,8 +275,8 @@ mod reporting_export;
 mod session_api_key;
 pub use assistant::{HistoryEntry, HistoryRole, WebAssistant};
 pub use content::{
-    ContentLookup, ContentOpenFailure, ContentOpener, ContentRange, ContentReader, FoundContent,
-    WebAttachmentContent,
+    ContentHandoff, ContentHandoffRequest, ContentLookup, ContentOpenFailure, ContentOpener,
+    ContentRange, ContentReader, FoundContent, WebAttachmentContent,
 };
 use page_brand::PageBrand;
 pub use pivot_export::{PivotWorkbook, WebPivotExport};
@@ -324,6 +327,7 @@ impl erp_rpc::RpcCredential for BrowserCredential {
 }
 // Request-local only: no successful credential or authority is cached across requests.
 struct BearerCredential {
+    audience: KeyScope,
     auth: Arc<Auth>,
     secret: zeroize::Zeroizing<String>,
     session: Option<SessionSecret>,
@@ -343,7 +347,7 @@ impl std::fmt::Debug for BearerCredential {
 }
 impl BearerCredential {
     async fn open(&self, options: CredentialOptions) -> erp_fields::Result<erp_orm::Transaction> {
-        let mut request = ApiKeyRequest::new(&self.secret, KeyScope::Rpc, self.client);
+        let mut request = ApiKeyRequest::new(&self.secret, self.audience, self.client);
         if let Some(session) = &self.session {
             request = request.session(session);
         }
@@ -395,6 +399,15 @@ impl erp_rpc::RpcCredential for BearerCredential {
     }
 }
 
+/// Document routes read related records outside RPC dispatch. Only unrestricted
+/// model and method allowlists cover that traversal.
+fn unrestricted_document_key(scope: Option<&erp_orm::Scope>) -> bool {
+    scope.is_none_or(|scope| {
+        matches!(scope.models(), erp_orm::ModelAllow::All)
+            && matches!(scope.methods(), erp_orm::MethodAllow::All)
+    })
+}
+
 /// One database's browser application. Authentication remains owned by `Auth`.
 pub struct WebApp {
     assets: crate::assets::AssetBundle,
@@ -405,6 +418,7 @@ pub struct WebApp {
     services: RwLock<Services>,
     lifecycle: Option<Arc<dyn WebLifecycle>>,
     attachment_content: Option<Arc<dyn WebAttachmentContent>>,
+    downloads: content::Downloads,
     attachment_policy: Option<Arc<dyn WebAttachmentPolicy>>,
     pivot_export: Option<Arc<dyn WebPivotExport>>,
     reporting_export: Option<Arc<dyn WebReportingExport>>,
@@ -460,6 +474,7 @@ impl WebApp {
             socket_slots: Arc::new(Semaphore::new(thread_socket::capacity(
                 config.startup_limits(),
             ))),
+            downloads: content::Downloads::new(config.startup_limits()),
             config,
             services: RwLock::new(Services {
                 auth,
@@ -763,8 +778,10 @@ impl WebApp {
             return finish_response(busy(), false, PageBrand::default);
         }
         let classified_path = canonical_path(request.uri().path());
-        if classified_path == routes::LOGIN
-            && matches!(*request.method(), Method::GET | Method::POST)
+        if matches!(
+            classified_path.as_ref(),
+            routes::LOGIN | routes::EXTERNAL_LOGIN | routes::EXTERNAL_CALLBACK
+        ) && matches!(*request.method(), Method::GET | Method::POST)
             && !self.login_available.load(Ordering::Acquire)
         {
             return finish_response(busy(), true, || self.error_page_brand());
@@ -781,8 +798,10 @@ impl WebApp {
                 | routes::ASSISTANT_STATUS
                 | routes::ASSISTANT_TURN
                 | routes::SESSION_API_KEY
+                | routes::MCP
         )
             && !classified_path.starts_with(routes::JSON2_PREFIX)
+            && !classified_path.starts_with(routes::CALLBACK_PREFIX)
             && LifecycleOperation::from_path(&classified_path).is_none()
             && !classified_path.starts_with(routes::ASSETS_PREFIX)
             // attachment errors keep their class and stay plain text, never the HTML page
@@ -965,6 +984,17 @@ impl WebApp {
         let incoming_path = parts.uri.path();
         let canonical = canonical_path(incoming_path);
         let path = canonical.as_ref();
+        if let Some(binding) = incoming_path.strip_prefix(routes::CALLBACK_PREFIX) {
+            return Box::pin(self.provider_callback(
+                binding,
+                &parts,
+                body,
+                auth,
+                services.rpc,
+                client,
+            ))
+            .await;
+        }
         // GET bookmarks/assets migrate to the native namespace. Unsafe aliases are
         // dispatched directly once below, retaining all origin/body/auth/CSRF gates.
         if parts.method == Method::GET
@@ -1056,7 +1086,16 @@ impl WebApp {
             }
         }
         if let Some(rest) = path.strip_prefix(content::CONTENT_PREFIX) {
-            return self.attachment_content(&parts, rest, &auth).await;
+            return self.attachment_content(&parts, rest, client, &auth).await;
+        }
+        if path == routes::MCP {
+            let rpc = services.rpc.as_deref().ok_or_else(|| {
+                response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "RPC composition is unavailable",
+                )
+            })?;
+            return self.mcp(&parts, body, client, &auth, rpc).await;
         }
         if path == routes::THREAD_SOCKET {
             return self.thread_socket(parts, auth).await;
@@ -1351,8 +1390,24 @@ impl WebApp {
         }
         match (&parts.method, path) {
             (&Method::GET, routes::ROOT) => redirect("/erp"),
+            (&Method::POST, routes::EXTERNAL_LOGIN) => {
+                self.external_login(headers, body, client, &auth).await
+            }
+            (&Method::GET, routes::EXTERNAL_CALLBACK) => {
+                self.external_callback(headers, parts.uri.query(), client, &auth)
+                    .await
+            }
+            (&Method::POST, routes::EXTERNAL_REVOKE) => {
+                self.external_revoke(headers, body, &auth).await
+            }
+            (&Method::POST, routes::EXTERNAL_PROVIDER) => {
+                self.external_provider_policy(headers, body, &auth).await
+            }
             (&Method::GET, routes::LOGIN) => {
-                let fields = form(parts.uri.query().unwrap_or(""), &["redirect", "db"])?;
+                let fields = form(
+                    parts.uri.query().unwrap_or(""),
+                    &["redirect", "db", "external_error"],
+                )?;
                 if fields
                     .get("db")
                     .is_some_and(|db| db != self.config.database())
@@ -1360,7 +1415,9 @@ impl WebApp {
                     return Err(bad("Database not found."));
                 }
                 let redirect = self.redirect(fields.get("redirect").map(String::as_str))?;
-                self.login_page(headers, redirect, None).await
+                let error = (fields.get("external_error").map(String::as_str) == Some("1"))
+                    .then(|| "External sign-in was refused.".to_owned());
+                self.login_page(headers, redirect, error).await
             }
             (&Method::POST, routes::LOGIN) => {
                 self.form_origin(headers)?;
@@ -1473,7 +1530,10 @@ impl WebApp {
                     .await
                     .map_err(auth_error)?;
                 begun.tx.rollback().await.map_err(auth_error)?;
-                self.login_success_page().await
+                drop(begun.tx);
+                let result = self.login_success_page().await?;
+                self.rotate_document_cookie(result, &auth, &begun.session, &secret)
+                    .await
             }
             (&Method::GET, path)
                 if path == routes::ERP || path.starts_with(routes::ACTION_PREFIX) =>
@@ -1562,16 +1622,22 @@ impl WebApp {
                         ));
                     }
                     // Rendered in place, never a redirect loop through the login page.
-                    return self.login_success_page().await;
+                    drop(begun.tx);
+                    let result = self.login_success_page().await?;
+                    return self
+                        .rotate_document_cookie(result, &auth, &begun.session, &secret)
+                        .await;
                 }
                 let document = self
                     .bootstrap(&mut begun.tx, &signer, &prefs, address_names_companies)
                     .await?;
                 begun.tx.rollback().await.map_err(auth_error)?;
+                drop(begun.tx);
                 let mut result = self.document("erp-bootstrap", &document).await?;
                 // Sliding expiry: the verified value is sent again, never re-minted.
                 self.set_cookie(&mut result, "prefs", prefs_cookie, PREFS_LIFETIME_SECS)?;
-                Ok(result)
+                self.rotate_document_cookie(result, &auth, &begun.session, &secret)
+                    .await
             }
             _ => Err(response(StatusCode::NOT_FOUND, "Not found")),
         }
@@ -1659,6 +1725,28 @@ impl WebApp {
             Err(error) => Err(auth_error(error)),
         }
     }
+    /// Only the request that wins the guarded rotation sends a replacement cookie.
+    async fn rotate_document_cookie(
+        &self,
+        mut response: Response,
+        auth: &Auth,
+        checked: &erp_security::auth::CheckedSession,
+        presented: &SessionSecret,
+    ) -> HttpResult<Response> {
+        if checked.rotation_due()
+            && let Some(secret) = auth.rotate(checked, presented).await.map_err(auth_error)?
+        {
+            let value = format!("{}.{}", self.config.database(), secret.to_cookie().as_str());
+            self.set_cookie(
+                &mut response,
+                "session_id",
+                &value,
+                checked.remaining().as_secs().max(1),
+            )?;
+        }
+        Ok(response)
+    }
+
     fn session_login(&self, destination: &str) -> HttpResult<Response> {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("redirect", destination)
@@ -1798,6 +1886,7 @@ impl WebApp {
             ));
         }
         Ok(BearerCredential {
+            audience: KeyScope::Rpc,
             auth: Arc::clone(auth),
             secret: zeroize::Zeroizing::new(raw.to_owned()),
             session: self.session(headers)?,
@@ -1827,6 +1916,30 @@ impl WebApp {
                 Err(result)
             }
         }
+    }
+
+    /// Open a document transaction with the same per-key budget used by JSON-2 requests.
+    async fn open_document_bearer(
+        &self,
+        credential: &BearerCredential,
+    ) -> HttpResult<erp_orm::Transaction> {
+        let mut tx = self.open_bearer(credential).await?;
+        if let Some(key) = tx.env().principal().scope().map(erp_orm::Scope::key) {
+            let budget = credential.auth.api_key_budget();
+            if !budget.admit_api_key(key) {
+                let _ = tx.rollback().await;
+                drop(tx);
+                return Err(self
+                    .render_bearer_failure(
+                        erp_rpc::InfraError::RateLimited {
+                            retry_after: budget.retry_after_secs(),
+                        }
+                        .into(),
+                    )
+                    .await);
+            }
+        }
+        Ok(tx)
     }
 
     async fn unauthorized(&self, message: &str) -> Response {
@@ -2223,12 +2336,20 @@ impl WebApp {
                 (Some(cookie), prefs)
             }
         };
-        let dto = LoginPage::new(
+        let mut dto = LoginPage::new(
             signer.csrf(&prefs, now()?).map_err(|_| internal())?,
             self.config.database().to_owned(),
             destination,
             error,
         );
+        if let Some(provider) = self.config.external_identity()
+            && auth.external_enabled(provider).await.map_err(auth_error)?
+        {
+            dto = dto.with_external_provider(
+                provider.label().to_owned(),
+                self.session(headers)?.is_some(),
+            );
+        }
         let json = serde_json::to_string(&dto)
             .map_err(|_| internal())?
             .replace('&', "\\u0026")
@@ -2396,6 +2517,11 @@ struct RefusalReason(&'static str);
 /// Unknown paths and methods (scanners) are `info`, which the default `warn` filter drops.
 fn log_web_refusal(method: &Method, path: &str, response: &Response, request_id: &str) {
     let code = response.status().as_u16();
+    let path = if path.starts_with(routes::CALLBACK_PREFIX) {
+        routes::CALLBACK_PREFIX
+    } else {
+        path
+    };
     let path: String = path.chars().take(200).collect();
     let reason = response
         .extensions()

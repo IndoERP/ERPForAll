@@ -33,10 +33,20 @@ const BUSY: &str = "Server busy; retry later.";
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Exchange {
+    #[serde(default)]
+    audience: Audience,
     db: String,
     login: String,
     password: String,
     device_name: String,
+}
+
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Audience {
+    #[default]
+    Rpc,
+    Mcp,
 }
 
 impl Drop for Exchange {
@@ -97,6 +107,7 @@ pub(super) async fn exchange(
         }
         let authenticated = owner.authenticate(attempt).await;
         let device_name = std::mem::take(&mut request.device_name);
+        let audience = request.audience;
         drop(request);
         let login = match authenticated {
             Ok(login) => login,
@@ -109,7 +120,14 @@ pub(super) async fn exchange(
         let issued = if tx_reply.is_closed() {
             Err(refuse(StatusCode::REQUEST_TIMEOUT, "Request cancelled"))
         } else {
-            issue_key(&owner, &login, &device_name, correlation.as_deref()).await
+            issue_key(
+                &owner,
+                &login,
+                &device_name,
+                audience,
+                correlation.as_deref(),
+            )
+            .await
         };
         // The browser session only opened the issuing transaction: it ends here on every outcome.
         let ended = owner.logout(login.session().id()).await;
@@ -156,16 +174,16 @@ async fn issue_key(
     auth: &Auth,
     login: &Login,
     device_name: &str,
+    audience: Audience,
     request_id: Option<&str>,
 ) -> HttpResult<(IssuedSecret, DateTime)> {
     require_single_factor(login.auth().mfa())?;
-    let request = IssueRequest::at_policy_maximum(
-        login.uid(),
-        device_name,
-        KeyKind::User,
-        erp_security::auth::apikey_store::KeyScope::Rpc,
-    )
-    .map_err(issue_refusal)?;
+    let (kind, scope) = match audience {
+        Audience::Rpc => (KeyKind::User, super::KeyScope::Rpc),
+        Audience::Mcp => (KeyKind::Agent, super::KeyScope::Mcp),
+    };
+    let request = IssueRequest::at_policy_maximum(login.uid(), device_name, kind, scope)
+        .map_err(issue_refusal)?;
     let identity = match request_id.and_then(|raw| CorrelationId::parse(raw).ok()) {
         Some(corr) => OperationIdentity::new(corr).map_err(failure)?,
         None => OperationIdentity::generate().map_err(failure)?,

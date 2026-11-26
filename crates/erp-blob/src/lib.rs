@@ -30,6 +30,7 @@
 
 mod config;
 mod detect;
+mod download;
 mod error;
 mod key;
 mod local;
@@ -47,6 +48,7 @@ pub use detect::{
     ContentClass, DetectError, Detected, MAX_MEDIA_TYPE_BYTES, detect, is_active_type,
     normalize_declared, resolve,
 };
+pub use download::{DownloadHandoff, DownloadRequest};
 pub use error::{BlobError, LimitKind};
 pub use key::{ContentKey, Namespace, StagingKey, from_hex, to_hex};
 pub use local::LocalStore;

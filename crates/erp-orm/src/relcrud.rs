@@ -679,7 +679,10 @@ async fn write_values(tx: &mut Transaction, records: &Records, mut vals: RawVals
             && !tx.shared.relations.inverses(model, field.id).is_empty()
         {
             let mut old = tx.old_values(model, field.id, records.rec_ids());
-            if old.iter().any(Option::is_none) && tx.inverse_has_dependents(model, field.id) {
+            if old.iter().any(Option::is_none)
+                && (tx.inverse_has_dependents(model, field.id)
+                    || tx.o2m_capture_relevant(model, field.id))
+            {
                 records.engine_sudo().fetch(tx, Some(&[field.name])).await?;
                 old = tx.old_values(model, field.id, records.rec_ids());
             }

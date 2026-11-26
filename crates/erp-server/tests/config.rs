@@ -152,6 +152,9 @@ fn startup_limits_reject_zero_out_of_bounds_and_unknowns() {
         "db.cancel_concurrency",
         "limits.header_bytes",
         "limits.header_count",
+        "limits.stream_deadline_secs",
+        "limits.stream_idle_secs",
+        "limits.streams_per_user",
         "admission.inflight_bytes",
         "assets.memory_bytes",
         "rpc.spec_cache_bytes",
@@ -775,6 +778,8 @@ fn auth_configuration_refuses_types_bounds_and_unknowns_without_input() {
         ("throttle.table_entries", 64, 1_048_576),
         ("limits.cooldown_hook_deadline_ms", 10, 60_000),
         ("limits.token_plan_hook_deadline_ms", 10, 60_000),
+        ("session.data_bytes", 1024, 262_144),
+        ("limits.session_login_hook_deadline_ms", 10, 60_000),
     ] {
         for number in [min, max] {
             fs::write(&path, format!("{text}[auth]\n\"{name}\"={number}\n")).unwrap();

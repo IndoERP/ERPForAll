@@ -455,6 +455,7 @@ pub struct RecordOp {
     pub(crate) id: Option<XmlId>,
     pub(crate) model: String,
     pub(crate) forcecreate: Option<bool>,
+    pub(crate) protect: Option<bool>,
     pub(crate) fields: Vec<FieldOp>,
     pub(crate) translations: Vec<FieldOp>,
     pub(crate) env: OpEnv,
@@ -479,6 +480,11 @@ impl RecordOp {
 
     pub fn forcecreate(&self) -> Option<bool> {
         self.forcecreate
+    }
+
+    /// An explicit protection decision for this external ID.
+    pub fn protect(&self) -> Option<bool> {
+        self.protect
     }
 
     /// Field values in document order.
@@ -1010,6 +1016,7 @@ impl TemplateOp {
             id: Some(self.id.clone()),
             model: model.to_string(),
             forcecreate: self.forcecreate,
+            protect: None,
             fields,
             translations: Vec::new(),
             env: self.env.clone(),
@@ -1112,6 +1119,7 @@ impl AssetOp {
             id: Some(self.id.clone()),
             model: model.to_string(),
             forcecreate: None,
+            protect: None,
             fields,
             translations: Vec::new(),
             env: self.env.clone(),

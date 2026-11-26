@@ -38,7 +38,7 @@ use super::expr::Known;
 use super::record::{self, Built};
 use super::{FileContext, LoadError, LoadErrorKind, LoadSession, env};
 use crate::ast::{FieldValue, OpEnv, RecordOp, XmlId};
-use crate::model_data::{self, LoadRecord, XidRecord};
+use crate::model_data::{self, LoadRecord, XidBinding, XidRecord};
 use crate::reader::ConvertMode;
 
 /// How much one batch may hold before it is written. The defaults are the ceilings; a host can
@@ -449,6 +449,20 @@ async fn run_window(
                 for xid in &marks {
                     session.mark_loaded(xid);
                 }
+                if !marks.is_empty() {
+                    let mut bindings = Vec::new();
+                    skipped_protection(&item.op, module, &rows, &existing, &mut bindings)
+                        .map_err(|kind| here(item, kind))?;
+                    model_data::update_xmlids_cached(
+                        tx,
+                        records.env(),
+                        &mut session.cache,
+                        &bindings,
+                        true,
+                    )
+                    .await
+                    .map_err(|e| orm(item, e))?;
+                }
                 continue;
             }
             Decision::Run => {}
@@ -495,7 +509,10 @@ async fn run_window(
         let vals = records
             .vals_from_values(pairs.iter().map(|(n, v)| (n, v)))
             .map_err(|e| orm(item, e))?;
-        batch.push(LoadRecord::new(item.xid.clone(), vals, key.env.noupdate()));
+        batch.push(
+            LoadRecord::new(item.xid.clone(), vals, key.env.noupdate())
+                .with_protection(item.op.protect()),
+        );
         ran.push(k);
         // the content of the files the record read counts toward the batch's bytes: write what is
         // built when it passes the limit, so a window never holds more file content than that
@@ -527,6 +544,45 @@ async fn run_window(
     )
     .await?;
     Ok(outcomes)
+}
+
+/// Even when an update skips the data values, it still applies explicit protection declarations
+/// for the external IDs that exist. Nested declarations can be skipped with their parent.
+fn skipped_protection(
+    op: &RecordOp,
+    module: &str,
+    rows: &HashMap<XmlId, XidRecord>,
+    existing: &HashMap<XmlId, i64>,
+    bindings: &mut Vec<XidBinding>,
+) -> Result<(), LoadErrorKind> {
+    if let (Some(id), Some(protect)) = (op.id(), op.protect()) {
+        let xid = qualified(id, module).map_err(record::invalid)?;
+        if xid.module() != Some(module) {
+            return Err(LoadErrorKind::Orm(record::protection_owner_error(module)));
+        }
+        if let Some(&id) = existing.get(&xid)
+            && let Some(row) = rows.get(&xid)
+        {
+            if row.model != op.model() {
+                return Err(LoadErrorKind::Orm(Error::validation(format!(
+                    "External ID {xid} belongs to model {}, not {}.",
+                    row.model,
+                    op.model()
+                ))));
+            }
+            bindings.push(
+                XidBinding::new(xid, op.model(), id, row.noupdate).with_protection(Some(protect)),
+            );
+        }
+    }
+    for field in op.fields() {
+        if let FieldValue::SubRecords(children) = field.value() {
+            for child in children {
+                skipped_protection(child, module, rows, existing, bindings)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Write the built records of a window with one `load_records` and record their outcomes; the

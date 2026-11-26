@@ -12,6 +12,7 @@ mod access;
 mod cleanup;
 pub mod content;
 pub mod gc;
+pub mod grants;
 mod link;
 mod model;
 pub mod ownership;

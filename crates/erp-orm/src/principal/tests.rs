@@ -190,11 +190,13 @@ fn builder_refuses_the_superuser_and_names_later_slices() {
     );
     let key = ApiKeyId::new(3).unwrap();
     let link = LinkId::new(4).unwrap();
+    assert!(
+        PrincipalBuilder::agent(uid(7), key)
+            .unwrap()
+            .build()
+            .is_err()
+    );
     let cases = [
-        (
-            PrincipalBuilder::agent(uid(7), key).unwrap_err(),
-            "agent principals are not supported until a later release",
-        ),
         (
             PrincipalBuilder::service(uid(7), key).unwrap_err(),
             "service principals are not supported until a later release",

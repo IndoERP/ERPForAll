@@ -20,8 +20,8 @@
 //! ```
 //!
 //! The result is a bounded set of names, resolved **once** when the registry's authentication
-//! service is built and checked against `res.users` there (a name that is not a stored scalar
-//! column of the user refuses the whole plan, loudly); the framework reads the values in the
+//! service is built. Entries name supported stored scalars or direct, bounded relation memberships
+//! on `res.users`; an invalid entry refuses the whole plan. The framework reads their values in the
 //! same statements that read the base fields, and encodes them. The hook returns no SQL, no
 //! value and no per-user decision, and cannot remove a base field.
 
@@ -73,8 +73,7 @@ impl SessionTokenFields {
     /// must be a stored, non-translated column of type boolean, integer, selection, many2one, or
     /// char with a size of at most [`MAX_CHAR_SIZE`]. Float, text, unsized char, date and datetime
     /// fields are refused (their text form depends on session settings, or their size is not
-    /// bounded). Relation contributions (`one2many`, `many2many`) are not supported
-    /// yet and refuse the plan.
+    /// bounded). Direct relation memberships use the ordered IDs of at most 1024 related records.
     ///
     /// ```
     /// use erp_security::auth::SessionTokenFields;
@@ -172,6 +171,42 @@ pub(crate) struct TokenPlan {
 struct PlanField {
     name: String,
     kind: ExtraKind,
+    relation: Option<RelationMembers>,
+}
+
+const MAX_RELATION_IDS: usize = 1024;
+
+/// Validated registry identifiers, quoted once when the plan is admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RelationMembers {
+    table: String,
+    owner: String,
+    member: String,
+}
+
+impl PlanField {
+    fn expression(&self, alias: &str) -> String {
+        let column = erp_sql::quote(&self.name);
+        let Some(rel) = &self.relation else {
+            return if alias.is_empty() {
+                format!("{column}::text")
+            } else {
+                format!("{alias}.{column}::text")
+            };
+        };
+        let user = if alias.is_empty() { "res_users" } else { alias };
+        let RelationMembers {
+            table,
+            owner,
+            member,
+        } = rel;
+        // Read at most one row beyond the admitted cardinality. Within the bound all
+        // members contribute in a stable order, regardless of insertion or scan order.
+        format!(
+            "(SELECT CASE WHEN count(*) > {MAX_RELATION_IDS} THEN 'oversized' ELSE COALESCE(array_agg(m.id ORDER BY m.id)::text, '{{}}') END FROM (SELECT r.{member} AS id FROM {table} r WHERE r.{owner} = {user}.id LIMIT {}) m)",
+            MAX_RELATION_IDS + 1
+        )
+    }
 }
 
 /// `sql` with `text` in place of `marker`, which must occur exactly once: a statement that lost
@@ -208,6 +243,7 @@ impl TokenPlan {
                 .map(|n| PlanField {
                     name: (*n).to_owned(),
                     kind: ExtraKind::Text,
+                    relation: None,
                 })
                 .collect(),
         }
@@ -250,17 +286,41 @@ impl TokenPlan {
                     "{METHOD}: res.users has no field '{name}'"
                 )));
             };
-            if matches!(
-                spec.ty,
-                FieldType::One2many { .. } | FieldType::Many2many { .. }
-            ) {
-                return refuse(
-                    "is a relation field, relation contributions are not supported until \
-                     a later release"
-                        .to_owned(),
-                );
+            let relation = match &spec.ty {
+                FieldType::One2many { comodel, inverse } => {
+                    let target = registry.model(comodel).ok_or_else(|| {
+                        Error::programming(format!("{METHOD}: missing related model {comodel}"))
+                    })?;
+                    let direct = target.field(inverse).is_some_and(|field| {
+                        matches!(&field.ty, FieldType::Many2one { comodel, .. } if comodel == "res.users")
+                            && field.store && field.has_column() && field.inherited.is_none()
+                            && !field.company_dependent
+                    });
+                    if !direct {
+                        return refuse("requires a stored inverse user column".into());
+                    }
+                    Some(RelationMembers {
+                        table: target.sql_table().to_owned(),
+                        owner: erp_sql::quote(inverse),
+                        member: erp_sql::quote("id"),
+                    })
+                }
+                FieldType::Many2many {
+                    relation: Some(relation),
+                    ..
+                } if spec.store => Some(RelationMembers {
+                    table: erp_sql::quote(&relation.table),
+                    owner: erp_sql::quote(&relation.column1),
+                    member: erp_sql::quote(&relation.column2),
+                }),
+                _ => None,
+            };
+            if relation.is_some()
+                && (spec.inherited.is_some() || spec.related.is_some() || spec.compute.is_some())
+            {
+                return refuse("requires direct membership for a relation token input".into());
             }
-            if !spec.store || !spec.has_column() {
+            if relation.is_none() && (!spec.store || !spec.has_column()) {
                 return refuse(
                     "is not stored, only stored columns can be part of the token".into(),
                 );
@@ -285,6 +345,11 @@ impl TokenPlan {
                     return refuse("is a text field, so its value is not bounded".into());
                 }
                 FieldType::Selection { .. } => ExtraKind::Text,
+                // The PostgreSQL array text, including braces for an empty set, is
+                // disjoint from every scalar ID encoding and includes the entire set.
+                FieldType::One2many { .. } | FieldType::Many2many { .. } if relation.is_some() => {
+                    ExtraKind::Id
+                }
                 FieldType::Many2one { .. } => ExtraKind::Id,
                 ref other => {
                     return refuse(format!(
@@ -296,6 +361,7 @@ impl TokenPlan {
             compiled.push(PlanField {
                 name: name.to_owned(),
                 kind,
+                relation,
             });
         }
         Ok(Self { fields: compiled })
@@ -305,10 +371,24 @@ impl TokenPlan {
     /// text and with a leading comma, for the end of a select list; empty for the base plan.
     /// Names are checked identifiers of the registry, quoted here.
     pub(crate) fn select_list(&self, alias: &str) -> String {
-        let dot = if alias.is_empty() { "" } else { "." };
         self.fields
             .iter()
-            .map(|f| format!(", {alias}{dot}\"{}\"::text", f.name))
+            .map(|field| {
+                let expression = field.expression(alias);
+                if field.relation.is_some() {
+                    format!(", {expression} AS {}", erp_sql::quote(&field.name))
+                } else {
+                    format!(", {expression}")
+                }
+            })
+            .collect()
+    }
+
+    /// Forward already projected values from a materialized user CTE.
+    pub(crate) fn projected_list(&self, alias: &str) -> String {
+        self.fields
+            .iter()
+            .map(|field| format!(", {alias}.{}::text", erp_sql::quote(&field.name)))
             .collect()
     }
 
@@ -324,15 +404,20 @@ impl TokenPlan {
         if self.is_base() {
             return String::new();
         }
-        let columns: Vec<String> = self
+        format!(
+            "AND {} IS NOT DISTINCT FROM ${param}::text[]",
+            self.value_array(alias)
+        )
+    }
+
+    /// SQL projection of every extra token input, in plan order, including nulls.
+    pub(crate) fn value_array(&self, alias: &str) -> String {
+        let columns: Vec<_> = self
             .fields
             .iter()
-            .map(|f| format!("{alias}.\"{}\"::text", f.name))
+            .map(|field| field.expression(alias))
             .collect();
-        format!(
-            "AND ARRAY[{}]::text[] IS NOT DISTINCT FROM ${param}::text[]",
-            columns.join(", ")
-        )
+        format!("ARRAY[{}]::text[]", columns.join(", "))
     }
 
     /// The values of the added fields from `row`, whose first one is column `first`.
@@ -350,6 +435,12 @@ impl TokenPlan {
                 ))
                 .with_source(e)
             })?;
+            if field.relation.is_some() && value.as_deref() == Some("oversized") {
+                return Err(Error::validation(format!(
+                    "res.users.{} exceeds the session token limit of {MAX_RELATION_IDS} related records",
+                    field.name
+                )));
+            }
             values.push(value.map(Zeroizing::new));
         }
         Ok(TokenValues(values))
@@ -385,11 +476,6 @@ impl TokenPlan {
 pub(crate) struct TokenValues(Vec<Option<Zeroizing<String>>>);
 
 impl TokenValues {
-    /// No values: the base plan's.
-    pub(crate) const fn empty() -> Self {
-        Self(Vec::new())
-    }
-
     /// The values as the array parameter the success guard compares.
     pub(crate) fn as_array(&self) -> Vec<Option<&str>> {
         self.0

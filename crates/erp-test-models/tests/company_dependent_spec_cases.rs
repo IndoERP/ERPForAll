@@ -321,6 +321,28 @@ mod fixture {
         #[field(char)]
         pub name: Option<Arc<str>>,
     }
+    #[model(name = "spec.computed.links", addon = "spec_property")]
+    pub struct ComputedLinks {
+        #[field(many2one, comodel = "spec.tag")]
+        pub source_id: Option<RecId>,
+        #[field(many2many, comodel = "spec.tag", compute = "_compute_tags", store)]
+        pub tag_ids: Vec<RecId>,
+    }
+    #[methods(ComputedLinks, addon = "spec_property")]
+    impl ComputedLinks {
+        #[compute(depends = ["source_id"])]
+        fn _compute_tags(batch: &mut Batch<'_, ComputedLinks>) -> Result<()> {
+            for i in batch.indices() {
+                let target = batch.get(i, ComputedLinks::SOURCE_ID)?;
+                batch.set(
+                    i,
+                    ComputedLinks::TAG_IDS,
+                    target.into_iter().collect::<Vec<_>>(),
+                )?;
+            }
+            Ok(())
+        }
+    }
     #[model(name = "spec.search", addon = "spec_property")]
     pub struct SearchProperty {
         #[field(boolean, company_dependent = true, index = "btree_not_null")]
@@ -735,7 +757,103 @@ async fn bigint_company_values_fallback_search_and_order() {
             descending.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             "company {number}"
         );
+        let options = SearchOptions::new().order("big desc, id").limit(1);
+        let mut cursor = None;
+        for (id, value) in descending {
+            let page = scoped
+                .search_after(&mut tx, &scope, &options, cursor.as_ref())
+                .await
+                .unwrap();
+            assert_eq!(page.records.ids(), &[id]);
+            let next = page.next.unwrap();
+            assert_eq!(next.values()[0], big(value));
+            cursor = Some(erp_orm::Cursor::from_json(&next.to_json().unwrap()).unwrap());
+        }
     }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Run explicitly to compare PostgreSQL bulk mutation and company pagination costs.
+#[tokio::test]
+#[ignore = "PostgreSQL profiling fixture"]
+async fn profile_company_bigint_bulk_and_paging() {
+    use erp_data::ImpexExt;
+    use std::time::Instant;
+
+    const SIZE: usize = 50_000;
+    const DEEP: usize = 40_000;
+    const WIDTH: u64 = 100;
+    const FIRST: i64 = 9_007_199_254_740_993;
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let model = env.records("spec.big").unwrap();
+    let create: Vec<_> = (0..SIZE)
+        .map(|index| {
+            vals(&[
+                ("name", Value::str("created")),
+                (
+                    "big",
+                    Value::BigInt(erp_fields::BigInt::from_i64(FIRST + index as i64)),
+                ),
+            ])
+        })
+        .collect();
+    let load: Vec<_> = (0..SIZE)
+        .map(|index| vec!["loaded".to_owned(), (FIRST + index as i64).to_string()])
+        .collect();
+    let start = Instant::now();
+    let created = model.create_values(&mut tx, &create).await.unwrap();
+    tx.flush().await.unwrap();
+    let create_time = start.elapsed();
+    assert_eq!(created.len(), SIZE);
+    let start = Instant::now();
+    let loaded = model.load(&mut tx, &["name", "big"], &load).await.unwrap();
+    tx.flush().await.unwrap();
+    let load_time = start.elapsed();
+    assert_eq!(
+        loaded.ids.as_ref().map(Vec::len),
+        Some(SIZE),
+        "{:?}",
+        loaded.messages
+    );
+    let created_ids = created.ids();
+    let scope = cond("name", Operator::Eq, "created");
+    let order = SearchOptions::new().order("big, id").limit(WIDTH);
+    let cursor = erp_orm::Cursor::new(
+        "big, id",
+        vec![
+            Value::BigInt(erp_fields::BigInt::from_i64(FIRST + DEEP as i64 - 1)),
+            Value::Int(created_ids[DEEP - 1]),
+        ],
+    );
+    let offset_order = order.clone().offset(DEEP as u64);
+    let mut offsets = Vec::new();
+    let mut cursors = Vec::new();
+    for _ in 0..7 {
+        let start = Instant::now();
+        let page = model
+            .search_with(&mut tx, &scope, &offset_order)
+            .await
+            .unwrap();
+        offsets.push(start.elapsed());
+        let start = Instant::now();
+        let resumed = model
+            .search_after(&mut tx, &scope, &order, Some(&cursor))
+            .await
+            .unwrap();
+        cursors.push(start.elapsed());
+        assert_eq!(page.ids(), resumed.records.ids());
+        assert_eq!(page.ids(), &created_ids[DEEP..DEEP + WIDTH as usize]);
+    }
+    offsets.sort_unstable();
+    cursors.sort_unstable();
+    println!(
+        "{SIZE} rows each: create+flush {create_time:?}, load+flush {load_time:?}; median page {DEEP}/{WIDTH}: offset {:?}, keyset {:?}",
+        offsets[3], cursors[3]
+    );
     drop(tx);
     h.cleanup().await.unwrap();
 }
@@ -1876,7 +1994,7 @@ async fn spec_field_110_saving_drafts_and_draft_many2one_values() {
         assert_eq!(refused.kind(), of_stored.kind());
         assert_eq!(refused.message(), of_stored.message());
     }
-    // An unsaved record cannot be the value of a company-dependent many2one.
+    // An unsaved target cannot be written into a persisted company map.
     let unsaved = tx
         .new_record(
             &user.records("spec.tag").unwrap(),
@@ -1887,19 +2005,15 @@ async fn spec_field_110_saving_drafts_and_draft_many2one_values() {
         .await
         .unwrap();
     let link = erp_orm::RawVals::new().set_cell("tag_id", Cell::Id(unsaved.rec_ids()[0].get()));
+    let persisted = drafts.browse([shown]).unwrap();
     let result = tx
-        .savepoint(async |tx| readable.write(tx, link.clone()).await)
+        .savepoint(async |tx| persisted.write(tx, link.clone()).await)
         .await;
-    let refused = result.unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::Validation);
-    // The task named at the end of a "not supported until" refusal is being renamed by another
-    // branch: the text up to it is exact, the task is only required to be of this family.
-    let head = "spec.draft.tag_id: a company-dependent many2one to an unsaved record is not supported until ";
-    let task = refused
-        .message()
-        .strip_prefix(head)
-        .unwrap_or_else(|| panic!("unexpected message: {}", refused.message()));
-    assert!(task.starts_with("a later release"), "{task}");
+    error(
+        result.unwrap_err(),
+        ErrorKind::Validation,
+        "spec.draft.tag_id: save the related record before writing a company-dependent many2one",
+    );
     // Nothing of the drafts reached the table.
     assert_eq!(
         stored(&mut tx, "spec_draft", "tag_id", shown).await,
@@ -1909,6 +2023,156 @@ async fn spec_field_110_saving_drafts_and_draft_many2one_values() {
         stored(&mut tx, "spec_draft", "tag_id", hidden).await,
         Some(json!({"1": target}))
     );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn company_property_drafts_keep_local_targets_and_export_only_saved_origins() {
+    use erp_orm::{Command, RawVals};
+
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    let tags = one.records("spec.tag").unwrap();
+    let saved_tag = tags
+        .create_values(&mut tx, &[vals(&[("name", Value::str("saved"))])])
+        .await
+        .unwrap()
+        .rec_ids()[0];
+    let edit_tag = tx
+        .new_record(&tags, RawVals::new(), Some(saved_tag), None)
+        .await
+        .unwrap()
+        .rec_ids()[0];
+    let new_tag = tx
+        .new_record(&tags, RawVals::new(), None, None)
+        .await
+        .unwrap()
+        .rec_ids()[0];
+    let drafts = one.records("spec.draft").unwrap();
+    let mut input = RawVals::new();
+    input.insert_commands(
+        "line_ids".into(),
+        vec![Command::Create(
+            RawVals::new()
+                .set_cell("tag_id", Cell::Id(edit_tag.get()))
+                .set_cell("note", Cell::Str("line input".into())),
+        )],
+    );
+    let parent = tx.new_record(&drafts, input, None, None).await.unwrap();
+    let lines = parent.related(&mut tx, "line_ids").await.unwrap();
+    assert_eq!(
+        lines.cell(&mut tx, "tag_id").await.unwrap(),
+        Cell::Id(edit_tag.get())
+    );
+    let other = lines.with_env(two.clone());
+    assert_eq!(other.cell(&mut tx, "tag_id").await.unwrap(), Cell::Null);
+    other
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("tag_id", Cell::Id(new_tag.get())),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        other.cell(&mut tx, "tag_id").await.unwrap(),
+        Cell::Id(new_tag.get())
+    );
+    assert_eq!(
+        lines.cell(&mut tx, "tag_id").await.unwrap(),
+        Cell::Id(edit_tag.get())
+    );
+    let commands = parent.x2many_commands(&mut tx, "line_ids").await.unwrap();
+    match commands.as_slice() {
+        [Command::Set(_), Command::Create(line)] => {
+            assert_eq!(line.get("tag_id"), Some(&Cell::Id(saved_tag.get())))
+        }
+        other => panic!("unexpected commands {other:?}"),
+    }
+    let error = parent
+        .with_env(two)
+        .x2many_commands(&mut tx, "line_ids")
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("points at a new record without origin"),
+        "{error}"
+    );
+    assert_eq!(count_rows(&mut tx, "spec_draft").await, 0);
+    let mut vals = RawVals::new().set_cell("note", Cell::Str("parent input".into()));
+    vals.insert_commands("line_ids".into(), commands);
+    let persisted = drafts.create(&mut tx, vec![vals]).await.unwrap();
+    let saved_line = persisted.related(&mut tx, "line_ids").await.unwrap();
+    assert_eq!(
+        persisted.value(&mut tx, "note").await.unwrap(),
+        Value::str("parent input")
+    );
+    assert_eq!(
+        saved_line.value(&mut tx, "note").await.unwrap(),
+        Value::str("line input")
+    );
+    assert_eq!(
+        saved_line.cell(&mut tx, "tag_id").await.unwrap(),
+        Cell::Id(saved_tag.get())
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn stored_computed_many2many_survives_reload_and_replaces_relation_rows() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let env = tx.env();
+    let tags = env
+        .records("spec.tag")
+        .unwrap()
+        .create_values(&mut tx, &[vals(&[]), vals(&[])])
+        .await
+        .unwrap();
+    let (first, second) = (tags.ids()[0], tags.ids()[1]);
+    let linked = env
+        .records("spec.computed.links")
+        .unwrap()
+        .create_values(&mut tx, &[vals(&[("source_id", Value::Int(first))])])
+        .await
+        .unwrap();
+    let id = linked.ids()[0];
+    tx.commit().await.unwrap();
+
+    let mut tx = h.begin().await.unwrap();
+    let linked = tx
+        .env()
+        .records("spec.computed.links")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    assert_eq!(
+        linked.related(&mut tx, "tag_ids").await.unwrap().ids(),
+        &[first]
+    );
+    linked
+        .write_values(&mut tx, &vals(&[("source_id", Value::Int(second))]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    assert_eq!(
+        linked.related(&mut tx, "tag_ids").await.unwrap().ids(),
+        &[second]
+    );
+    linked
+        .write_values(&mut tx, &vals(&[("source_id", Value::False)]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    assert!(linked.related(&mut tx, "tag_ids").await.unwrap().is_empty());
     drop(tx);
     h.cleanup().await.unwrap();
 }

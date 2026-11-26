@@ -208,7 +208,8 @@ async fn delete_obsolete(
         }
     }
 
-    // 4. delete the records run by run, then the external-id rows
+    // 4. release the obsolete IDs' protection, then delete the records and external IDs.
+    crate::protection::release_obsolete(tx, &stale_ids).await?;
     let env = tx.env().sudo(true);
     for run in runs {
         let records = env.records(run.model)?;

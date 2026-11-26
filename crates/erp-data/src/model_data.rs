@@ -163,6 +163,7 @@ pub struct XidBinding {
     /// Target record (a positive database id).
     pub res_id: i64,
     pub noupdate: bool,
+    protection: Option<bool>,
 }
 
 impl XidBinding {
@@ -173,7 +174,13 @@ impl XidBinding {
             model: model.into(),
             res_id,
             noupdate,
+            protection: None,
         }
+    }
+
+    pub(crate) fn with_protection(mut self, protect: Option<bool>) -> Self {
+        self.protection = protect;
+        self
     }
 
     /// Bind a qualified `xid` to record `res_id` of `model`.
@@ -325,7 +332,13 @@ pub async fn update_xmlids_returning(
             )));
         }
         match seen.get(&binding.xid) {
-            Some(prev) if prev.model == binding.model && prev.res_id == binding.res_id => continue,
+            Some(prev)
+                if prev.model == binding.model
+                    && prev.res_id == binding.res_id
+                    && prev.protection == binding.protection =>
+            {
+                continue;
+            }
             Some(prev) => {
                 return Err(Error::programming(format!(
                     "external id {} bound twice: to {}({}) and {}({})",
@@ -337,6 +350,13 @@ pub async fn update_xmlids_returning(
                 rows.push(binding);
             }
         }
+    }
+    tx.flush().await?;
+    for binding in rows
+        .iter()
+        .filter(|binding| binding.protection == Some(false))
+    {
+        crate::protection::set(tx, env, binding, false).await?;
     }
     let modules: Vec<&str> = rows.iter().map(|b| b.xid.module().unwrap_or("")).collect();
     let names: Vec<&str> = rows.iter().map(|b| b.xid.name()).collect();
@@ -361,10 +381,15 @@ pub async fn update_xmlids_returning(
                 OR {quoted}.write_date IS DISTINCT FROM {now}){guard} \
          RETURNING id, module, name, model, res_id, noupdate"
     );
-    tx.flush().await?;
     let returned = tx
         .query(&sql, &[&modules, &names, &models, &res_ids, &flags])
         .await?;
+    for binding in rows
+        .iter()
+        .filter(|binding| binding.protection == Some(true))
+    {
+        crate::protection::set(tx, env, binding, true).await?;
+    }
     let by_key: HashMap<(String, String), XmlId> =
         rows.iter().map(|b| (key(&b.xid), b.xid.clone())).collect();
     let mut out = Vec::with_capacity(returned.len());
@@ -612,6 +637,7 @@ pub struct LoadRecord {
     db_id: Option<i64>,
     values: RawVals,
     noupdate: bool,
+    protection: Option<bool>,
 }
 
 impl LoadRecord {
@@ -624,7 +650,13 @@ impl LoadRecord {
             db_id: None,
             values,
             noupdate,
+            protection: None,
         }
+    }
+
+    pub(crate) fn with_protection(mut self, protect: Option<bool>) -> Self {
+        self.protection = protect;
+        self
     }
 
     #[must_use]
@@ -818,9 +850,25 @@ async fn load_records_with(
             .await?;
     }
     if import_file(records.env())? {
-        check_module_prefixes(tx, records, &batch, &to_create).await?;
+        // This optional import check traverses the ORM's search, access and field-read futures.
+        // Erase that branch's type before embedding it in the load window and module lifecycle.
+        let checked: BoxFuture<'_, Result<()>> =
+            Box::pin(check_module_prefixes(tx, records, &batch, &to_create));
+        checked.await?;
     }
+    let mut bindings: Vec<XidBinding> = batch
+        .iter()
+        .zip(&targets)
+        .filter_map(|(item, id)| {
+            let protection = item.protection?;
+            Some(
+                XidBinding::new(item.xml_id.clone()?, spec.name, (*id)?, item.noupdate)
+                    .with_protection(Some(protection)),
+            )
+        })
+        .collect();
     if to_create.is_empty() {
+        write_bindings(tx, records.env(), &bindings, update, cache).await?;
         return finish_load(records, targets);
     }
     let vals: Vec<RawVals> = to_create
@@ -857,16 +905,13 @@ async fn load_records_with(
             to_create.len()
         )));
     }
-    let mut bindings = Vec::new();
     for (&k, &id) in to_create.iter().zip(&created_ids) {
         targets[k] = Some(id);
         if let Some(xid) = &batch[k].xml_id {
-            bindings.push(XidBinding::new(
-                xid.clone(),
-                spec.name,
-                id,
-                batch[k].noupdate,
-            ));
+            bindings.push(
+                XidBinding::new(xid.clone(), spec.name, id, batch[k].noupdate)
+                    .with_protection(batch[k].protection),
+            );
         }
     }
     // `_inherits` parents created along with the records get `<xid>_<parent_model>`
@@ -905,13 +950,21 @@ async fn load_records_with(
             ));
         }
     }
-    match cache {
-        Some(cache) => {
-            update_xmlids_cached(tx, records.env(), cache, &bindings, update).await?;
-        }
-        None => update_xmlids(tx, records.env(), &bindings, update).await?,
-    }
+    write_bindings(tx, records.env(), &bindings, update, cache).await?;
     finish_load(records, targets)
+}
+
+async fn write_bindings(
+    tx: &mut Transaction,
+    env: &Env,
+    bindings: &[XidBinding],
+    update: bool,
+    cache: Option<&mut XidCache>,
+) -> Result<()> {
+    match cache {
+        Some(cache) => update_xmlids_cached(tx, env, cache, bindings, update).await,
+        None => update_xmlids(tx, env, bindings, update).await,
+    }
 }
 
 /// The `load_state::BATCH_NAMES` and `load_state::BATCH_POSITIONS` values of a tracked batch

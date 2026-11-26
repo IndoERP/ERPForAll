@@ -3,7 +3,7 @@ use super::*;
 use erp_fields::{Error, Value, ValueMap};
 use erp_orm::{Orm, RawVals, Transaction};
 use erp_rpc::{PasswordCall, PasswordOperation as Op, PasswordReply as Reply, RpcFailure};
-use erp_security::auth::{IdentityCheck, PasswordReset};
+use erp_security::auth::{IdentityCheck, PasswordReset, PasswordTransactionAuthorization};
 use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, RpcFailure>;
@@ -166,6 +166,25 @@ fn audit(operation: Op, actor: i64, target: i64, client: std::net::IpAddr) {
     );
 }
 
+struct PasswordPolicy<'a>(&'a PasswordCall<'a>);
+
+impl PasswordTransactionAuthorization for PasswordPolicy<'_> {
+    fn prepare<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<()>> {
+        Box::pin(self.0.prepare_transaction(tx))
+    }
+
+    fn check<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+        principal: &'a erp_orm::Principal,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<()>> {
+        Box::pin(self.0.authorize_transaction(tx, principal))
+    }
+}
+
 pub(super) async fn execute(
     credential: &BrowserCredential,
     orm: &Orm,
@@ -188,8 +207,10 @@ pub(super) async fn execute(
     let actor = begun.session.user().get();
     let session_id = begun.session.id().to_text();
     let mut tx = begun.tx;
+    call.prepare_transaction(&mut tx).await?;
     let authority = auth.check_session_in(&mut tx, secret).await?;
-    call.authorize(authority.principal())?;
+    call.authorize_transaction(&mut tx, authority.principal())
+        .await?;
     match call.operation() {
         Op::OpenOwn | Op::OpenReset => {
             let own = call.operation() == Op::OpenOwn || call.ids() == [actor];
@@ -277,11 +298,11 @@ pub(super) async fn execute(
             let password = Zeroizing::new(call.take::<String>("password")?);
             tx.rollback().await?;
             drop(tx);
-            auth.confirm_identity_authorized(
+            auth.confirm_identity_with_policy(
                 secret,
                 &password,
                 erp_security::auth::ClientAddr::Known(credential.client),
-                &|p| call.authorize(p),
+                &PasswordPolicy(&call),
             )
             .await
             .map_err(domain)?;
@@ -316,17 +337,17 @@ pub(super) async fn execute(
             tx.rollback().await?;
             drop(tx);
             if let Some(old) = old {
-                auth.confirm_identity_authorized(
+                auth.confirm_identity_with_policy(
                     secret,
                     &old,
                     erp_security::auth::ClientAddr::Known(credential.client),
-                    &|p| call.authorize(p),
+                    &PasswordPolicy(&call),
                 )
                 .await
                 .map_err(domain)?;
             }
             let checked = auth
-                .change_password_authorized(Some(secret), password.trim(), &|p| call.authorize(p))
+                .change_password_with_policy(Some(secret), password.trim(), &PasswordPolicy(&call))
                 .await
                 .map_err(domain)?;
             if checked == IdentityCheck::Verified {
@@ -395,7 +416,7 @@ pub(super) async fn execute(
             tx.rollback().await?;
             drop(tx);
             let check = auth
-                .reset_passwords_authorized(Some(secret), &changes, &|p| call.authorize(p))
+                .reset_passwords_with_policy(Some(secret), &changes, &PasswordPolicy(&call))
                 .await
                 .map_err(domain)?;
             if check == IdentityCheck::Verified {

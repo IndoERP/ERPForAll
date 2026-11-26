@@ -13,6 +13,8 @@
 //! row is reported only by `GET`. A refused read and a missing id give the same `404`.
 use super::*;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Mutex as StdMutex, PoisonError};
 use std::task::{Context, Poll};
 
 pub(super) const CONTENT_PREFIX: &str = crate::routes::CONTENT_PREFIX;
@@ -25,6 +27,16 @@ const RANGE_HEADER_MAX: usize = 128;
 
 /// Bytes read from the store per body frame.
 const BODY_CHUNK: usize = 64 * 1024;
+
+// Process counters are emitted as structured log fields so a collector can export them
+// without exposing an unauthenticated diagnostics route or recording request credentials.
+static MISSING_OBJECTS: AtomicU64 = AtomicU64::new(0);
+static FAILED_READS: AtomicU64 = AtomicU64::new(0);
+static EXHAUSTED_LIMITS: AtomicU64 = AtomicU64::new(0);
+
+fn next_total(counter: &AtomicU64) -> u64 {
+    counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
 
 /// A byte stream of attachment content. It holds the node's stream admission until dropped.
 pub type ContentReader = Pin<Box<dyn tokio::io::AsyncRead + Send>>;
@@ -70,12 +82,33 @@ pub enum ContentOpenFailure {
 /// Opens the bytes of one resolved attachment, after the session transaction ended. The route calls
 /// it for `GET` only; `HEAD` drops the opener unused.
 pub trait ContentOpener: Send {
+    /// An optional handoff for a full read after authorization. The default streams in the app.
+    fn handoff<'a>(
+        &'a self,
+        _request: ContentHandoffRequest<'a>,
+    ) -> erp_orm::BoxFuture<'a, Result<Option<ContentHandoff>, ContentOpenFailure>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Take one stream permit of this node, then open the content or `range` of it.
     /// The permit lives inside the returned reader.
     fn open(
         self: Box<Self>,
         range: Option<ContentRange>,
     ) -> erp_orm::BoxFuture<'static, Result<ContentReader, ContentOpenFailure>>;
+}
+
+/// The media type and forced attachment disposition the HTTP transport has chosen.
+pub struct ContentHandoffRequest<'a> {
+    pub media_type: &'a str,
+    pub attachment_disposition: &'a str,
+    pub allow_presign: bool,
+}
+
+/// An internal proxy path or a short-lived remote redirect. Contains no loggable data.
+pub enum ContentHandoff {
+    InternalProxy(String),
+    Presigned(String),
 }
 
 /// A readable attachment with stored content, as the composed lookup found it.
@@ -86,6 +119,7 @@ pub struct FoundContent {
     size: u64,
     digest: String,
     opener: Box<dyn ContentOpener>,
+    sha256: Option<[u8; 32]>,
 }
 
 impl FoundContent {
@@ -106,15 +140,27 @@ impl FoundContent {
             size,
             digest,
             opener,
+            sha256: None,
         }
+    }
+    /// Supply a strong validator from the verified blob identity.
+    pub fn with_sha256(mut self, sha256: [u8; 32]) -> Self {
+        self.sha256 = Some(sha256);
+        self
     }
 }
 
 /// Result of [`WebAttachmentContent::lookup`].
 #[non_exhaustive]
 pub enum ContentLookup {
+    /// A readable URL attachment. Only a same-origin link to a separately authorized binary may redirect.
+    Url(String),
+    /// The transport verified that both ends of the one-hop redirect are readable.
+    Redirect(i64),
     /// The caller may read it and it has stored content.
     Found(FoundContent),
+    /// A permitted inline field exceeds the bounded materialization size.
+    TooLarge,
     /// Not found, not allowed, another company's record, a URL attachment or one without stored
     /// content: one `404` for all of them.
     NotFound,
@@ -138,6 +184,28 @@ pub trait WebAttachmentContent: Send + Sync {
         tx: &'a mut erp_orm::Transaction,
         id: i64,
     ) -> erp_orm::BoxFuture<'a, erp_fields::Result<ContentLookup>>;
+
+    /// Resolve a binary field under the same record and field access rules as an ORM read.
+    fn lookup_field<'a>(
+        &'a self,
+        _tx: &'a mut erp_orm::Transaction,
+        _model: &'a str,
+        _id: i64,
+        _field: &'a str,
+        _headers_only: bool,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<ContentLookup>> {
+        Box::pin(async { Ok(ContentLookup::NotFound) })
+    }
+
+    /// Redeem a public or token grant. Return the issuer used for stream admission and a fresh checked lookup.
+    fn lookup_shared<'a>(
+        &'a self,
+        _orm: &'a erp_orm::Orm,
+        _id: i64,
+        _token: Option<&'a str>,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<Option<(i64, ContentLookup)>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The validated query of one request.
@@ -145,6 +213,8 @@ pub trait WebAttachmentContent: Send + Sync {
 struct ContentQuery {
     download: bool,
     octet_stream: bool,
+    access_token: Option<zeroize::Zeroizing<String>>,
+    presign_for_principal: bool,
 }
 
 fn parse_query(query: Option<&str>) -> Result<ContentQuery, &'static str> {
@@ -171,9 +241,12 @@ fn parse_query(query: Option<&str>) -> Result<ContentQuery, &'static str> {
                 }
                 parsed.octet_stream = true;
             }
+            "access_token" if parsed.access_token.is_none() && value.len() <= 128 => {
+                parsed.access_token = Some(zeroize::Zeroizing::new(value.into_owned()));
+            }
             _ => {
                 return Err(
-                    "The content route accepts only the query parameters download and mimetype, each at most once.",
+                    "The content route accepts download, mimetype and access_token, each at most once.",
                 );
             }
         }
@@ -189,6 +262,64 @@ fn parse_id(rest: &str) -> Option<i64> {
     rest.parse::<i64>().ok().filter(|id| *id > 0)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ContentAddress<'a> {
+    Attachment(i64),
+    Field {
+        model: &'a str,
+        id: i64,
+        field: &'a str,
+    },
+}
+
+fn content_address(path: &str) -> Option<ContentAddress<'_>> {
+    if let Some(id) = parse_id(path) {
+        return Some(ContentAddress::Attachment(id));
+    }
+    let (model, rest) = path.split_once('/')?;
+    let (id, field) = rest.split_once('/')?;
+    let ident = |s: &str| {
+        s.len() <= 63
+            && s.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    };
+    if model.len() > 128 || !model.split('.').all(ident) || !ident(field) {
+        return None;
+    }
+    Some(ContentAddress::Field {
+        model,
+        id: parse_id(id)?,
+        field,
+    })
+}
+
+// Only canonical same-origin attachment URLs can redirect. Rebuilding the Location from
+// the ID keeps credentials, encoded paths and arbitrary query parameters out of the response.
+fn redirect_target(url: &str, origin: &str) -> Option<i64> {
+    parse_id(
+        url.strip_prefix(origin.trim_end_matches('/'))?
+            .strip_prefix(CONTENT_PREFIX)?,
+    )
+}
+
+fn redirect_location(id: i64, query: &ContentQuery) -> String {
+    let mut location = format!("{CONTENT_PREFIX}{id}");
+    let mut params = url::form_urlencoded::Serializer::new(String::new());
+    if query.download {
+        params.append_pair("download", "true");
+    }
+    if query.octet_stream {
+        params.append_pair("mimetype", "application/octet-stream");
+    }
+    let query = params.finish();
+    if !query.is_empty() {
+        location.push('?');
+        location.push_str(&query);
+    }
+    location
+}
+
 /// How a request's `Range` is answered.
 #[derive(Debug, PartialEq, Eq)]
 enum RangeDecision {
@@ -197,13 +328,12 @@ enum RangeDecision {
     Unsatisfiable(&'static str),
 }
 
-/// Decide the range of a request for content of `size` bytes. `If-Range` makes any `Range`
-/// ignored (no validator exists yet, so a partial answer could splice two contents).
-fn decide_range(ranges: &[&str], if_range: bool, size: u64) -> RangeDecision {
+/// Decide the range after verifying any If-Range condition against the current representation.
+fn decide_range(ranges: &[&str], ignore_range: bool, size: u64) -> RangeDecision {
     use RangeDecision::{Full, Partial, Unsatisfiable};
     let value = match ranges {
         [] => return Full,
-        _ if if_range => return Full,
+        _ if ignore_range => return Full,
         [value] => value.trim(),
         _ => return Unsatisfiable("Several byte ranges are not served; ask for one range."),
     };
@@ -395,11 +525,13 @@ fn content_missing(
     digest: &str,
 ) -> Response {
     let correlation = request.map_or("", erp_rpc::CorrelationId::as_str);
+    let attachment_missing_total = next_total(&MISSING_OBJECTS);
     tracing::error!(
         target: "erp::attachment",
         attachment,
         digest,
         request_id = correlation,
+        attachment_missing_total,
         "AttachmentContentMissing: a readable attachment has no stored bytes"
     );
     response(
@@ -412,8 +544,10 @@ fn lookup_failure(error: erp_fields::Error) -> Response {
     if error.is_superseded() {
         return auth_error(error);
     }
+    let attachment_read_failed_total = next_total(&FAILED_READS);
     tracing::error!(
         target: "erp::attachment",
+        attachment_read_failed_total,
         kind = ?error.kind(),
         reason = %error,
         request_id = erp_orm::trace::current_request_id().as_deref(),
@@ -422,33 +556,80 @@ fn lookup_failure(error: erp_fields::Error) -> Response {
     internal()
 }
 
-/// Total time one download body may take: the default of `limits.stream_deadline_secs`
-/// (67`, repeated:113`),
-/// 600 s. A constant until that setting exists in the server configuration.
-///
-/// The effective bound is lower: `min(STREAM_DEADLINE, max_age + DRAIN - connection age at request
-/// start)`. The connection age limit (`max_age`, default 120 s, `crates/erp-server/src/conn.rs:55`)
-/// starts a graceful shutdown that drops the in-flight response after `DRAIN` (10 s,
-/// `conn.rs:36`, `conn.rs:252-263`). At the defaults a healthy download longer than about 130 s is
-/// cut. Lifting that for content connections is the board task.
-/// It depends on `.CAP` (the per-user
-/// permit cap): an exemption lets a client that stops reading hold a stream permit for up to this
-/// deadline (600 s) instead of about 130 s, because the body timers fire only when hyper polls the body.
-const STREAM_DEADLINE: Duration = Duration::from_secs(600);
+#[derive(Clone, Copy)]
+struct StreamTimes {
+    deadline: Duration,
+    idle: Duration,
+}
 
-/// Longest wait for one store read, measured from the moment that read first has to wait. A
-/// constant until a configurable setting exists.
-/// Time spent while hyper does not poll the body (the client reads slowly) never counts. A client that stops reading is not
-/// measured here (hyper stops polling the body); the connection age limit bounds it (`conn.rs`).
-const STREAM_IDLE: Duration = Duration::from_secs(60);
+/// One entry per user with an admitted download. Dropping a response frees its slot
+/// even when the socket closes before hyper polls the next frame.
+pub(super) struct Downloads {
+    active: Arc<StdMutex<BTreeMap<i64, u64>>>,
+    per_user: u64,
+    times: StreamTimes,
+}
 
-/// The body of a `GET`: exactly `remaining` bytes of the reader, in frames, within
-/// [`STREAM_DEADLINE`] and with at most [`STREAM_IDLE`] between store reads. Content that ends
-/// early, a store read error and an expired timer end the body with an error (the connection is
-/// cut, the stream permit is released) and are logged with the attachment; never a short
-/// successful answer.
+impl Downloads {
+    pub(super) fn new(limits: &crate::startup_limits::StartupLimits) -> Self {
+        Self {
+            active: Arc::default(),
+            per_user: limits.streams_per_user(),
+            times: StreamTimes {
+                deadline: Duration::from_secs(limits.stream_deadline_secs()),
+                idle: Duration::from_secs(limits.stream_idle_secs()),
+            },
+        }
+    }
+
+    fn admit(&self, uid: i64) -> HttpResult<UserStream> {
+        let mut users = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = users.entry(uid).or_default();
+        if *count >= self.per_user {
+            let attachment_limit_exhausted_total = next_total(&EXHAUSTED_LIMITS);
+            tracing::warn!(
+                target: "erp::attachment", limit = "streams_per_user",
+                attachment_limit_exhausted_total,
+                "attachment stream admission refused"
+            );
+            let mut refusal = response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Attachment download limit reached for this user.",
+            );
+            refusal
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            return Err(refusal);
+        }
+        *count += 1;
+        Ok(UserStream {
+            users: Arc::clone(&self.active),
+            uid,
+        })
+    }
+}
+
+struct UserStream {
+    users: Arc<StdMutex<BTreeMap<i64, u64>>>,
+    uid: i64,
+}
+impl Drop for UserStream {
+    fn drop(&mut self) {
+        let mut users = self.users.lock().unwrap_or_else(PoisonError::into_inner);
+        if let std::collections::btree_map::Entry::Occupied(mut user) = users.entry(self.uid) {
+            *user.get_mut() -= 1;
+            if *user.get() == 0 {
+                user.remove();
+            }
+        }
+    }
+}
+
+/// A bounded body, holding admission until completion or cancellation.
 struct ReaderBody {
     reader: ContentReader,
+    _user_stream: Option<UserStream>,
+    idle_duration: Duration,
     remaining: u64,
     buffer: bytes::BytesMut,
     /// Most bytes one frame carries (at most [`BODY_CHUNK`]).
@@ -462,47 +643,62 @@ struct ReaderBody {
 }
 
 impl ReaderBody {
-    fn new(reader: ContentReader, remaining: u64, attachment: i64, digest: String) -> Self {
+    fn new(
+        reader: ContentReader,
+        remaining: u64,
+        attachment: i64,
+        digest: String,
+        times: StreamTimes,
+    ) -> Self {
         let now = tokio::time::Instant::now();
         let chunk = usize::try_from(remaining)
             .unwrap_or(BODY_CHUNK)
             .clamp(1, BODY_CHUNK);
         Self {
             reader,
+            _user_stream: None,
+            idle_duration: times.idle,
             remaining,
             buffer: bytes::BytesMut::with_capacity(chunk),
             chunk,
             attachment,
             digest,
-            deadline: Box::pin(tokio::time::sleep_until(now + STREAM_DEADLINE)),
-            idle: Box::pin(tokio::time::sleep_until(now + STREAM_IDLE)),
+            deadline: Box::pin(tokio::time::sleep_until(now + times.deadline)),
+            idle: Box::pin(tokio::time::sleep_until(now + times.idle)),
             waiting: false,
         }
     }
 
-    fn expired(&self, which: &'static str) -> std::io::Error {
+    fn expired(&mut self, which: &'static str) -> std::io::Error {
+        let attachment_limit_exhausted_total = next_total(&EXHAUSTED_LIMITS);
         tracing::warn!(
             target: "erp::attachment",
             attachment = self.attachment,
             digest = %self.digest,
             remaining = self.remaining,
+            limit = which,
+            attachment_limit_exhausted_total,
             "attachment download ended: {which} expired"
         );
+        self.remaining = 0;
         std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             format!("attachment download {which} expired"),
         )
     }
 
-    fn failed(&self, error: std::io::Error) -> std::io::Error {
+    fn failed(&mut self, error: std::io::Error) -> std::io::Error {
+        let attachment_read_failed_total = next_total(&FAILED_READS);
         tracing::error!(
             target: "erp::attachment",
             attachment = self.attachment,
             digest = %self.digest,
             remaining = self.remaining,
             reason = %error,
+            attachment_read_failed_total,
             "attachment content could not be streamed"
         );
+        self.remaining = 0;
         error
     }
 }
@@ -535,7 +731,7 @@ impl hyper::body::Body for ReaderBody {
                     this.waiting = true;
                     this.idle
                         .as_mut()
-                        .reset(tokio::time::Instant::now() + STREAM_IDLE);
+                        .reset(tokio::time::Instant::now() + this.idle_duration);
                 }
                 if this.idle.as_mut().poll(cx).is_ready() {
                     return Poll::Ready(Some(Err(this.expired("idle timeout"))));
@@ -585,6 +781,7 @@ impl WebApp {
         &self,
         parts: &axum::http::request::Parts,
         rest: &str,
+        client: IpAddr,
         auth: &Arc<Auth>,
     ) -> HttpResult<Response> {
         let head = if parts.method == Method::GET {
@@ -601,45 +798,226 @@ impl WebApp {
                 .insert(header::ALLOW, HeaderValue::from_static("GET, HEAD"));
             return Err(refused);
         };
-        // `/erp/content/<id>/<filename>`, xmlids and model/id/field paths are not served here
-        let id = parse_id(rest).ok_or_else(not_found)?;
-        let query = parse_query(parts.uri.query()).map_err(bad)?;
+        let address = content_address(rest).ok_or_else(not_found)?;
+        let mut query = parse_query(parts.uri.query()).map_err(bad)?;
         let headers = &parts.headers;
-        if headers.contains_key(header::AUTHORIZATION) {
-            return Err(response(
-                StatusCode::UNAUTHORIZED,
-                "Bearer credentials are not accepted on the content route yet; sign in with a browser session.",
-            ));
-        }
         let content = self.attachment_content.as_ref().ok_or_else(|| {
             response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "attachment content composition is unavailable",
             )
         })?;
-        let secret = self
-            .session(headers)?
-            .ok_or_else(|| response(StatusCode::UNAUTHORIZED, "user is not connected"))?;
-        let mut begun = auth
-            .begin_session(&secret, CredentialOptions::new())
-            .await
-            .map_err(auth_error)?;
-        let looked_up = content.lookup(&mut begun.tx, id).await;
-        // the session transaction ends before any byte is read or any range is evaluated
-        let rolled_back = begun.tx.rollback().await;
-        drop(begun);
-        // a lookup failure is logged first, so a failed rollback cannot hide it
-        let looked_up = looked_up.map_err(lookup_failure);
-        rolled_back.map_err(auth_error)?;
+        let token = query.access_token.as_ref().map(|value| value.as_str());
+        let has_bearer = headers.contains_key(header::AUTHORIZATION);
+        if has_bearer && token.is_some() {
+            return Err(bad("Present one content credential."));
+        }
+        if token.is_some() || (!has_bearer && self.session(headers)?.is_none()) {
+            let ContentAddress::Attachment(id) = address else {
+                return Err(not_found());
+            };
+            let (uid, lookup) = content
+                .lookup_shared(auth.orm(), id, token)
+                .await
+                .map_err(lookup_failure)?
+                .ok_or_else(not_found)?;
+            return self
+                .content_response(parts, &query, head, uid, lookup)
+                .await;
+        }
+        query.presign_for_principal = true;
+        let bearer = if headers.contains_key(header::AUTHORIZATION) {
+            Some(self.bearer_credential(headers, client, auth).await?)
+        } else {
+            None
+        };
+        let mut tx = if let Some(key) = &bearer {
+            self.open_document_bearer(key).await?
+        } else {
+            let secret = self
+                .session(headers)?
+                .ok_or_else(|| response(StatusCode::UNAUTHORIZED, "user is not connected"))?;
+            auth.begin_session(&secret, CredentialOptions::new())
+                .await
+                .map_err(auth_error)?
+                .tx
+        };
+        let uid = tx.env().uid();
+        let looked_up = if unrestricted_document_key(tx.env().principal().scope()) {
+            match address {
+                ContentAddress::Attachment(id) => content.lookup(&mut tx, id).await,
+                ContentAddress::Field { model, id, field } => {
+                    content.lookup_field(&mut tx, model, id, field, head).await
+                }
+            }
+        } else {
+            Ok(ContentLookup::NotFound)
+        };
+        let looked_up = match looked_up {
+            Ok(ContentLookup::Url(url)) => {
+                if let Some(id) = redirect_target(&url, self.config.origin()) {
+                    match content.lookup(&mut tx, id).await {
+                        Ok(ContentLookup::Found(_)) => Ok(ContentLookup::Redirect(id)),
+                        Ok(_) => Ok(ContentLookup::NotFound),
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Ok(ContentLookup::NotFound)
+                }
+            }
+            other => other,
+        };
+        let rolled_back = tx.rollback().await;
+        drop(tx);
+        let drop_cookie = bearer
+            .as_ref()
+            .is_some_and(|key| key.drop_cookie.load(Ordering::Relaxed));
+        drop(bearer);
+        let result = async {
+            // a lookup failure is logged first, so a failed rollback cannot hide it
+            let looked_up = looked_up.map_err(lookup_failure);
+            rolled_back.map_err(auth_error)?;
+            let mut result = looked_up?;
+            // Published attachments remain public when a visitor signs in through
+            // the portal. A verified bearer always stays inside its own authority.
+            if !has_bearer
+                && matches!(result, ContentLookup::NotFound)
+                && let ContentAddress::Attachment(id) = address
+                && let Some((_, public)) = content
+                    .lookup_shared(auth.orm(), id, None)
+                    .await
+                    .map_err(lookup_failure)?
+            {
+                result = public;
+            }
+            self.content_response(parts, &query, head, uid, result)
+                .await
+        }
+        .await;
+        if drop_cookie {
+            let mut result = result;
+            let response = match &mut result {
+                Ok(response) | Err(response) => response,
+            };
+            self.set_cookie(response, "session_id", "", 0)?;
+            return result;
+        }
+        result
+    }
+
+    async fn content_response(
+        &self,
+        parts: &axum::http::request::Parts,
+        query: &ContentQuery,
+        head: bool,
+        uid: i64,
+        lookup: ContentLookup,
+    ) -> HttpResult<Response> {
         let request_id = parts.extensions.get::<erp_rpc::CorrelationId>();
-        let found = match looked_up? {
+        let found = match lookup {
             ContentLookup::Found(found) => found,
-            ContentLookup::NotFound => return Err(not_found()),
+            ContentLookup::Redirect(id) => {
+                let mut result = response(StatusCode::TEMPORARY_REDIRECT, "");
+                result.headers_mut().insert(
+                    header::LOCATION,
+                    header_value(&redirect_location(id, query))?,
+                );
+                return Ok(result);
+            }
+            ContentLookup::Url(_) | ContentLookup::NotFound => return Err(not_found()),
+            ContentLookup::TooLarge => {
+                let attachment_limit_exhausted_total = next_total(&EXHAUSTED_LIMITS);
+                tracing::warn!(
+                    target: "erp::attachment", limit = "field_bytes",
+                    attachment_limit_exhausted_total,
+                    "inline field exceeds download limit"
+                );
+                return Err(response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "This field exceeds the inline download limit.",
+                ));
+            }
             ContentLookup::Missing { attachment, digest } => {
                 return Err(content_missing(request_id, attachment, &digest));
             }
         };
-        answer_found(found, &parts.headers, &query, head, request_id).await
+        answer_found(
+            found,
+            &parts.headers,
+            query,
+            head,
+            request_id,
+            &self.downloads,
+            uid,
+        )
+        .await
+    }
+}
+
+/// Compare complete quoted entity tags. A comma inside a tag belongs to the opaque value.
+fn entity_matches(fields: &[&str], tag: Option<&str>, weak: bool) -> bool {
+    if let [field] = fields
+        && field.trim() == "*"
+    {
+        return true;
+    }
+    let Some(tag) = tag else { return false };
+    fields.iter().any(|field| {
+        let mut rest = field.trim();
+        while !rest.is_empty() {
+            rest = rest.trim_start_matches([',', ' ', '\t']);
+            let strong = !rest.starts_with("W/");
+            let quoted = rest.strip_prefix("W/").unwrap_or(rest);
+            let Some(opaque) = quoted.strip_prefix('"') else {
+                break;
+            };
+            let Some(end) = opaque.find('"') else { break };
+            let (item, tail) = quoted.split_at(end + 2);
+            rest = tail.trim_start();
+            if !rest.is_empty() && !rest.starts_with(',') {
+                break;
+            }
+            if (strong || weak) && item == tag {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+fn content_open_failure(
+    error: ContentOpenFailure,
+    request_id: Option<&erp_rpc::CorrelationId>,
+    attachment: i64,
+    digest: &str,
+) -> Response {
+    match error {
+        ContentOpenFailure::Busy => {
+            let attachment_limit_exhausted_total = next_total(&EXHAUSTED_LIMITS);
+            tracing::warn!(
+                target: "erp::attachment", limit = "node_streams",
+                attachment_limit_exhausted_total,
+                "attachment stream admission refused"
+            );
+            let mut refused = response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Every attachment download slot of this node is in use; retry shortly.",
+            );
+            refused
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            refused
+        }
+        ContentOpenFailure::Missing => content_missing(request_id, attachment, digest),
+        ContentOpenFailure::Failed(error) => {
+            let attachment_read_failed_total = next_total(&FAILED_READS);
+            tracing::error!(
+                target: "erp::attachment", attachment, digest, reason = %error,
+                request_id = request_id.map(erp_rpc::CorrelationId::as_str),
+                attachment_read_failed_total, "attachment content could not be opened"
+            );
+            internal()
+        }
     }
 }
 
@@ -652,9 +1030,33 @@ async fn answer_found(
     query: &ContentQuery,
     head: bool,
     request_id: Option<&erp_rpc::CorrelationId>,
+    downloads: &Downloads,
+    uid: i64,
 ) -> HttpResult<Response> {
+    let etag = found
+        .sha256
+        .map(|sha| format!("\"{}\"", crate::assets::hex(&sha)));
+    // Preconditions apply only after authorization, before opening a stream or evaluating ranges.
+    for (name, weak, status) in [
+        ("if-match", false, StatusCode::PRECONDITION_FAILED),
+        ("if-none-match", true, StatusCode::NOT_MODIFIED),
+    ] {
+        let fields = values(headers, name)?;
+        if !fields.is_empty() && entity_matches(&fields, etag.as_deref(), weak) == weak {
+            let mut result = Response::new(Body::empty());
+            *result.status_mut() = status;
+            if let Some(tag) = &etag {
+                result
+                    .headers_mut()
+                    .insert(header::ETAG, header_value(tag)?);
+            }
+            return Ok(result);
+        }
+    }
     let ranges = values(headers, "range")?;
-    let decision = decide_range(&ranges, headers.contains_key(header::IF_RANGE), found.size);
+    let ignore_range = one(headers, "if-range")?
+        .is_some_and(|condition| Some(condition.trim()) != etag.as_deref());
+    let decision = decide_range(&ranges, ignore_range, found.size);
     let range = match decision {
         RangeDecision::Full => None,
         RangeDecision::Partial(range) => Some(range),
@@ -674,41 +1076,92 @@ async fn answer_found(
         size,
         digest,
         opener,
+        ..
     } = found;
+    let media_type = served_type(&mimetype, query.octet_stream);
+    let content_disposition = disposition(inline_allowed(&mimetype, query), &name);
     let length = range.map_or(size, |range| range.len());
     let body = if head {
         // HEAD answers from the found row: no stream permit, no store access
         drop(opener);
         Body::empty()
     } else {
-        let reader = match opener.open(range).await {
-            Ok(reader) => reader,
-            Err(ContentOpenFailure::Busy) => {
-                let mut refused = response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Every attachment download slot of this node is in use; retry shortly.",
+        let user_stream = downloads.admit(uid)?;
+        let on_failure = |error| content_open_failure(error, request_id, attachment, &digest);
+        // Keep representation-specific conditions and range framing in this route. An internal
+        // redirect or S3 reply can use a different object identifier for its own validators.
+        let full = [
+            "range",
+            "if-range",
+            "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "if-unmodified-since",
+        ]
+        .into_iter()
+        .all(|name| !headers.contains_key(name));
+        if full {
+            let forced = disposition(false, &name);
+            let request = ContentHandoffRequest {
+                media_type: &media_type,
+                attachment_disposition: &forced,
+                allow_presign: query.presign_for_principal,
+            };
+            let handoff = tokio::time::timeout(downloads.times.deadline, opener.handoff(request))
+                .await
+                .map_err(|_| {
+                    on_failure(ContentOpenFailure::Failed(erp_fields::Error::internal(
+                        "attachment handoff deadline expired",
+                    )))
+                })?
+                .map_err(on_failure)?;
+            if let Some(handoff) = handoff {
+                let mut answer = Response::new(Body::empty());
+                let (disposition, location, target) = match handoff {
+                    ContentHandoff::InternalProxy(target)
+                        if target.starts_with('/') && !target.starts_with("//") =>
+                    {
+                        answer
+                            .headers_mut()
+                            .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+                        (&content_disposition, "x-accel-redirect", target)
+                    }
+                    ContentHandoff::Presigned(target) if query.presign_for_principal => {
+                        *answer.status_mut() = StatusCode::FOUND;
+                        (&forced, "location", target)
+                    }
+                    ContentHandoff::InternalProxy(_) | ContentHandoff::Presigned(_) => {
+                        return Err(internal());
+                    }
+                };
+                let headers = answer.headers_mut();
+                let mut target = header_value(&target)?;
+                target.set_sensitive(true);
+                headers.insert(location, target);
+                headers.insert(header::CONTENT_TYPE, header_value(&media_type)?);
+                headers.insert(header::CONTENT_DISPOSITION, header_value(disposition)?);
+                headers.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, no-store"),
                 );
-                refused
-                    .headers_mut()
-                    .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
-                return Err(refused);
-            }
-            Err(ContentOpenFailure::Missing) => {
-                return Err(content_missing(request_id, attachment, &digest));
-            }
-            Err(ContentOpenFailure::Failed(error)) => {
-                tracing::error!(
-                    target: "erp::attachment",
-                    attachment,
-                    digest,
-                    reason = %error,
-                    request_id = request_id.map(erp_rpc::CorrelationId::as_str),
-                    "attachment content could not be opened"
+                headers.insert(
+                    "x-content-type-options",
+                    HeaderValue::from_static("nosniff"),
                 );
-                return Err(internal());
+                headers.insert(
+                    header::REFERRER_POLICY,
+                    HeaderValue::from_static("no-referrer"),
+                );
+                if let Some(tag) = &etag {
+                    headers.insert(header::ETAG, header_value(tag)?);
+                }
+                return Ok(answer);
             }
-        };
-        Body::new(ReaderBody::new(reader, length, attachment, digest))
+        }
+        let reader = opener.open(range).await.map_err(on_failure)?;
+        let mut body = ReaderBody::new(reader, length, attachment, digest, downloads.times);
+        body._user_stream = Some(user_stream);
+        Body::new(body)
     };
     let mut result = Response::new(body);
     *result.status_mut() = if range.is_some() {
@@ -717,15 +1170,15 @@ async fn answer_found(
         StatusCode::OK
     };
     let headers = result.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        header_value(&served_type(&mimetype, query.octet_stream))?,
-    );
+    headers.insert(header::CONTENT_TYPE, header_value(&media_type)?);
     headers.insert(header::CONTENT_LENGTH, header_value(&length.to_string())?);
     headers.insert(
         header::CONTENT_DISPOSITION,
-        header_value(&disposition(inline_allowed(&mimetype, query), &name))?,
+        header_value(&content_disposition)?,
     );
+    if let Some(tag) = &etag {
+        headers.insert(header::ETAG, header_value(tag)?);
+    }
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     if let Some(range) = range {
         headers.insert(
@@ -745,6 +1198,18 @@ async fn answer_found(
 )]
 mod tests {
     use super::*;
+
+    const TIMES: StreamTimes = StreamTimes {
+        deadline: Duration::from_secs(17),
+        idle: Duration::from_secs(3),
+    };
+    fn test_downloads() -> Downloads {
+        Downloads {
+            active: Arc::default(),
+            per_user: 1,
+            times: TIMES,
+        }
+    }
 
     fn partial(start: u64, len: u64) -> RangeDecision {
         RangeDecision::Partial(ContentRange { start, len })
@@ -790,7 +1255,7 @@ mod tests {
             decide_range(&[long.as_str()], false, 10),
             RangeDecision::Unsatisfiable("The Range header is too long.")
         );
-        // no validator exists yet: If-Range always means the full content
+        // A failed If-Range condition selects the whole representation.
         assert_eq!(decide_range(&["bytes=0-3"], true, 10), RangeDecision::Full);
         assert_eq!(
             decide_range(&["bytes=0-1,4-5"], true, 10),
@@ -822,12 +1287,12 @@ mod tests {
         }
         let download = ContentQuery {
             download: true,
-            octet_stream: false,
+            ..ContentQuery::default()
         };
         assert!(!inline_allowed("image/png", &download));
         let octet = ContentQuery {
-            download: false,
             octet_stream: true,
+            ..ContentQuery::default()
         };
         assert!(!inline_allowed("image/png", &octet));
         for active in [
@@ -861,21 +1326,21 @@ mod tests {
     }
 
     #[test]
-    fn the_query_accepts_download_and_octet_stream_only() {
+    fn the_query_admits_download_mimetype_and_one_scoped_credential() {
         assert_eq!(parse_query(None), Ok(ContentQuery::default()));
         assert_eq!(parse_query(Some("")), Ok(ContentQuery::default()));
         assert_eq!(
             parse_query(Some("download=true")),
             Ok(ContentQuery {
                 download: true,
-                octet_stream: false
+                ..ContentQuery::default()
             })
         );
         assert_eq!(
             parse_query(Some("download=false&mimetype=application%2Foctet-stream")),
             Ok(ContentQuery {
-                download: false,
-                octet_stream: true
+                octet_stream: true,
+                ..ContentQuery::default()
             })
         );
         assert_eq!(
@@ -887,10 +1352,17 @@ mod tests {
             Err("The download parameter must be true or false.")
         );
         let unknown = Err(
-            "The content route accepts only the query parameters download and mimetype, each at most once.",
+            "The content route accepts download, mimetype and access_token, each at most once.",
         );
         assert_eq!(parse_query(Some("cids=1")), unknown);
-        assert_eq!(parse_query(Some("access_token=x")), unknown);
+        assert_eq!(
+            parse_query(Some("access_token=x"))
+                .unwrap()
+                .access_token
+                .as_deref()
+                .map(String::as_str),
+            Some("x")
+        );
         assert_eq!(parse_query(Some("download=true&download=false")), unknown);
         assert_eq!(parse_id("42"), Some(42));
         for bad in [
@@ -981,21 +1453,27 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_stalled_store_read_ends_the_body_at_the_idle_timeout() {
         let started = tokio::time::Instant::now();
-        let mut body = ReaderBody::new(Box::pin(Stalled), 10, 7, "digest".to_owned());
+        let mut body = ReaderBody::new(Box::pin(Stalled), 10, 7, "digest".to_owned(), TIMES);
         let error = next_frame(&mut body).await.unwrap().unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert_eq!(
             error.to_string(),
             "attachment download idle timeout expired"
         );
-        assert_eq!(started.elapsed(), STREAM_IDLE);
+        assert_eq!(started.elapsed(), TIMES.idle);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_slow_download_ends_at_the_total_deadline() {
         let started = tokio::time::Instant::now();
-        let period = STREAM_IDLE / 2;
-        let mut body = ReaderBody::new(Box::pin(Drip::new(period)), 1_000_000, 7, "d".to_owned());
+        let period = TIMES.idle / 2;
+        let mut body = ReaderBody::new(
+            Box::pin(Drip::new(period)),
+            1_000_000,
+            7,
+            "d".to_owned(),
+            TIMES,
+        );
         let mut bytes = 0_u64;
         let error = loop {
             match next_frame(&mut body).await.unwrap() {
@@ -1011,7 +1489,7 @@ mod tests {
         assert!(bytes > 0, "the idle timer was reset by each read");
         let elapsed = started.elapsed();
         assert!(
-            elapsed >= STREAM_DEADLINE && elapsed < STREAM_DEADLINE + period + period,
+            elapsed >= TIMES.deadline && elapsed < TIMES.deadline + period + period,
             "{elapsed:?}"
         );
     }
@@ -1040,12 +1518,18 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn time_between_polls_does_not_count_as_store_idle() {
-        let mut body = ReaderBody::new(Box::pin(WaitOnce { waited: false }), 1, 7, "d".to_owned());
+        let mut body = ReaderBody::new(
+            Box::pin(WaitOnce { waited: false }),
+            1,
+            7,
+            "d".to_owned(),
+            TIMES,
+        );
         // one byte per frame: the buffer is sized to the content, so shrink the window per frame
         body.remaining = 3;
         for _ in 0..3 {
             // hyper does not poll the body for longer than the idle timeout (backpressure)
-            tokio::time::advance(STREAM_IDLE + STREAM_IDLE / 2).await;
+            tokio::time::advance(TIMES.idle + TIMES.idle / 2).await;
             let frame = next_frame(&mut body).await.unwrap().unwrap();
             assert_eq!(frame.into_data().unwrap().as_ref(), b"y");
         }
@@ -1055,7 +1539,7 @@ mod tests {
     #[tokio::test]
     async fn content_shorter_than_its_size_ends_the_body_with_an_error() {
         let reader: ContentReader = Box::pin(std::io::Cursor::new(b"abc".to_vec()));
-        let mut body = ReaderBody::new(reader, 10, 7, "digest".to_owned());
+        let mut body = ReaderBody::new(reader, 10, 7, "digest".to_owned(), TIMES);
         let first = next_frame(&mut body).await.unwrap().unwrap();
         assert_eq!(first.into_data().unwrap().as_ref(), b"abc");
         let error = next_frame(&mut body).await.unwrap().unwrap_err();
@@ -1066,7 +1550,7 @@ mod tests {
         );
         // exact content ends cleanly
         let reader: ContentReader = Box::pin(std::io::Cursor::new(b"abc".to_vec()));
-        let mut body = ReaderBody::new(reader, 3, 7, "digest".to_owned());
+        let mut body = ReaderBody::new(reader, 3, 7, "digest".to_owned(), TIMES);
         assert!(next_frame(&mut body).await.unwrap().is_ok());
         assert!(next_frame(&mut body).await.is_none());
     }
@@ -1078,7 +1562,7 @@ mod tests {
         let content: Vec<u8> = (0..BODY_CHUNK * 3).map(|i| (i % 251) as u8).collect();
         let announced = BODY_CHUNK + 4;
         let reader: ContentReader = Box::pin(std::io::Cursor::new(content.clone()));
-        let mut body = ReaderBody::new(reader, announced as u64, 7, "digest".to_owned());
+        let mut body = ReaderBody::new(reader, announced as u64, 7, "digest".to_owned(), TIMES);
         let mut sent = Vec::new();
         while let Some(frame) = next_frame(&mut body).await {
             sent.extend_from_slice(&frame.unwrap().into_data().unwrap());
@@ -1118,14 +1602,95 @@ mod tests {
         )
     }
 
+    struct Remote;
+
+    impl ContentOpener for Remote {
+        fn handoff<'a>(
+            &'a self,
+            request: ContentHandoffRequest<'a>,
+        ) -> erp_orm::BoxFuture<'a, Result<Option<ContentHandoff>, ContentOpenFailure>> {
+            Box::pin(async move {
+                assert_eq!(request.media_type, "image/png");
+                assert!(request.attachment_disposition.starts_with("attachment;"));
+                Ok(request.allow_presign.then(|| {
+                    ContentHandoff::Presigned(
+                        "https://store.example.invalid/file?signature=test-marker".into(),
+                    )
+                }))
+            })
+        }
+
+        fn open(
+            self: Box<Self>,
+            _: Option<ContentRange>,
+        ) -> erp_orm::BoxFuture<'static, Result<ContentReader, ContentOpenFailure>> {
+            Box::pin(async { Ok(Box::pin(std::io::Cursor::new(vec![0_u8])) as ContentReader) })
+        }
+    }
+
+    #[tokio::test]
+    async fn presigned_handoff_is_sensitive_attachment_and_requires_a_principal() {
+        let found = || {
+            FoundContent::new(
+                1,
+                "note.png".to_owned(),
+                "image/png".to_owned(),
+                1,
+                "digest".to_owned(),
+                Box::new(Remote),
+            )
+        };
+        let downloads = test_downloads();
+        let query = ContentQuery {
+            presign_for_principal: true,
+            ..ContentQuery::default()
+        };
+        let headers = HeaderMap::new();
+        let signed = answer_found(found(), &headers, &query, false, None, &downloads, 1)
+            .await
+            .unwrap();
+        assert_eq!(signed.status(), StatusCode::FOUND);
+        assert!(signed.headers()[header::LOCATION].is_sensitive());
+        assert_eq!(signed.headers()[header::CACHE_CONTROL], "private, no-store");
+        assert_eq!(signed.headers()[header::CONTENT_TYPE], "image/png");
+        assert!(
+            signed.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .starts_with("attachment;")
+        );
+
+        let shared = answer_found(
+            found(),
+            &headers,
+            &ContentQuery::default(),
+            false,
+            None,
+            &downloads,
+            1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(shared.status(), StatusCode::OK);
+        assert!(!shared.headers().contains_key(header::LOCATION));
+        let mut ranged = HeaderMap::new();
+        ranged.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
+        let partial = answer_found(found(), &ranged, &query, false, None, &downloads, 2)
+            .await
+            .unwrap();
+        assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+        assert!(!partial.headers().contains_key(header::LOCATION));
+    }
+
     #[tokio::test]
     async fn head_never_calls_the_opener_and_get_does() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let query = ContentQuery::default();
+        let downloads = test_downloads();
         let mut ranged = HeaderMap::new();
         ranged.insert("range", HeaderValue::from_static("bytes=2-5"));
         for headers in [HeaderMap::new(), ranged.clone()] {
-            let head = answer_found(counted(&calls), &headers, &query, true, None)
+            let head = answer_found(counted(&calls), &headers, &query, true, None, &downloads, 4)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1133,9 +1698,17 @@ mod tests {
                 0,
                 "HEAD took a stream permit or opened the store"
             );
-            let get = answer_found(counted(&calls), &headers, &query, false, None)
-                .await
-                .unwrap();
+            let get = answer_found(
+                counted(&calls),
+                &headers,
+                &query,
+                false,
+                None,
+                &downloads,
+                4,
+            )
+            .await
+            .unwrap();
             assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
             calls.store(0, std::sync::atomic::Ordering::SeqCst);
             assert_eq!(head.status(), get.status());
@@ -1143,12 +1716,76 @@ mod tests {
             use hyper::body::Body as _;
             assert!(head.body().is_end_stream(), "HEAD has no body");
         }
-        let partial = answer_found(counted(&calls), &ranged, &query, true, None)
+        let partial = answer_found(counted(&calls), &ranged, &query, true, None, &downloads, 4)
             .await
             .unwrap();
         assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(partial.headers()[header::CONTENT_LENGTH], "4");
         assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 2-5/10");
+    }
+
+    #[tokio::test]
+    async fn user_slots_are_independent_and_cancelled_bodies_release_them() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let downloads = test_downloads();
+        let query = ContentQuery::default();
+        let headers = HeaderMap::new();
+        let get = |uid| {
+            answer_found(
+                counted(&calls),
+                &headers,
+                &query,
+                false,
+                None,
+                &downloads,
+                uid,
+            )
+        };
+        let held = get(1).await.unwrap();
+        let full = get(1).await.unwrap_err();
+        assert_eq!(full.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(full.headers()[header::RETRY_AFTER], "1");
+        let other = get(2).await.unwrap();
+        assert_eq!(other.status(), StatusCode::OK);
+        drop(held);
+        assert_eq!(get(1).await.unwrap().status(), StatusCode::OK);
+        drop(other);
+        assert!(downloads.active.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn redirects_are_one_canonical_id_on_the_configured_origin() {
+        let origin = "https://erp.example";
+        assert_eq!(
+            redirect_target("https://erp.example/erp/content/8", origin),
+            Some(8)
+        );
+        for url in [
+            "https://erp.example.evil/erp/content/8",
+            "https://erp.example@evil/erp/content/8",
+            "https://erp.example/erp/content/8?access_token=other",
+            "//erp.example/erp/content/8",
+            "https://erp.example/erp/content/%2f8",
+        ] {
+            assert_eq!(redirect_target(url, origin), None);
+        }
+    }
+
+    #[test]
+    fn metric_events_publish_a_monotonic_process_total() {
+        let counter = AtomicU64::new(0);
+        assert_eq!(next_total(&counter), 1);
+        assert_eq!(next_total(&counter), 2);
+    }
+
+    #[test]
+    fn entity_tag_lists_compare_whole_tags_with_method_appropriate_strength() {
+        let current = Some("\"new\"");
+        assert!(entity_matches(&["\"part,one\", W/\"new\""], current, true));
+        assert!(!entity_matches(&["W/\"new\""], current, false));
+        assert!(entity_matches(&["\"old\"", "\"new\""], current, false));
+        assert!(!entity_matches(&["\"odd,new,tag\""], current, true));
+        assert!(entity_matches(&["*"], None, false));
     }
 
     #[test]

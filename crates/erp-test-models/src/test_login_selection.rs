@@ -169,6 +169,44 @@ pub mod credential_override {
     #[methods(ResUsers, addon = "test_login_selection_override")]
     impl CredentialOverrideUsers {
         #[method(override)]
+        async fn _get_session_token_fields(
+            this: &RecordSet<ResUsers>,
+            tx: &mut Transaction,
+            sup: Super,
+        ) -> Result<erp_sdk::auth::SessionTokenFields> {
+            let plan: erp_sdk::auth::SessionTokenFields =
+                sup.call(tx, this.as_records(), ()).await?;
+            plan.with_field("group_ids")
+        }
+
+        #[method(override)]
+        async fn _after_session_login(
+            this: &RecordSet<ResUsers>,
+            tx: &mut Transaction,
+            login: erp_sdk::auth::SessionLogin,
+            sup: Super,
+        ) -> Result<erp_sdk::auth::SessionLogin> {
+            if this.env().su() || tx.env().su() || tx.env().user_id() != login.uid() {
+                return Err(Error::programming("session hook must run as its user"));
+            }
+            let mut login: erp_sdk::auth::SessionLogin =
+                sup.call(tx, this.as_records(), (login,)).await?;
+            let canonical = login.login().to_owned();
+            login.set("fixture.canonical_login", canonical.clone().into())?;
+            if canonical == "changed-during-hook" {
+                tx.execute(
+                    "UPDATE res_users SET active=false WHERE id=$1",
+                    &[&login.uid().get()],
+                )
+                .await?;
+            }
+            if canonical == "reject-hook" {
+                return Err(Error::validation("fixture rejected this login"));
+            }
+            Ok(login)
+        }
+
+        #[method(override)]
         async fn _check_credentials(
             this: &RecordSet<ResUsers>,
             tx: &mut Transaction,
@@ -176,7 +214,16 @@ pub mod credential_override {
             env: CheckEnv,
             sup: Super,
         ) -> Result<AuthInfo> {
-            sup.call(tx, this.as_records(), (credential, env)).await
+            let require_factor = matches!(credential.as_ref(), Credential::Password { login, .. } if login == "second-factor");
+            let checked: AuthInfo = sup.call(tx, this.as_records(), (credential, env)).await?;
+            if require_factor {
+                return Ok(AuthInfo::new(
+                    checked.uid(),
+                    checked.method().clone(),
+                    erp_sdk::auth::Mfa::Enforce,
+                ));
+            }
+            Ok(checked)
         }
     }
 }

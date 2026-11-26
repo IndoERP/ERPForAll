@@ -90,6 +90,8 @@ sha2.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+base64.workspace = true
+hmac.workspace = true
 tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
 # Evaluate admitted stored-action expressions in the native AI configuration acceptance test.
 erp-expr.workspace = true

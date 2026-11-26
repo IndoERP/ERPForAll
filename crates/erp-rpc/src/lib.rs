@@ -58,8 +58,9 @@ pub use idempotency::{CorrelationId, IDEMPOTENCY_DDL, IdempotencyKey, MAINTENANC
 pub use pending::PendingMethods;
 pub use route::{MAX_NAME_LEN, Route, RouteKind};
 pub use service::{
-    Caller, Gate, GateCall, IN_PROGRESS_RETRY_AFTER, MAX_ATTEMPTS, OrmSource, RETRY_BASE,
-    RETRY_CAP, RPC_DEBUG_ERRORS, RpcCall, RpcCredential, RpcHost, RpcResponse, RpcService,
+    AttemptAdmission, AttemptGate, AttemptGateCall, Caller, Gate, GateCall,
+    IN_PROGRESS_RETRY_AFTER, MAX_ATTEMPTS, OrmSource, RETRY_BASE, RETRY_CAP, RPC_DEBUG_ERRORS,
+    RpcCall, RpcCredential, RpcHost, RpcResponse, RpcService,
 };
 
 /// The result writer for the allocation-budget test (`tests/alloc_json_rows.rs`).

@@ -101,6 +101,15 @@ pub trait AttachmentStore: Send + Sync + 'static {
     /// What the store can do.
     fn capabilities(&self) -> Capabilities;
 
+    /// Optionally hand an authorized, full download to the configured proxy or object store.
+    /// A configured handoff fails closed when the object or the backend is unavailable.
+    fn download_handoff<'a>(
+        &'a self,
+        _request: crate::DownloadRequest<'a>,
+    ) -> BoxFuture<'a, Result<Option<crate::DownloadHandoff>, BlobError>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// A fingerprint that identifies this store's backing directory or bucket, written in the
     /// database's store row and checked before use, or `None` when the kind has none.
     fn fingerprint(&self) -> Option<String>;

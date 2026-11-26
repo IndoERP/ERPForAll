@@ -886,6 +886,18 @@ mod tests {
         assert_eq!(shown.kind, BoundaryErrorKind::ValidationFailed);
         assert_eq!(shown.message, "qty must be positive");
     }
+
+    #[test]
+    fn protected_record_refusal_is_a_guest_validation_error() {
+        let message = "An addon protects this record from deletion or external ID changes.";
+        let refusal = Error::validation(message).with_sqlstate(Some("23001".to_owned()));
+        let boundary = boundary_of(&refusal);
+        assert_eq!(boundary.kind, BoundaryErrorKind::ValidationFailed);
+        assert_eq!(boundary.message, message);
+        let returned = error_of(&boundary);
+        assert_eq!(returned.kind(), ErrorKind::Validation);
+        assert_eq!(returned.message(), message);
+    }
 }
 
 #[cfg(test)]

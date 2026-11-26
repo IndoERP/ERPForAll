@@ -455,6 +455,7 @@ pub mod load_state {
         DECLARING_MODULE, INSTALL_FILENAME, INSTALL_MODE, INSTALL_MODULE, LOADED_NAMES,
         PENDING_MODULES, TRACK_BATCH,
     };
+    pub use erp_data::protection_declarations_loaded;
 }
 
 /// A fully qualified external id (`module.name`), as `*_view_ref` context values and group
@@ -486,11 +487,11 @@ pub mod auth {
         ACCESS_DENIED, AuthInfo, AuthMethod, CheckEnv, Credential, EndReason, EndedSession,
         HashParams, HashPool, LoginCooldownContext, LoginCooldownPolicy, LoginDomain, LoginLookup,
         LoginOrder, LoginOrderTerm, LoginSelectionContext, LoginSelectionLimits, Mfa,
-        OrderDirection, SelectionWitness, SessionEnd, SessionEndFn, SessionId, SessionTokenFields,
-        StoredHash, StoredPassword, UserContext, Zeroizing, access_denied, check_password,
-        core_tables, end_sessions, end_user_sessions, hash_all_with_params, hash_password,
-        hash_with_params, load_hash_params, log_plaintext_replaced, user_context, validate_setting,
-        validate_setting_in,
+        OrderDirection, SelectionWitness, SessionEnd, SessionEndFn, SessionId, SessionLogin,
+        SessionTokenFields, StoredHash, StoredPassword, UserContext, Zeroizing, access_denied,
+        check_password, core_tables, end_sessions, end_user_sessions, hash_all_with_params,
+        hash_password, hash_with_params, load_hash_params, log_plaintext_replaced, user_context,
+        validate_login_plan, validate_setting, validate_setting_in,
     };
     pub use erp_security::session_end_hook;
 }

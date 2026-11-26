@@ -18,6 +18,78 @@ use multiuser_fixture::{Subject, error, run, success};
 use serde_json::json;
 
 #[test]
+fn shared_partner_sync_updates_visible_contacts_and_leaves_the_other_company_alone() {
+    run(|f| {
+        let a = f.user(Subject::A).company;
+        let b = f.user(Subject::B).company;
+        let country = f.xmlid("base", "us");
+        let state = create(
+            f,
+            "res.country.state",
+            json!({"name":"Boundary State","code":"ERPF","country_id":country}),
+        );
+        let states = success(&f.rpc(
+            Subject::A,
+            "res.country.state",
+            "search_read",
+            json!({
+                "domain":[["country_id","=",country],["code","=","ERPF"]],"fields":["id","name"]
+            }),
+        ));
+        assert_eq!(states[0]["id"], state);
+        assert_eq!(states[0]["name"], "Boundary State");
+
+        let root = create(
+            f,
+            "res.partner",
+            json!({"name":"Shared commercial root",
+            "company_id":null,"city":"Before","vat":"BEFORE","country_id":country}),
+        );
+        let visible = create(
+            f,
+            "res.partner",
+            json!({"name":"Visible contact","parent_id":root,"company_id":a}),
+        );
+        let hidden = create(
+            f,
+            "res.partner",
+            json!({"name":"Hidden contact","parent_id":root,"company_id":b}),
+        );
+        write(
+            f,
+            "ir.access",
+            &[f.xmlid("base", "access_partner_internal")],
+            json!({"operation":"ru"}),
+        );
+        success(&f.rpc(
+            Subject::A,
+            "res.partner",
+            "write",
+            json!({"ids":[root],
+            "vals":{"city":"After","vat":"AFTER","state_id":state}}),
+        ));
+
+        let read = |subject, id| {
+            success(&f.rpc(
+                subject,
+                "res.partner",
+                "read",
+                json!({"ids":[id],"fields":["city","vat","country_id","state_id"]}),
+            ))[0]
+                .clone()
+        };
+        let changed = read(Subject::A, visible);
+        assert_eq!(changed["city"], "After");
+        assert_eq!(changed["vat"], "AFTER");
+        assert_eq!(relation_id(&changed["country_id"]), country);
+        assert_eq!(relation_id(&changed["state_id"]), state);
+        let unchanged = read(Subject::B, hidden);
+        assert_eq!(unchanged["city"], "Before");
+        assert_eq!(unchanged["vat"], "BEFORE");
+    });
+}
+
+#[test]
 fn company_context_uses_live_membership_and_empty_means_defaults() {
     run(|f| {
         let s = Categories::seed(f);

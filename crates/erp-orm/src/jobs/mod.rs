@@ -29,6 +29,7 @@ pub(crate) mod schema;
 mod settings;
 mod settings_source;
 mod transition;
+mod trigger;
 mod wake;
 
 pub use admin::{CancelOutcome, MAX_CANCEL_KEYS, RecurringSpec};

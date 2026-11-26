@@ -7,6 +7,7 @@ use crate::{
 };
 use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     fmt,
     fs::{File, OpenOptions},
     io::Read,
@@ -22,6 +23,10 @@ use zeroize::Zeroizing;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
+    #[error("audit_retention_days must be an integer from 1 to 3650")]
+    AuditRetentionDays,
+    #[error("outbox_retention_days must be an integer from 1 to 36500")]
+    OutboxRetentionDays,
     /// Configuration or secret file cannot be read securely.
     #[error("server configuration or protected secret file is invalid")]
     Invalid,
@@ -58,6 +63,9 @@ pub enum ConfigError {
     /// `field_key_file` is not a key file; the message names the line, never its content.
     #[error("{0}")]
     FieldKeys(#[source] erp_fields::Error),
+    /// Callback names, targets and secret files are validated together at startup.
+    #[error("invalid [callbacks] configuration or protected callback secret file")]
+    Callbacks,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +98,9 @@ struct RawConfig {
     /// Run the job queue's runner in this process (4); absent means off.
     jobs_run_in_app: Option<bool>,
     attachment_maintenance_run_in_app: Option<bool>,
+    outbox_retention_days: Option<u32>,
+    audit_retention_days: Option<u16>,
+    audit_witness_file: Option<PathBuf>,
     audit_read_policy: Option<toml::Value>,
     /// The attachment store table. Its keys are validated by `erp-blob`, which
     /// reads this same file; here it is only allowed to exist.
@@ -100,6 +111,17 @@ struct RawConfig {
     report: Option<toml::Value>,
     /// Optional AI configuration; admitted by the addon at the CLI composition root.
     ai: Option<toml::Value>,
+    #[serde(default)]
+    callbacks: BTreeMap<String, crate::web::callback::RawCallback>,
+    external_identity: Option<ExternalIdentityFiles>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalIdentityFiles {
+    client_secret_file: PathBuf,
+    signing_keys_file: PathBuf,
+    provider: erp_security::auth::external::ExternalProviderConfig,
 }
 /// The `[report]` table: the font store and the render pool's settings, each `name = integer`.
 #[derive(Debug, Clone, Default)]
@@ -211,11 +233,16 @@ pub struct ServerConfig {
     connections: ConnectionLimits,
     jobs_run_in_app: bool,
     attachment_maintenance_run_in_app: bool,
+    outbox_retention_days: Option<u32>,
+    audit_retention_days: Option<u16>,
+    audit_witness_file: Option<PathBuf>,
     audit_read_policy: erp_rpc::ReadAuditPolicy,
     attachments: String,
     report: ReportConfig,
     ai: Option<toml::Value>,
+    callbacks: crate::web::callback::Callbacks,
     field_keys: Option<erp_orm::field_encryption::FieldKeys>,
+    external_identity: Option<erp_security::auth::external::ExternalProvider>,
 }
 impl fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -354,6 +381,18 @@ impl ServerConfig {
             "sql_object_maintenance_role",
             &used,
         )?;
+        if raw
+            .outbox_retention_days
+            .is_some_and(|days| !(1..=36500).contains(&days))
+        {
+            return Err(ConfigError::OutboxRetentionDays);
+        }
+        if raw
+            .audit_retention_days
+            .is_some_and(|days| !(1..=3650).contains(&days))
+        {
+            return Err(ConfigError::AuditRetentionDays);
+        }
         // Absent values receive documented defaults; supplied invalid values never do.
         let node_name = match raw.node_name {
             Some(name) => name,
@@ -437,6 +476,25 @@ impl ServerConfig {
                 .unwrap_or(defaults.max_age().as_secs()),
         )
         .map_err(|_| ConfigError::Invalid)?;
+        let external_identity = raw
+            .external_identity
+            .map(|files| {
+                let mut signing_keys = Vec::new();
+                File::open(resolve(&files.signing_keys_file))
+                    .map_err(|_| ConfigError::Invalid)?
+                    .take(65_537)
+                    .read_to_end(&mut signing_keys)
+                    .map_err(|_| ConfigError::Invalid)?;
+                let secret = read_secret(&resolve(&files.client_secret_file))?;
+                erp_security::auth::external::ExternalProvider::new(
+                    files.provider,
+                    secret,
+                    &signing_keys,
+                )
+                .map_err(|_| ConfigError::Invalid)
+            })
+            .transpose()?;
+        let callbacks = crate::web::callback::Callbacks::load(raw.callbacks, resolve)?;
         Ok(Self {
             database: raw.database,
             sql_object_definer_role: definer,
@@ -459,11 +517,16 @@ impl ServerConfig {
             attachment_maintenance_run_in_app: raw
                 .attachment_maintenance_run_in_app
                 .unwrap_or(false),
+            outbox_retention_days: raw.outbox_retention_days,
+            audit_retention_days: raw.audit_retention_days,
+            audit_witness_file: raw.audit_witness_file.as_deref().map(resolve),
             attachments,
             report: read_report(raw.report, resolve)?,
             ai: raw.ai,
+            callbacks,
             audit_read_policy: read_audit_policy(raw.audit_read_policy)?,
             field_keys,
+            external_identity,
         })
     }
 
@@ -471,6 +534,13 @@ impl ServerConfig {
     /// (installed for the process by [`ServerConfig::load`]).
     pub fn field_keys(&self) -> Option<&erp_orm::field_encryption::FieldKeys> {
         self.field_keys.as_ref()
+    }
+    /// Optional configured OpenID Connect issuer and browser login policy.
+    pub fn external_identity(&self) -> Option<&erp_security::auth::external::ExternalProvider> {
+        self.external_identity.as_ref()
+    }
+    pub(crate) fn callbacks(&self) -> &crate::web::callback::Callbacks {
+        &self.callbacks
     }
     /// Validated additive read-audit policy shared by admission and serving RPC configuration.
     pub fn read_audit_policy(&self) -> &erp_rpc::ReadAuditPolicy {
@@ -568,6 +638,21 @@ impl ServerConfig {
         self.attachment_maintenance_run_in_app
     }
 
+    /// Shared outbox retention policy; absent disables automatic retirement.
+    pub fn outbox_retention_days(&self) -> Option<u32> {
+        self.outbox_retention_days
+    }
+
+    /// The operator's age policy. An absent value keeps every audit partition attached.
+    pub fn audit_retention_days(&self) -> Option<u16> {
+        self.audit_retention_days
+    }
+
+    /// Optional external witness inventory used to verify the chain before archival.
+    pub fn audit_witness_file(&self) -> Option<&Path> {
+        self.audit_witness_file.as_deref()
+    }
+
     /// D14 scalar and byte-budget relationships admitted at startup.
     /// Getters do not imply runtime implementation of the corresponding future facilities.
     pub fn startup_limits(&self) -> &StartupLimits {
@@ -615,6 +700,9 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             connections,
             jobs_run_in_app: _,
             attachment_maintenance_run_in_app: _,
+            outbox_retention_days,
+            audit_retention_days,
+            audit_witness_file,
             // Canonical policy is described in the registered RpcConfig section.
             audit_read_policy: _,
             // judged by the attachment topology check, not by settings agreement
@@ -623,7 +711,10 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             report: _,
             // Provider files belong to each node and never enter shared settings metadata.
             ai: _,
+            // A node can opt in to the signed callback bindings it serves.
+            callbacks: _,
             field_keys,
+            external_identity,
         } = self;
         out.shared_str("server.database", database)?;
         out.shared_str("server.public_origin", origin)?;
@@ -631,11 +722,27 @@ impl erp_orm::node::SharedSettings for ServerConfig {
         out.shared_duration("server.http_header_deadline", connections.header_deadline())?;
         out.shared_duration("server.http_keep_alive_idle", connections.idle())?;
         out.shared_duration("server.http_max_connection_age", connections.max_age())?;
+        if let Some(days) = outbox_retention_days {
+            out.shared_u64("server.outbox_retention_days", u64::from(*days))?;
+        }
+        if let Some(days) = audit_retention_days {
+            out.shared_u64("server.audit_retention_days", u64::from(*days))?;
+        }
+        if audit_witness_file.is_some() {
+            out.shared_str("server.audit_witness", "file")?;
+        }
         // every node of a database opens what the others seal: the same key set everywhere (only
         // a keyed digest of its fingerprint enters the settings digest)
         match field_keys {
             Some(keys) => out.shared_secret("server.field_keys", &keys.fingerprint())?,
             None => out.shared_str("server.field_keys", "none")?,
+        }
+        match external_identity {
+            Some(provider) => out.shared_secret(
+                "server.external_identity",
+                provider.configuration_fingerprint(),
+            )?,
+            None => out.shared_str("server.external_identity", "none")?,
         }
         // Each node may connect through its own role, listener, proxy peer and local files.
         // The canonical external origin remains shared: it participates in CSRF policy.
@@ -694,7 +801,7 @@ fn trusted_address(value: &str) -> Result<IpAddr, ConfigError> {
 pub fn read_secret(path: &Path) -> Result<Zeroizing<String>, ConfigError> {
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|_| ConfigError::Invalid)?;
     let metadata = file.metadata().map_err(|_| ConfigError::Invalid)?;

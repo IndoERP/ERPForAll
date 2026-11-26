@@ -5,6 +5,7 @@
 pub mod access;
 pub mod addon;
 mod addon_life;
+pub mod approval_rpc;
 pub mod args;
 pub mod assistant_read;
 pub mod assistant_turn;
@@ -26,6 +27,7 @@ mod live;
 pub mod module;
 pub mod native_addons;
 pub mod node;
+mod outbox;
 mod partition_upkeep;
 #[cfg(test)]
 mod partition_upkeep_tests;
@@ -205,6 +207,7 @@ fn execute(cli: &Cli) -> Result<()> {
                 args::AuditAction::Maintain(ref args) => {
                     println!("{}", human::audit_maintain(args)?);
                 }
+                _ => println!("{}", audit::retention(&cmd.action)?),
             }
             Ok(())
         }
@@ -214,6 +217,10 @@ fn execute(cli: &Cli) -> Result<()> {
                     println!("{}", auth_revoke::emergency_revoke(args)?);
                 }
             }
+            Ok(())
+        }
+        Commands::Outbox(ref cmd) => {
+            println!("{}", outbox::execute(&cmd.action)?);
             Ok(())
         }
         Commands::Cluster(ref cmd) => {

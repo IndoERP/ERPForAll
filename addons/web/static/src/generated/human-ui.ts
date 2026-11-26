@@ -19,7 +19,15 @@ redirect: string,
 /**
  *Wire member `error`.
  */
-error: string | null, };
+error: string | null,
+/**
+ *Wire member `external_label`.
+ */
+external_label?: string,
+/**
+ *Wire member `can_link_external`.
+ */
+can_link_external?: boolean, };
 export type Bootstrap = {
 /**
  *Wire member `wire_major`.

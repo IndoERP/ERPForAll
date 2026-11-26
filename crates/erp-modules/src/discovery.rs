@@ -38,6 +38,8 @@ pub type PackageFiles = BTreeMap<String, Vec<u8>>;
 pub struct PackageData {
     /// The `data` files by archive path.
     pub files: PackageFiles,
+    /// SQL migration scripts from the verified archive, retained only for an approved capability.
+    pub migration_files: PackageFiles,
     /// All bounded `static/` client files from the verified archive, plus `i18n/` catalogues
     /// when a client manifest exists. Kept separately from loader data: absence of a client
     /// manifest is meaningful only after the complete verified client map has been retained.

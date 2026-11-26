@@ -1565,61 +1565,85 @@ async fn default_related_and_delegated_currencies_are_effective_before_amounts()
 }
 
 #[tokio::test]
-async fn monetary_upsert_refuses_before_key_planning_or_sql() {
+async fn monetary_upsert_rounds_insert_and_paired_update_and_refuses_ambiguous_quotes() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
+    let cent = currency(&mut tx, "CNT", "0.01").await;
+    let nickel = currency(&mut tx, "NCK", "0.05").await;
     let model = tx.env().records("test_monetary_mutation.line").unwrap();
-    // Even an empty call with a missing key must hit the monetary boundary first.
-    let error = model
-        .upsert(&mut tx, UpsertCall::new("missing_key"))
-        .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Programming);
-    assert_eq!(
-        error.to_string(),
-        "upsert on 'test_monetary_mutation.line': monetary fields are not supported until a later release"
-    );
-    for call in [
-        UpsertCall::new("_name_key").with_rows([line("insert", None)]),
-        UpsertCall::new("_name_key")
-            .with_rows([line("update", None)])
-            .with_update(["amount"]),
-        UpsertCall::new("_name_key")
-            .with_rows([line("add", None)])
-            .with_accumulate("amount"),
+    for (call, kind, message) in [
+        (
+            UpsertCall::new("_name_key").with_rows([line("no currency", None)]),
+            ErrorKind::Validation,
+            "a nonzero 'amount' requires a persisted currency in 'currency_id'",
+        ),
+        (
+            UpsertCall::new("_name_key")
+                .with_rows([line("update amount", Some(cent))])
+                .with_update(["amount"]),
+            ErrorKind::Programming,
+            "updating monetary field 'amount' requires updating its currency 'currency_id' in the same upsert or including it in the business key",
+        ),
+        (
+            UpsertCall::new("_name_key")
+                .with_rows([line("update currency", Some(cent))])
+                .with_update(["currency_id"]),
+            ErrorKind::Programming,
+            "updating monetary field 'amount' requires updating its currency 'currency_id' in the same upsert or including it in the business key",
+        ),
+        (
+            UpsertCall::new("_name_key")
+                .with_rows([line("add", Some(cent))])
+                .with_accumulate("amount"),
+            ErrorKind::Programming,
+            "accumulating monetary field 'amount' is unsupported",
+        ),
     ] {
-        let error = model.upsert(&mut tx, call).await.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Programming);
+        let result = tx.savepoint(async |tx| model.upsert(tx, call).await).await;
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), kind);
         assert_eq!(
-            error.to_string(),
-            "upsert on 'test_monetary_mutation.line': monetary fields are not supported until a later release"
+            error.message(),
+            format!("upsert on 'test_monetary_mutation.line': {message}")
         );
     }
-    let typed = tx.env().model::<fixture::Line>().unwrap();
-    let error = typed
-        .upsert(&mut tx, Upsert::on(fixture::Line::NAME_KEY))
+    let call = || UpsertCall::new("_name_key");
+    let inserted = model
+        .upsert(&mut tx, call().with_rows([line("line", Some(cent))]))
         .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Programming);
+        .unwrap();
     assert_eq!(
-        error.to_string(),
-        "upsert on 'test_monetary_mutation.line': monetary fields are not supported until a later release"
+        inserted.rows()[0].outcome(),
+        erp_orm::UpsertOutcome::Inserted
     );
-    let error = model
-        .upsert_values(&mut tx, "_name_key", &[], &[], &[])
+    let row = model.browse_ids([inserted.rows()[0].id()]);
+    assert_eq!(
+        row.value(&mut tx, "amount").await.unwrap(),
+        Value::Decimal(dec("2.68"))
+    );
+    let updated = model
+        .upsert(
+            &mut tx,
+            call()
+                .with_rows([line("line", Some(nickel))])
+                .with_update(["currency_id", "amount"]),
+        )
         .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Programming);
+        .unwrap();
+    assert_eq!(updated.rows()[0].outcome(), erp_orm::UpsertOutcome::Updated);
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
     assert_eq!(
-        error.to_string(),
-        "upsert on 'test_monetary_mutation.line': monetary fields are not supported until a later release"
+        row.value(&mut tx, "amount").await.unwrap(),
+        Value::Decimal(dec("2.70"))
     );
-    assert!(
-        model
-            .search(&mut tx, &Domain::TRUE)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        row.value(&mut tx, "observed_amount").await.unwrap(),
+        Value::Decimal(dec("2.70"))
+    );
+    assert_eq!(
+        row.value(&mut tx, "currency_id").await.unwrap(),
+        Value::Int(nickel.get())
     );
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
@@ -1707,7 +1731,7 @@ async fn provider_cardinality_and_error_kind_propagate_before_insert() {
 }
 
 #[tokio::test]
-async fn in_memory_assignment_normalizes_and_new_currencies_fail_explicitly() {
+async fn in_memory_assignment_normalizes_against_draft_currency_but_cannot_persist_it() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
@@ -1732,27 +1756,44 @@ async fn in_memory_assignment_normalizes_and_new_currencies_fail_explicitly() {
     );
     let currency_model = tx.env().records("res.currency").unwrap();
     let new_currency = tx
-        .new_record(&currency_model, RawVals::new(), None, None)
-        .await
-        .unwrap();
-    let error = tx
         .new_record(
-            &model,
-            line("invalid", Some(new_currency.rec_ids()[0])),
+            &currency_model,
+            RawVals::new().set_cell("rounding", Cell::Decimal(dec("0.05"))),
             None,
             None,
         )
         .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Programming);
+        .unwrap();
+    let currency_id = new_currency.rec_ids()[0];
+    let draft_line = tx
+        .new_record(&model, line("draft", Some(currency_id)), None, None)
+        .await
+        .unwrap();
     assert_eq!(
-        error.message(),
-        "Cannot normalize test_monetary_mutation.line.amount using an in-memory currency until a later release"
+        draft_line.value(&mut tx, "amount").await.unwrap(),
+        Value::Decimal(dec("2.70"))
+    );
+    draft_line
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("amount", Cell::Decimal(dec("-1.025"))),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft_line.value(&mut tx, "amount").await.unwrap(),
+        Value::Decimal(dec("-1.05"))
     );
     assert_eq!(
         row.values(&mut tx, "amount").await.unwrap(),
         vec![Value::Decimal(dec("1.01"))]
     );
+    let error = model
+        .create(&mut tx, vec![line("invalid", Some(currency_id))])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+    assert!(error.message().contains("currency_id"), "{error}");
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }

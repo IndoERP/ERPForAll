@@ -318,10 +318,10 @@ async fn master_subtypes_cannot_be_deleted() {
         .savepoint(async |tx| subtypes.browse([comment])?.unlink(tx).await)
         .await
         .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::UserError);
+    assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "Subtypes Messages cannot be deleted: other apps rely on them."
+        "An addon protects this record from deletion or external ID changes."
     );
     let note = xmlid(&mut tx, "mt_note").await;
     let activities = xmlid(&mut tx, "mt_activities").await;
@@ -329,10 +329,10 @@ async fn master_subtypes_cannot_be_deleted() {
         .savepoint(async |tx| subtypes.browse([activities, note])?.unlink(tx).await)
         .await
         .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::UserError);
+    assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "Subtypes Notes, Activities cannot be deleted: other apps rely on them."
+        "An addon protects this record from deletion or external ID changes."
     );
     assert_eq!(
         subtypes
@@ -366,6 +366,91 @@ async fn master_subtypes_cannot_be_deleted() {
     drop(tx);
     drop(orm);
     drop(system);
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn master_subtypes_keep_legacy_guard_until_upgrade_and_release_on_uninstall() {
+    let (db, system, orm) = Box::pin(installed()).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let comment = xmlid(&mut tx, "mt_comment").await;
+    // Model a database installed before the XML attributes were added.
+    tx.execute(
+        "DELETE FROM \"erp_record_protection.binding\" WHERE module = 'mail'",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "DELETE FROM \"erp_record_protection.owner\" WHERE module = 'mail'",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "UPDATE ir_module_module SET latest_version = '1.1.0' WHERE name = 'mail'",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let old = tx
+        .env()
+        .records("mail.message.subtype")
+        .unwrap()
+        .browse([comment])
+        .unwrap()
+        .unlink(&mut tx)
+        .await
+        .unwrap_err();
+    assert_eq!(old.kind(), ErrorKind::UserError);
+    tx.rollback().await.unwrap();
+    drop(tx);
+
+    let mail = ModuleName::new("mail").unwrap();
+    let upgraded = Box::pin(system.button_immediate_upgrade(
+        &orm.env(SUPERUSER_ID, Context::new()),
+        std::slice::from_ref(&mail),
+    ))
+    .await
+    .unwrap();
+    let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+    assert_eq!(xmlid(&mut tx, "mt_comment").await, comment);
+    let refusal = tx
+        .env()
+        .records("mail.message.subtype")
+        .unwrap()
+        .browse([comment])
+        .unwrap()
+        .unlink(&mut tx)
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.kind(), ErrorKind::Validation);
+    assert_eq!(
+        refusal.message(),
+        "An addon protects this record from deletion or external ID changes."
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+
+    let uninstalled = Box::pin(system.button_immediate_uninstall(
+        &upgraded.orm.env(SUPERUSER_ID, Context::new()),
+        std::slice::from_ref(&mail),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(uninstalled.uninstalled, [mail]);
+    assert!(
+        uninstalled
+            .orm
+            .registry()
+            .model("mail.message.subtype")
+            .is_none()
+    );
+    drop((uninstalled, upgraded, orm, system));
     db.cleanup().await.unwrap();
 }
 

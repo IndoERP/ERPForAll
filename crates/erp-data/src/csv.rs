@@ -151,6 +151,7 @@ impl CsvImport {
                 id,
                 model: self.model.clone(),
                 forcecreate: None,
+                protect: None,
                 fields,
                 translations: Vec::new(),
                 env: env.clone(),

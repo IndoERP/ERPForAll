@@ -263,11 +263,65 @@ erp_orm::core_ddl!(
     sql = GC_STATE_DDL
 );
 
+const EXTERNAL_IDENTITY_DDL: &str = "\
+CREATE TABLE IF NOT EXISTS erp_external_provider (
+    issuer text PRIMARY KEY CHECK (octet_length(issuer) BETWEEN 1 AND 512),
+    enabled boolean NOT NULL DEFAULT true
+);
+CREATE TABLE IF NOT EXISTS erp_external_identity (
+    issuer text NOT NULL REFERENCES erp_external_provider(issuer),
+    subject text NOT NULL CHECK (octet_length(subject) BETWEEN 1 AND 255),
+    user_id bigint NOT NULL CHECK (user_id > 0),
+    revoked_at timestamptz,
+    PRIMARY KEY (issuer, subject)
+);
+CREATE INDEX IF NOT EXISTS erp_external_identity_user ON erp_external_identity (user_id, issuer);
+CREATE TABLE IF NOT EXISTS erp_external_login_intent (
+    state bytea PRIMARY KEY CHECK (octet_length(state) = 32),
+    issuer text NOT NULL REFERENCES erp_external_provider(issuer),
+    browser bytea NOT NULL CHECK (octet_length(browser) = 16),
+    nonce text NOT NULL CHECK (char_length(nonce) = 43),
+    verifier text NOT NULL CHECK (char_length(verifier) = 43),
+    destination text NOT NULL CHECK (octet_length(destination) BETWEEN 1 AND 2048),
+    link_session uuid,
+    expires_at timestamptz NOT NULL DEFAULT now() + interval '5 minutes'
+);
+CREATE INDEX IF NOT EXISTS erp_external_login_intent_expires ON erp_external_login_intent (expires_at);
+CREATE INDEX IF NOT EXISTS erp_external_login_intent_browser ON erp_external_login_intent (browser, expires_at);
+REVOKE ALL ON erp_external_provider, erp_external_identity, erp_external_login_intent FROM PUBLIC;";
+
+const EXTERNAL_AFTER_MODELS_DDL: &str = "\
+DO $$ BEGIN
+    IF to_regclass('res_users') IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='erp_external_identity'::regclass
+                       AND conname='erp_external_identity_user_fkey') THEN
+        ALTER TABLE erp_external_identity ADD CONSTRAINT erp_external_identity_user_fkey
+            FOREIGN KEY (user_id) REFERENCES res_users(id) ON DELETE CASCADE;
+    END IF;
+END $$";
+
+erp_orm::core_ddl!(
+    EXTERNAL_IDENTITY_TABLES,
+    owner = "erp-security",
+    name = "erp_external_provider",
+    purpose = "OIDC provider policy, linked identities, and single-use login challenges",
+    tables = [
+        "erp_external_provider",
+        "erp_external_identity",
+        "erp_external_login_intent"
+    ],
+    sql = EXTERNAL_IDENTITY_DDL,
+    after_models = { needs_table = "res_users", sql = EXTERNAL_AFTER_MODELS_DDL }
+);
+
 /// The core tables of authentication, as a binary requires them.
-static REQUIRED: [CoreTableRequirement; 3] = [
+static REQUIRED: [CoreTableRequirement; 6] = [
     CoreTableRequirement::new("erp_session", "erp-security"),
     CoreTableRequirement::new("erp_login_throttle", "erp-security"),
     CoreTableRequirement::new("erp_auth_gc_state", "erp-security"),
+    CoreTableRequirement::new("erp_external_provider", "erp-security"),
+    CoreTableRequirement::new("erp_external_identity", "erp-security"),
+    CoreTableRequirement::new("erp_external_login_intent", "erp-security"),
 ];
 
 /// The core tables of authentication, for `OrmBuilder::require_core_tables` at the build site of
@@ -278,6 +332,7 @@ pub fn core_tables() -> &'static [CoreTableRequirement] {
     std::hint::black_box(&AUTH_TABLES);
     std::hint::black_box(&GC_STATE);
     std::hint::black_box(&API_KEY_TABLE);
+    std::hint::black_box(&EXTERNAL_IDENTITY_TABLES);
     &REQUIRED
 }
 

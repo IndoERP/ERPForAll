@@ -14,6 +14,7 @@ use erp_registry::{
 };
 use erp_sdk::{Orm, SUPERUSER_ID, Transaction};
 use erp_testkit::Harness;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use support::one;
 static ADDON: AddonDescriptor = AddonDescriptor {
@@ -249,6 +250,55 @@ async fn view_outputs_are_checked_without_altering_the_view() {
         sync(&h, model(actual, 30, false)).await.unwrap();
         h.cleanup().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn queries_against_a_model_view_apply_record_rules() {
+    use erp_sdk::{Domain, Operation, Operator, Value};
+
+    let visible = Domain::condition("code", Operator::Eq, "visible").unwrap();
+    let policy = erp_testkit::DomainPolicy::builder(erp_testkit::Otherwise::Allow)
+        .rule("coltest.item", Operation::Read, visible)
+        .rule("coltest.item", Operation::Write, Domain::FALSE)
+        .build()
+        .unwrap();
+    let h = Harness::builder([&ADDON])
+        .with_decls([model("C", 30, false)])
+        .policy(policy)
+        .build()
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    tx.batch("INSERT INTO coltest_item (code) VALUES ('visible'), ('private'); ALTER TABLE coltest_item RENAME TO coltest_backing; CREATE VIEW coltest_item AS SELECT * FROM coltest_backing;")
+        .await.unwrap();
+    let records = tx.env().records("coltest.item").unwrap();
+    let all = records.search(&mut tx, &Domain::TRUE).await.unwrap();
+    assert_eq!(all.len(), 2);
+    let reader = records.with_env(tx.env().with_user(42));
+    let found = reader.search(&mut tx, &Domain::TRUE).await.unwrap();
+    assert_eq!(
+        found.values(&mut tx, "code").await.unwrap(),
+        [Value::str("visible")]
+    );
+    let hidden = all
+        .ids()
+        .into_iter()
+        .find(|id| !found.ids().contains(id))
+        .unwrap();
+    assert!(
+        reader
+            .browse([hidden])
+            .unwrap()
+            .filtered_access(&mut tx, Operation::Read)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let values = BTreeMap::from([("code".to_owned(), Value::str("changed"))]);
+    let error = found.write_values(&mut tx, &values).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access, "{error}");
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
 }
 
 #[tokio::test]

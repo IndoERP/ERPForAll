@@ -13,6 +13,13 @@ fn declarations() -> Result<Vec<SettingDecl>> {
         SettingDecl::boolean("base.test_enabled", "Enabled", ScopeKind::Global, false)?
             .access(&["base.group_system"], &["base.group_system"])?,
         SettingDecl::boolean(
+            "base.test_independent",
+            "Independent",
+            ScopeKind::Global,
+            false,
+        )?
+        .access(&["base.group_system"], &["base.group_system"])?,
+        SettingDecl::boolean(
             "base.test_company",
             "Company setting",
             ScopeKind::Company,
@@ -295,13 +302,74 @@ async fn persisted_settings() {
     let company_changed = write_values(
         &company_env,
         &mut tx,
-        company_scope,
+        company_scope.clone(),
         "0".into(),
         vec![("base.test_company".into(), Value::Bool(true))],
     )
     .await
     .unwrap();
     assert_eq!(company_changed.revision, "1");
+    let branch = company_env
+        .records("res.company")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Settings branch".into()))
+                    .set_cell("parent_id", Cell::Id(company_id)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let branch_env = env.with_company(branch).unwrap();
+    let branch_scope = SettingsScope::Company {
+        company_id: erp_sdk::views::wire::WireId::try_from(u64::try_from(branch).unwrap()).unwrap(),
+    };
+    let branch_default = read_values(
+        &branch_env,
+        &mut tx,
+        branch_scope.clone(),
+        vec!["base.test_company".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(branch_default.revision, "0");
+    assert!(matches!(
+        branch_default.values[0].value,
+        SettingValue::Boolean(false)
+    ));
+    let branch_changed = write_values(
+        &branch_env,
+        &mut tx,
+        branch_scope,
+        "0".into(),
+        vec![("base.test_company".into(), Value::Bool(false))],
+    )
+    .await
+    .unwrap();
+    assert_eq!(branch_changed.revision, "1");
+    let company_still_set = read_values(
+        &company_env,
+        &mut tx,
+        company_scope,
+        vec!["base.test_company".into()],
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        company_still_set.values[0].value,
+        SettingValue::Boolean(true)
+    ));
+    let audit_scopes = tx.query("SELECT s.company_id FROM ir_config_setting_audit a JOIN ir_config_setting_scope s ON s.id=a.scope_id WHERE a.setting_key='base.test_company' ORDER BY a.id", &[]).await.unwrap();
+    assert_eq!(
+        audit_scopes
+            .iter()
+            .map(|row| row.get::<_, i64>(0))
+            .collect::<Vec<_>>(),
+        [company_id, branch]
+    );
     assert_eq!(
         read_values(
             &env,
@@ -381,6 +449,43 @@ async fn persisted_settings() {
         rows[0].get::<_, Option<&str>>(2).is_none(),
         "oversized stored text must be withheld by PostgreSQL before transfer"
     );
+    let current = read_values(&env, &mut tx, SettingsScope::Global {}, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(current.revision, "1");
+    let independent = write_values(
+        &env,
+        &mut tx,
+        SettingsScope::Global {},
+        "1".into(),
+        vec![("base.test_independent".into(), Value::Bool(true))],
+    )
+    .await
+    .unwrap();
+    assert_eq!(independent.revision, "2");
+    let repaired = write_values(
+        &env,
+        &mut tx,
+        SettingsScope::Global {},
+        "2".into(),
+        vec![(key.clone(), Value::Bool(false))],
+    )
+    .await
+    .unwrap();
+    assert_eq!(repaired.revision, "3");
+    let read_repaired = read_values(&env, &mut tx, SettingsScope::Global {}, vec![key.clone()])
+        .await
+        .unwrap();
+    assert!(matches!(
+        read_repaired.values[0].value,
+        SettingValue::Boolean(false)
+    ));
+    let audited_repair = tx.query("SELECT old_value, new_value FROM ir_config_setting_audit WHERE setting_key=$1 AND revision='3'", &[&key]).await.unwrap();
+    assert_eq!(
+        audited_repair[0].get::<_, &str>(0),
+        "[invalid stored value]"
+    );
+    assert_eq!(audited_repair[0].get::<_, &str>(1), "false");
     tx.rollback().await.unwrap();
     // Independent transactions/connections serialize against the same durable scope identity.
     let writer = async |value| {
@@ -404,9 +509,44 @@ async fn persisted_settings() {
     let (first, second) = tokio::join!(writer(false), writer(true));
     let results = [first, second];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    let committed = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .unwrap();
+    let accepted_value = serde_json::to_value(&committed.values[0].value).unwrap();
+    let accepted_revision = committed.revision.clone();
     let error = results.into_iter().find_map(Result::err).unwrap();
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Conflict, "{error:?}");
     assert_eq!(error.message(), "Settings changed; reload before saving.");
+    let updated = system
+        .button_immediate_upgrade(
+            &system.system_env(erp_sdk::Context::new()),
+            &[erp_modules::ModuleName::new("base").unwrap()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        updated
+            .upgraded
+            .iter()
+            .any(|addon| addon.as_str() == "base")
+    );
+    let mut after = updated.orm.begin(erp_sdk::SUPERUSER_ID).await.unwrap();
+    let env_after = after.env();
+    let persisted = read_values(
+        &env_after,
+        &mut after,
+        SettingsScope::Global {},
+        vec!["base.test_enabled".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(persisted.revision, accepted_revision);
+    assert_eq!(
+        serde_json::to_value(&persisted.values[0].value).unwrap(),
+        accepted_value
+    );
+    after.rollback().await.unwrap();
     drop(initialized);
     drop(system);
     db.cleanup().await.unwrap();

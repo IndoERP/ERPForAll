@@ -257,11 +257,14 @@ impl WebAssistant for TextAssistant {
                 .ok()
                 .and_then(|guard| guard.clone())
                 .unwrap_or_else(|| {
-                    Arc::new(RpcService::new(
-                        auth.orm().clone(),
-                        AssistantFallbackHost,
-                        erp_rpc::RpcConfig::default(),
-                    ))
+                    Arc::new(
+                        RpcService::new(
+                            auth.orm().clone(),
+                            AssistantFallbackHost,
+                            erp_rpc::RpcConfig::default(),
+                        )
+                        .attempt_gate(crate::approval_rpc::ApprovalGate),
+                    )
                 });
 
             let secret_arc = Arc::new(

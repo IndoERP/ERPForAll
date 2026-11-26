@@ -772,6 +772,7 @@ impl Principal {
 #[derive(Debug)]
 #[must_use = "call `.build()`"]
 pub struct PrincipalBuilder {
+    agent_key: Option<ApiKeyId>,
     subject: UserId,
     resolution: Option<Resolution>,
     companies: Vec<CompanyId>,
@@ -783,6 +784,7 @@ impl PrincipalBuilder {
     /// A user principal for `subject`. Without [`PrincipalBuilder::resolution`] it is unresolved.
     pub fn user(subject: UserId) -> Self {
         Self {
+            agent_key: None,
             subject,
             resolution: None,
             companies: Vec::new(),
@@ -795,11 +797,15 @@ impl PrincipalBuilder {
     ///
     /// # Errors
     ///
-    /// Always [`PrincipalError::Unsupported`] until.
-    pub fn agent(_subject: UserId, _key: ApiKeyId) -> Result<Self, PrincipalError> {
-        Err(PrincipalError::Unsupported {
-            feature: "agent principals",
-            task: "a later release",
+    /// The superuser cannot delegate an agent identity. Building the principal also requires
+    /// a scope bound to this exact key.
+    pub fn agent(subject: UserId, key: ApiKeyId) -> Result<Self, PrincipalError> {
+        if subject == SUPERUSER_ID {
+            return Err(PrincipalError::SuperuserAsUser);
+        }
+        Ok(Self {
+            agent_key: Some(key),
+            ..Self::user(subject)
         })
     }
 
@@ -881,13 +887,28 @@ impl PrincipalBuilder {
         // harness's `as_user`), and refuses it under a compiled policy
         let resolution = self.resolution.unwrap_or_else(Resolution::unresolved);
         let companies = CompanyContext::new(self.companies, &resolution)?;
+        if let Some(key) = self.agent_key
+            && self.scope.as_ref().map(Scope::key) != Some(key)
+        {
+            return Err(PrincipalError::InvalidScope {
+                problem: "an agent must carry the scope of its own key".into(),
+            });
+        }
         let actor = self.scope.as_ref().map(|scope| Actor::ApiKey {
             id: scope.key(),
-            kind: KeyKind::User,
+            kind: if self.agent_key.is_some() {
+                KeyKind::Agent
+            } else {
+                KeyKind::User
+            },
             name: scope.name().into(),
         });
         Ok(Principal {
-            kind: PrincipalKind::User,
+            kind: if self.agent_key.is_some() {
+                PrincipalKind::Agent
+            } else {
+                PrincipalKind::User
+            },
             subject: self.subject,
             actor,
             resolution: Arc::new(resolution),

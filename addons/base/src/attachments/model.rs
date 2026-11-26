@@ -56,7 +56,7 @@ pub struct IrAttachment {
     /// Whether the content route may serve it without a session.
     #[field(boolean)]
     pub public: bool,
-    /// Refused until link tokens exist.
+    /// Reserved legacy field. New link tokens are hashed in the content grant table.
     #[field(char, groups = ".", copy = false)]
     pub access_token: Option<Arc<str>>,
     /// The content size in bytes, set by the server.
@@ -106,7 +106,7 @@ fn guard_vals(vals: &RawVals, service: bool) -> Result<()> {
     }
     if vals.contains("access_token") {
         return Err(Error::validation(
-            "Attachment access tokens are not available yet: they come with a later release.",
+            "Attachment access tokens are managed by the content sharing methods.",
         ));
     }
     if let Some(Some(name)) = text(vals, "name")? {
@@ -175,6 +175,34 @@ async fn check_circular(tx: &mut Transaction, ids: &[i64]) -> Result<()> {
 
 #[methods(IrAttachment, addon = "base")]
 impl IrAttachment {
+    /// Publish an expiring link to the current bytes. Reissuing a link invalidates the old one.
+    #[method]
+    #[rpc(effect = write)]
+    async fn erp_share_content(
+        this: &RecordSet<IrAttachment>,
+        tx: &mut Transaction,
+        public_read: bool,
+        lifetime_seconds: i64,
+    ) -> Result<String> {
+        let records = this.as_records();
+        records.ensure_one()?;
+        records.check_access(tx, Operation::Write).await?;
+        super::grants::issue(tx, records.int()?, public_read, lifetime_seconds).await
+    }
+
+    /// Revoke public and scoped links for the selected attachment.
+    #[method]
+    #[rpc(effect = write)]
+    async fn erp_revoke_content(
+        this: &RecordSet<IrAttachment>,
+        tx: &mut Transaction,
+    ) -> Result<bool> {
+        let records = this.as_records();
+        records.ensure_one()?;
+        records.check_access(tx, Operation::Write).await?;
+        super::grants::revoke(tx, records.int()?).await
+    }
+
     /// Current nonsecret upload limits for clients allowed to create attachments.
     #[method]
     #[rpc(effect = read, model)]

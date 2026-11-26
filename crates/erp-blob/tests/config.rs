@@ -82,6 +82,50 @@ fn kinds_that_are_not_built_name_their_task() {
 }
 
 #[test]
+fn download_handoffs_require_scoped_store_configuration() {
+    let local = |suffix: &str| format!("{GOOD}\n{suffix}");
+    assert!(AttachmentConfig::from_toml(&local("x_accel_prefix='/_erp/internal/'")).is_ok());
+    for prefix in [
+        "http://bad/path/",
+        "//same/path/",
+        "/some/../path/",
+        "/some/%2F/",
+        "/no-trailing-slash",
+    ] {
+        assert!(error(&local(&format!("x_accel_prefix='{prefix}'"))).contains("x_accel_prefix"));
+    }
+    assert!(error(&local("presign_downloads=true")).contains("requires an S3 store"));
+    let encrypted = local("x_accel_prefix='/_erp/internal/'").replace(
+        "write_store = \"main\"",
+        "write_store = \"main\"\nencryption='on'",
+    );
+    assert!(error(&encrypted).contains("attachments.encryption"));
+    let blocked =
+        local("x_accel_prefix='/_erp/internal/'") + "\n[attachments.scan]\nmode='block'\n";
+    assert!(error(&blocked).contains("attachments.scan.mode"));
+    let remote = "[attachments]\nwrite_store='remote'\n[attachments.stores.remote]\nkind='s3'\nbucket='example'\nregion='example'\n";
+    assert!(AttachmentConfig::from_toml(&format!("{remote}presign_downloads=true")).is_ok());
+    assert!(
+        error(&format!(
+            "{remote}presign_downloads=true\npresign_ttl_secs=301"
+        ))
+        .contains("presign_ttl_secs")
+    );
+    assert!(
+        error(&format!(
+            "{remote}presign_downloads=true\nendpoint='http://127.0.0.1:9190'"
+        ))
+        .contains("HTTPS")
+    );
+    assert!(
+        error(&format!(
+            "{remote}endpoint='http://127.0.0.1.example.invalid'"
+        ))
+        .contains("loopback")
+    );
+}
+
+#[test]
 fn encryption_and_scanning_are_refused_until_their_tasks() {
     let base = "[attachments]\nwrite_store = \"a\"\n";
     let store = "[attachments.stores.a]\nkind = \"local\"\npath = \"/x\"\n";
@@ -194,7 +238,12 @@ async fn a_local_store_without_the_shared_flag_is_listed_as_unshared() {
 /// error (no queue), and a permit returns when it is dropped, also on an early error.
 #[tokio::test]
 async fn a_full_stream_admission_answers_busy_and_permits_return_on_drop() {
-    let limits = erp_blob::AttachmentLimits::default().with_stream_permits_for_tests(2);
+    let limits = AttachmentConfig::from_toml(&GOOD.replace(
+        "gc_grace_secs = 7200",
+        "gc_grace_secs = 7200\nstream_permits_per_node = 2",
+    ))
+    .unwrap()
+    .limits;
     let rt = AttachmentRuntime::single(
         "main",
         std::sync::Arc::new(erp_blob::MemoryStore::new()),

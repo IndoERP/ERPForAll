@@ -294,5 +294,30 @@ async fn served_replicas_recover_policy_without_hints() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     drop(peer);
+    let restarted = fixture.peer_with_config("jobs_run_in_app=true");
+    let read = json_post(
+        restarted.port,
+        &fixture.cookies,
+        "/erp/json/2/ir.config.setting/erp_read_values",
+        &json!({"scope":{"kind":"global"},"keys":["base.jobs.history_days"]}).to_string(),
+    );
+    assert_eq!(read.status, 200, "{}", read.body);
+    let current: Json = serde_json::from_str(&read.body).unwrap();
+    assert_eq!(current["values"][0]["key"], "base.jobs.history_days");
+    assert_eq!(current["values"][0]["value"], 1);
+    let remaining: i64 = fixture
+        .client
+        .query_one(
+            "SELECT count(*) FROM erp_job_run WHERE last_error_code='jobs-live-test'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        remaining, 0,
+        "retention was durable across the served node restart"
+    );
+    drop(restarted);
     fixture.cleanup().await;
 }

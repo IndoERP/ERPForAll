@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use erp_fields::{FieldType, Value};
+use erp_fields::{Error, FieldType, Value};
 use erp_orm::Transaction;
 use erp_registry::ModelSpec;
 
@@ -201,6 +201,9 @@ async fn process(
     let foreign = xid
         .as_ref()
         .is_some_and(|x| x.module().is_some_and(|m| m != module));
+    if foreign && op.protect().is_some() {
+        return Err(at(LoadErrorKind::Orm(protection_owner_error(module))));
+    }
     // `_test_xml_id` (369)
     if foreign
         && let Some(x) = &xid
@@ -261,6 +264,12 @@ async fn process(
         .await?;
     }
     Ok(())
+}
+
+pub(super) fn protection_owner_error(module: &str) -> Error {
+    Error::validation(format!(
+        "Addon '{module}' can only change protection on external IDs it owns."
+    ))
 }
 
 /// The values of a record whose references are resolved in `known`.

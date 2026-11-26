@@ -26,6 +26,11 @@ pub enum PrefsError {
 }
 /// Verified anonymous preference identity. Construction requires MAC verification.
 pub struct SignedPrefs([u8; 16]);
+impl SignedPrefs {
+    pub(crate) fn binding(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
 impl fmt::Debug for SignedPrefs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SignedPrefs(<redacted>)")

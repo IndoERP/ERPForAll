@@ -27,6 +27,32 @@ class LoginPage extends Component<{ page: Login; productName: string }> {
   }
   onReveal(event: Event): void { togglePasswordReveal(event); }
   onPasswordKey(event: Event): void { updateCapsLockHint(event); }
+  async onExternalSubmit(event: Event): Promise<void> {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!(form instanceof HTMLFormElement) || form.dataset["busy"] === "true") return;
+    const error = form.closest(".login-card")?.querySelector("[data-external-login-error]");
+    form.dataset["busy"] = "true";
+    try {
+      // Navigate separately from the form request so the OAuth hop never needs an exception to
+      // the login CSP's form-action directive.
+      const fields = new URLSearchParams();
+      for (const [key, value] of new FormData(form)) if (typeof value === "string") fields.set(key, value);
+      const reply = await fetch(form.action, { method: "POST", headers: { accept: "application/json" }, body: fields, redirect: "error" });
+      if (!reply.ok) throw new Error("External sign-in is unavailable.");
+      const { location } = object(await reply.json(), "external sign-in response");
+      const next = new URL(text(location, "identity provider URL"));
+      if (next.protocol !== "https:" && !(next.protocol === "http:" && (next.hostname === "127.0.0.1" || next.hostname === "[::1]"))) {
+        throw new Error("External sign-in is unavailable.");
+      }
+      window.location.assign(next.href);
+    } catch {
+      if (error instanceof HTMLElement) {
+        error.textContent = "External sign-in is unavailable.";
+        error.hidden = false;
+      }
+    } finally { form.dataset["busy"] = "false"; }
+  }
 }
 class Shell extends Component<{ host: HTMLElement; bootstrap: unknown }> {
   static override template = "web.HumanClient";
@@ -54,6 +80,12 @@ export async function boot(documentRoot: Document = document): Promise<void> {
       const target = new URL(redirect, window.location.origin);
       if (target.origin !== window.location.origin) throw new Error("Invalid sign-in redirect origin.");
       const page: Login = { csrf: text(data["csrf"], "CSRF token"), database: text(data["database"], "database"), redirect, error: data["error"] === null ? null : text(data["error"], "login error") };
+      const externalLabel = data["external_label"], canLink = data["can_link_external"];
+      if (externalLabel !== undefined) page.external_label = text(externalLabel, "external sign-in provider");
+      if (canLink !== undefined) {
+        if (typeof canLink !== "boolean" || !page.external_label) throw new Error("Invalid external sign-in policy.");
+        page.can_link_external = canLink;
+      }
       await mount(LoginPage, host, { templates, props: { page, productName: productName(documentRoot) }, dev: false, onError: fail });
     } else {
       registerBuiltinSystrayItems(systrayItems);

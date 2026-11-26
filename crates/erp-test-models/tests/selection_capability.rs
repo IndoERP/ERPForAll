@@ -174,6 +174,17 @@ impl Item {
                     )
                     .await;
             }
+            Some("catalog_property") => {
+                return ctx
+                    .catalog(
+                        "selection_capability.catalog",
+                        &Domain::condition("company_label", Operator::Ne, false)?,
+                        "key",
+                        "company_label",
+                        "company_label",
+                    )
+                    .await;
+            }
             _ => {}
         }
         ctx.emit("é", "日本語")?;
@@ -210,6 +221,8 @@ pub struct Catalog {
     pub key: Option<Arc<str>>,
     #[field(text)]
     pub label: Option<Arc<str>>,
+    #[field(text, company_dependent = true)]
+    pub company_label: Option<Arc<str>>,
     #[field(boolean, default = true)]
     pub active: bool,
     #[field(integer)]
@@ -403,6 +416,85 @@ async fn catalog_reads_pending_values_and_masks_oversized_payload_in_sql() {
         err.to_string(),
         "selection 'selection_capability.item.choice' provider '_choices': catalog output limit exceeded"
     );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn catalog_projects_filters_and_orders_company_values_under_the_current_company() {
+    let h = Harness::builder([
+        &ADDON,
+        &erp_addon_base::ADDON,
+        &erp_test_models::base_users::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    let currency = erp_testkit::fixtures::seed_currency_in(&mut tx)
+        .await
+        .unwrap();
+    tx.execute("INSERT INTO res_company (tz, id, name, currency_id) VALUES ('UTC', 1, 'One', $1), ('UTC', 2, 'Two', $1) ON CONFLICT DO NOTHING", &[&currency]).await.unwrap();
+    let env = tx.env();
+    let one = env.with_context([("allowed_company_ids", Value::list([Value::Int(1)]))]);
+    let two = env.with_context([("allowed_company_ids", Value::list([Value::Int(2)]))]);
+    erp_orm::ir_default::set(
+        &mut tx,
+        &one,
+        "selection_capability.catalog",
+        "company_label",
+        &Value::str("middle"),
+        None,
+        Some(RecId::from_real(1).unwrap()),
+        None,
+    )
+    .await
+    .unwrap();
+    let records = one
+        .records("selection_capability.catalog")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("key", Cell::Str("a".into()))
+                    .set_cell("company_label", Cell::Str("zulu".into())),
+                RawVals::new().set_cell("key", Cell::Str("b".into())),
+            ],
+        )
+        .await
+        .unwrap();
+    records
+        .with_env(two.clone())
+        .browse([records.ids()[0]])
+        .unwrap()
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("company_label", Cell::Str("alpha".into())),
+        )
+        .await
+        .unwrap();
+
+    for (env, want) in [
+        (one, vec![("b", "middle"), ("a", "zulu")]),
+        (two, vec![("a", "alpha")]),
+    ] {
+        let items = env
+            .records("selection_capability.item")
+            .unwrap()
+            .with_context([("mode", Value::str("catalog_property"))]);
+        let metadata = items
+            .fields_get(&mut tx, Some(&["choice"]), Some(&["selection"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            metadata["choice"]["selection"],
+            Value::list(
+                want.into_iter()
+                    .map(|(k, label)| Value::list([Value::str(k), Value::str(label)]))
+            )
+        );
+    }
     drop(tx);
     h.cleanup().await.unwrap();
 }

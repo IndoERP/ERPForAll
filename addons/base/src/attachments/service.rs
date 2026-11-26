@@ -872,6 +872,7 @@ pub async fn open(tx: &mut Transaction, id: i64) -> Result<BlobHandle> {
             0,
             mimetype,
             checksum,
+            erp_sdk::blob::digests(&[]).0,
             HandleSource::Empty,
         ));
     };
@@ -927,7 +928,9 @@ pub(crate) async fn handle_for_blob(
     };
     let size = u64::try_from(blob_size)
         .map_err(|_| Error::db(format!("ir_blob {blob} has a negative size")))?;
-    Ok(Some(BlobHandle::new(id, size, mimetype, checksum, source)))
+    Ok(Some(BlobHandle::new(
+        id, size, mimetype, checksum, sha256, source,
+    )))
 }
 
 /// The caller already deleted the records, which they were allowed to; no further

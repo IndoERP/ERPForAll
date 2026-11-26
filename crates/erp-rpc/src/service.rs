@@ -1,10 +1,12 @@
 //! [`RpcService`]: one call, one unit of work (design note §4): route, exposure, gates, binding,
 //! a transaction of the right kind, the call, the result, the commit, retries and the error body.
 
+mod assistant;
+
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use erp_fields::{Error, ErrorKind, Result};
+use erp_fields::{Error, ErrorKind, Result, Value};
 use erp_orm::audit::{
     AttemptEvidence, AuditAttempt, AuditCall, AuditError, AuditOrigin, AuditOutcome,
     AuditStoreState, ErrorClass, TargetIds,
@@ -211,8 +213,74 @@ pub trait Gate: Send + Sync + 'static {
     fn check(&self, call: &GateCall<'_>) -> std::result::Result<(), RpcFailure>;
 }
 
+/// A bound call admitted inside the same authenticated transaction as its eventual dispatch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct AttemptGateCall<'a> {
+    pub model: &'a str,
+    pub method: &'a str,
+    pub effect: Effect,
+    pub key: Option<&'a IdempotencyKey>,
+    pub request_digest: Option<&'a [u8; 32]>,
+    pub binding_digest: Option<&'a [u8; 32]>,
+}
+
+/// Transactional admission for a bound RPC attempt.
+pub enum AttemptAdmission {
+    Dispatch,
+    KeyRequired,
+    Defer(Error),
+    ReplayOnly(Error),
+}
+/// An admission service for policies that depend on transactional state.
+pub trait AttemptGate: Send + Sync + 'static {
+    /// Read-only discovery decision. Implementations with transactional restrictions must
+    /// explicitly admit discovery; a missing decision keeps the method out of the catalogue.
+    fn assistant_visible<'a>(
+        &'a self,
+        _tx: &'a mut Transaction,
+        _model: &'a str,
+        _method: &'a str,
+        _effect: Effect,
+    ) -> erp_orm::BoxFuture<'a, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// Refusal-only gate for Auth-owned password operations. It has no access to
+    /// bound arguments or idempotency. The principal was checked in this transaction.
+    #[doc(hidden)]
+    fn check_managed_password<'a>(
+        &'a self,
+        _tx: &'a mut Transaction,
+        _principal: &'a Principal,
+        _model: &'a str,
+        _method: &'a str,
+        _effect: Effect,
+    ) -> erp_orm::BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Fence any wait before Auth refreshes the session's authority.
+    #[doc(hidden)]
+    fn prepare_managed_password<'a>(
+        &'a self,
+        _tx: &'a mut Transaction,
+    ) -> erp_orm::BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// An error rolls back. A deferred response commits without dispatch.
+    fn check<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+        call: AttemptGateCall<'a>,
+    ) -> erp_orm::BoxFuture<'a, Result<AttemptAdmission>>;
+}
+
 /// One call, as the transport hands it over.
 pub struct RpcCall {
+    assistant: bool,
+    callback: bool,
     route: std::result::Result<Route, RpcFailure>,
     body: Vec<u8>,
     caller: Caller,
@@ -238,6 +306,8 @@ impl RpcCall {
     /// A JSON-2 call: `POST <path>` with `body` (already size-limited by the transport).
     pub fn json2(path: &str, body: impl Into<Vec<u8>>, caller: Caller) -> Self {
         Self {
+            assistant: false,
+            callback: false,
             route: Route::parse_json2(path),
             body: body.into(),
             caller,
@@ -250,6 +320,22 @@ impl RpcCall {
             attempt_hook: None,
             request: None,
         }
+    }
+
+    /// Restrict dispatch to a method explicitly offered for assistant use. Its opt-in
+    /// and the caller's permissions are rechecked inside each execution attempt.
+    pub fn assistant(mut self) -> Self {
+        self.assistant = true;
+        self
+    }
+
+    /// Mark a call already authenticated by the server's signed callback transport.
+    /// Requires a fresh credential and an idempotency key, permits only a write effect,
+    /// and stores a fixed acknowledgement instead of retaining the method's result.
+    #[must_use]
+    pub fn signed_callback(mut self) -> Self {
+        self.callback = true;
+        self
     }
 
     /// A call on an already validated route (`call_kw`, MCP).
@@ -338,6 +424,7 @@ pub struct RpcResponse {
     statements: u64,
     captured: Option<Vec<String>>,
     hook_refusal: Option<HookRefusal>,
+    approval_request_id: Option<i64>,
 }
 
 impl RpcResponse {
@@ -396,6 +483,11 @@ impl RpcResponse {
     pub fn hook_refusal(&self) -> Option<&HookRefusal> {
         self.hook_refusal.as_ref()
     }
+
+    /// The approval request committed by the admission gate, if dispatch was deferred.
+    pub fn approval_request_id(&self) -> Option<i64> {
+        self.approval_request_id
+    }
 }
 
 /// The JSON-2 core: turns an authenticated call into one unit of work.
@@ -405,6 +497,7 @@ pub struct RpcService {
     config: RpcConfig,
     pending: PendingMethods,
     gates: Vec<Box<dyn Gate>>,
+    attempt_gate: Option<Box<dyn AttemptGate>>,
     #[cfg(feature = "test-faults")]
     commit_fault: Mutex<Option<erp_orm::CommitFault>>,
     /// Replaces the backoff pause while set (RPC-018). Tests only.
@@ -434,6 +527,8 @@ enum Lookup {
 /// Everything decided before the first transaction.
 #[derive(Clone)]
 struct Plan<'a> {
+    assistant: bool,
+    callback: bool,
     route: &'a Route,
     entry: String,
     principal: Principal,
@@ -490,6 +585,7 @@ impl RpcService {
             config,
             pending: PendingMethods::core(),
             gates: Vec::new(),
+            attempt_gate: None,
             #[cfg(feature = "test-faults")]
             commit_fault: Mutex::new(None),
             #[cfg(feature = "test-faults")]
@@ -509,6 +605,13 @@ impl RpcService {
     #[must_use]
     pub fn gate(mut self, gate: impl Gate) -> Self {
         self.gates.push(Box::new(gate));
+        self
+    }
+
+    /// Admit calls with the installed policy before dispatch or idempotency replay.
+    #[must_use]
+    pub fn attempt_gate(mut self, gate: impl AttemptGate) -> Self {
+        self.attempt_gate = Some(Box::new(gate));
         self
     }
 
@@ -551,6 +654,7 @@ impl RpcService {
             attempts: 0,
             statements: 0,
             captured: None,
+            approval_request_id: None,
             hook_refusal: None,
         }
     }
@@ -589,7 +693,8 @@ impl RpcService {
                 };
                 // Credential attempts resolve a newer principal than the preflight caller.
                 // Conceal debug rather than authorizing disclosure with that older resolution.
-                let shown = call.credential.is_none() && self.debug_allowed(principal);
+                let shown =
+                    !call.callback && call.credential.is_none() && self.debug_allowed(principal);
                 let debug_text = if shown {
                     debug.render(&failure)
                 } else {
@@ -608,6 +713,7 @@ impl RpcService {
                         method,
                         uid: principal.map(|p| p.subject().get()),
                         addon: addon.as_deref(),
+                        redact_detail: call.callback,
                     },
                 );
                 RpcResponse {
@@ -619,6 +725,7 @@ impl RpcService {
                     statements: 0,
                     captured: None,
                     // filled only from the hook's own refusal, never from a domain error
+                    approval_request_id: None,
                     hook_refusal: match failure {
                         RpcFailure::Hook(refusal) => Some(refusal),
                         _ => None,
@@ -668,7 +775,12 @@ impl RpcService {
         };
         // 1. the caller (gate 1)
         let principal = match &call.caller {
-            Caller::Principal(p) if p.kind() == PrincipalKind::User => p.clone(),
+            Caller::Principal(p)
+                if p.kind() == PrincipalKind::User
+                    || (call.assistant && p.kind() == PrincipalKind::Agent) =>
+            {
+                p.clone()
+            }
             // only user principals call over RPC until (agent, service, public,
             // link) — and `System` never does
             Caller::Principal(p) => {
@@ -729,6 +841,12 @@ impl RpcService {
         // about names outside its scope and opens no transaction for them
         let mut orm = self.orms.current().map_err(|e| plain(e.into()))?;
         scope_allowlist(&orm, route, &principal).map_err(plain)?;
+        if call.assistant
+            && (assistant::offered(&orm, route).is_none()
+                || crate::PasswordOperation::lookup(route.model(), route.method()).is_some())
+        {
+            return Err(plain(Error::access("This tool is unavailable.").into()));
+        }
         // 2. the body (design note §6.2)
         if call.body.len() as u64 > self.config.body_bytes() {
             return Err(plain(
@@ -808,6 +926,17 @@ impl RpcService {
             }
         };
         let effect = exposed.effect();
+        if call.callback
+            && (effect != Effect::Write
+                || call.credential.is_none()
+                || call.idempotency_key.is_none()
+                || call.assistant
+                || call.attempt_hook.is_some())
+        {
+            return Err(plain(
+                Error::access("Signed callbacks require a credentialed, idempotent write.").into(),
+            ));
+        }
         // This method returns a one-time credential. Never write its plaintext
         // response to the generic idempotency replay store, on any transport.
         if call.idempotency_key.is_some()
@@ -847,6 +976,19 @@ impl RpcService {
         self.gates_check(route, &principal, effect, call.idempotency_key.as_ref())
             .map_err(plain)?;
         // 6. binding (no statement)
+        if call.assistant {
+            let offer = assistant::offered(&orm, route)
+                .ok_or_else(|| plain(Error::access("This tool is unavailable.").into()))?;
+            let schema = assistant::input_schema(offer).map_err(|error| plain(error.into()))?;
+            erp_registry::tool_schema::validate(&schema, &body).map_err(|_| {
+                plain(
+                    ProtocolError::UnprocessableEntity(
+                        "Arguments do not match the offered tool schema.".to_owned(),
+                    )
+                    .into(),
+                )
+            })?;
+        }
         let bound = binding::bind_body(
             route,
             body,
@@ -855,6 +997,17 @@ impl RpcService {
             &call.carried,
         )
         .map_err(plain)?;
+        if call.callback
+            && (!matches!(&bound.context_json, json::Json::Object(values) if values.is_empty())
+                || bound.html_validation.reports())
+        {
+            return Err(plain(
+                Error::validation(
+                    "Signed callbacks do not accept RPC context or validation reports.",
+                )
+                .into(),
+            ));
+        }
         let principal = match &bound.context.allowed_company_ids {
             None => principal,
             Some(ids) => with_companies(&principal, ids).map_err(plain)?,
@@ -937,6 +1090,8 @@ impl RpcService {
                 args: bound.args,
                 context: bound.context.context,
                 gate: &gate,
+                attempt_gate: self.attempt_gate.as_deref(),
+                effect,
                 failure: &failure,
             };
             *attempts = 1;
@@ -985,6 +1140,7 @@ impl RpcService {
                 attempts: 1,
                 statements: 0,
                 captured: None,
+                approval_request_id: None,
                 hook_refusal: None,
             });
         }
@@ -998,6 +1154,8 @@ impl RpcService {
             )
         });
         let plan = Plan {
+            assistant: call.assistant,
+            callback: call.callback,
             route,
             entry: route.entry(),
             binding_digest: call
@@ -1326,6 +1484,13 @@ impl RpcService {
             }
         }
         let work = async {
+            if plan.assistant
+                && !self
+                    .assistant_access(orm, &mut tx, plan.route, &plan.bound.ids, plan.key)
+                    .await?
+            {
+                return Err(Error::access("This tool is unavailable.").into());
+            }
             // resolve user widening against the refreshed transaction binding,
             // within the deadline, before business work. Do not short-circuit group validation.
             let read_selected = if writes {
@@ -1340,6 +1505,7 @@ impl RpcService {
                     Error::programming("read audit selection lost the invoked model metadata")
                 })?;
                 widening
+                    || plan.assistant
                     || model.audit_reads
                     || matches!(
                         plan.principal.kind(),
@@ -1355,14 +1521,14 @@ impl RpcService {
             Err(_) => {
                 // the work future is dropped, its statements ran inside `tx` and are discarded
                 // with it; the failure still leaves its attempt row like every other failure
-                reapply_hook_origin(&mut tx, plan);
+                reapply_transport_origin(&mut tx, plan);
                 trail.evidence = Some(evidence_of(&mut tx, build_call().ok()));
                 return deadline_exceeded(plan, debug);
             }
             Ok(Err(failure)) => {
                 debug.statement = tx.failed_statement().map(str::to_owned);
                 // the method body may have changed the origin before it or the hook failed
-                reapply_hook_origin(&mut tx, plan);
+                reapply_transport_origin(&mut tx, plan);
                 trail.evidence = Some(evidence_of(&mut tx, build_call().ok()));
                 // `Transaction::rollback` never returns `Err`: a failed ROLLBACK detaches the
                 // connection, which rolls back on the server (erp-orm transaction.rs, `discard`)
@@ -1429,14 +1595,38 @@ impl RpcService {
                         trail.read_ok = Some(evidence);
                     }
                 }
+                let (status, body, approval_request_id) = match done.deferred {
+                    Some(error) => {
+                        let id = match error.context() {
+                            Some(Value::Map(context)) => match context.get("approval_request_id") {
+                                Some(Value::Int(id)) if *id > 0 => Some(*id),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let refusal = RpcFailure::Domain(error);
+                        (
+                            refusal.status(),
+                            refusal.body_with_approval(
+                                "",
+                                body_timestamp(),
+                                erp_orm::trace::current_request_id().as_deref(),
+                                id,
+                            ),
+                            id,
+                        )
+                    }
+                    None => (200, done.body, None),
+                };
                 Attempt::Done(RpcResponse {
-                    status: 200,
-                    body: done.body,
+                    status,
+                    body,
                     replayed: false,
                     retry_after: None,
                     attempts: 0,
                     statements: tx.query_count(),
                     captured: plan.capture.then(|| tx.captured().to_vec()),
+                    approval_request_id,
                     hook_refusal: None,
                 })
             }
@@ -1633,6 +1823,39 @@ impl RpcService {
         plan: &Plan<'_>,
         attempt_no: u32,
     ) -> std::result::Result<Work, RpcFailure> {
+        let admission = if let Some(gate) = &self.attempt_gate {
+            gate.check(
+                tx,
+                AttemptGateCall {
+                    model: plan.route.model(),
+                    method: plan.route.method(),
+                    effect: exposed.effect(),
+                    key: plan.key,
+                    request_digest: plan.request_digest.as_ref(),
+                    binding_digest: plan.binding_digest.as_ref(),
+                },
+            )
+            .await?
+        } else if plan.principal.kind() == PrincipalKind::Agent {
+            return Err(Error::access("Agent approval admission is unavailable.").into());
+        } else {
+            AttemptAdmission::Dispatch
+        };
+        if matches!(&admission, AttemptAdmission::KeyRequired) {
+            return Err(InfraError::ApprovalKeyRequired.into());
+        }
+        if let AttemptAdmission::Defer(response) = admission {
+            if exposed.effect() == Effect::Read {
+                return Err(
+                    Error::invariant("A read gate cannot open an approval request.").into(),
+                );
+            }
+            return Ok(Work::Done(Done {
+                body: Vec::new(),
+                claim: None,
+                deferred: Some(response),
+            }));
+        }
         let claim = match (plan.key, plan.request_digest) {
             (Some(key), Some(digest)) => match self.claim(tx, orm, plan, key, &digest).await? {
                 (Claim::Claimed { id }, _) => {
@@ -1645,6 +1868,9 @@ impl RpcService {
             },
             _ => None,
         };
+        if let AttemptAdmission::ReplayOnly(refusal) = admission {
+            return Err(refusal.into());
+        }
         // refused before any transaction otherwise: a hooked call is keyed and claimed here
         let hook = match plan.hook {
             Some(hook) => {
@@ -1686,6 +1912,14 @@ impl RpcService {
         // Stored computes can add sanitation reports while flushing. Finish admission
         // before constructing the response whose bytes are stored with COMMIT.
         tx.flush().await?;
+        if plan.callback {
+            tx.audit_origin(AuditOrigin::InboundCallback)?;
+            return Ok(Work::Done(Done {
+                body: b"null".to_vec(),
+                claim,
+                deferred: None,
+            }));
+        }
         let reports = plan
             .bound
             .html_validation
@@ -1744,7 +1978,11 @@ impl RpcService {
             // the method body may have set another origin: core's is the one recorded
             tx.audit_origin(hook.origin().audit_origin())?;
         }
-        Ok(Work::Done(Done { body, claim }))
+        Ok(Work::Done(Done {
+            body,
+            claim,
+            deferred: None,
+        }))
     }
 
     /// The claim statement (design note §10.3).
@@ -1884,6 +2122,7 @@ impl RpcService {
             attempts: 0,
             statements: 0,
             captured: None,
+            approval_request_id: None,
             hook_refusal: None,
         })
     }
@@ -1915,6 +2154,7 @@ impl RpcService {
 struct Done {
     body: Vec<u8>,
     claim: Option<i64>,
+    deferred: Option<Error>,
 }
 
 enum Work {
@@ -2109,23 +2349,25 @@ fn evidence_of(tx: &mut Transaction, call: Option<AuditCall>) -> AttemptEvidence
 fn attempt_origin(plan: &Plan<'_>) -> AuditOrigin {
     match plan.hook {
         Some(hook) => hook.origin().audit_origin(),
+        None if plan.assistant => AuditOrigin::Mcp,
+        None if plan.callback => AuditOrigin::InboundCallback,
         None => AuditOrigin::Rpc,
     }
 }
 
-/// Before a failed hooked attempt's evidence is taken: the method body may have set another
-/// origin, and the failed-attempt row must carry the hook's. `audit_origin` refuses only a frozen
+/// Before failed-attempt evidence is taken, restore the hook or signed callback origin if the
+/// method body changed it. `audit_origin` refuses only a frozen
 /// buffer (after the commit preamble), which a failure before `COMMIT` never has; if it ever does,
 /// the call's own failure stands and the row keeps the buffer's origin, logged.
-fn reapply_hook_origin(tx: &mut Transaction, plan: &Plan<'_>) {
-    if let Some(hook) = plan.hook
-        && let Err(error) = tx.audit_origin(hook.origin().audit_origin())
+fn reapply_transport_origin(tx: &mut Transaction, plan: &Plan<'_>) {
+    if (plan.hook.is_some() || plan.callback)
+        && let Err(error) = tx.audit_origin(attempt_origin(plan))
     {
         tracing::error!(
             target: "erp::rpc",
             entry = %plan.entry,
             error = %error,
-            "the hook's audit origin could not be applied to a failed attempt"
+            "the transport audit origin could not be applied to a failed attempt"
         );
     }
 }
@@ -2155,6 +2397,7 @@ fn clone_failure(failure: &RpcFailure) -> RpcFailure {
 /// and ids only: never argument values, bodies, headers, cookies or credentials.
 #[derive(Default)]
 struct FailureLog<'a> {
+    redact_detail: bool,
     request_id: Option<&'a str>,
     model: Option<&'a str>,
     method: Option<&'a str>,
@@ -2174,6 +2417,15 @@ const LOG_MESSAGE_CHARS: usize = 300;
 /// failed call; a successful call is not logged. The message is the one the client already
 /// received (database errors concealed), cut and written escaped so it cannot split the line.
 fn log_failure(failure: &RpcFailure, call: &FailureLog<'_>) {
+    if call.redact_detail {
+        tracing::warn!(
+            target: "erp::rpc",
+            status = failure.status(),
+            request_id = call.request_id,
+            "signed callback call refused"
+        );
+        return;
+    }
     // the hook's code and kind are for the operator; its message may name proposal details and
     // a concealed refusal's body says nothing of it, so the message is never logged
     if let RpcFailure::Hook(refusal) = failure {

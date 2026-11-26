@@ -103,7 +103,9 @@ impl From<WireMajor> for u8 {
     }
 }
 object!(/// Signed anonymous login-page data, embedded as escaped JSON.
-    LoginPage { csrf: String, database: String, redirect: String, #[serde(deserialize_with="required_nullable")] error: Option<String> });
+    LoginPage { csrf: String, database: String, redirect: String, #[serde(deserialize_with="required_nullable")] error: Option<String>,
+        #[serde(default, deserialize_with="present_optional", skip_serializing_if = "Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] external_label: Option<String>,
+        #[serde(default, deserialize_with="present_optional", skip_serializing_if = "Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] can_link_external: Option<bool> });
 object!(/// Authenticated, authorized no-store shell bootstrap.
     Bootstrap { wire_major: WireMajor, registry_version: String, asset_version: String,
         identity: Identity, companies: Vec<Company>, current_company_id: WireId,
@@ -1691,7 +1693,17 @@ impl LoginPage {
             database,
             redirect,
             error,
+            external_label: None,
+            can_link_external: None,
         }
+    }
+
+    /// Publish a configured external sign-in option. Linking is available only with a native session.
+    #[must_use]
+    pub fn with_external_provider(mut self, label: String, can_link: bool) -> Self {
+        self.external_label = Some(label);
+        self.can_link_external = Some(can_link);
+        self
     }
 }
 

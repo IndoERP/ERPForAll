@@ -26,6 +26,19 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
     let violated = db.constraint().map(str::to_owned);
     let model = db.table().and_then(|t| registry.model_by_table(t));
     let state = Some(code.code().to_owned());
+    if (code == SqlState::FOREIGN_KEY_VIOLATION || code == SqlState::RESTRICT_VIOLATION)
+        && matches!(
+            db.constraint(),
+            Some("erp_record_protection_binding" | "erp_record_protection_target")
+        )
+    {
+        return Error::database(
+            ErrorKind::Validation,
+            state,
+            "An addon protects this record from deletion or external ID changes.",
+            err,
+        );
+    }
     // an insert beyond the partition window of a partitioned model (design §7.6)
     if let Some(message) = crate::partition::missing_partition_message(model, db) {
         return Error::database(ErrorKind::Database, state, message, err);

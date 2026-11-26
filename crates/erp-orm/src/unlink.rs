@@ -135,9 +135,8 @@ pub(crate) async fn unlink_records(tx: &mut Transaction, records: &Records) -> R
     outcome
 }
 
-/// Admission is shared by public and directly dispatched base unlink. It is structural and
-/// sends no query. An opted-in root's FK tombstone covers physical cascade/set-null effects;
-/// other event-relevant relation/ancillary effects keep their explicit refusal.
+/// Admission is shared by public and directly dispatched base unlink. Structural checks keep
+/// unsupported ancillary operations from reaching the physical FK and relation capture paths.
 fn check_delete_capture(tx: &mut Transaction, records: &Records) -> Result<()> {
     tx.check_records(records)?;
     if records.is_empty() {
@@ -174,7 +173,9 @@ fn delete_capture_relevant(tx: &Transaction, root: ModelId) -> Result<bool> {
             return Ok(true);
         }
         for &(owner, field) in tx.shared.relations.x2many_to(model) {
-            if tx.capture_relevant(owner, field) {
+            let spec = tx.registry().model_by_id(owner);
+            if (spec.eventful && spec.field_by_id(field).store) || tx.capture_relevant(owner, field)
+            {
                 return Ok(true);
             }
         }
@@ -219,7 +220,6 @@ fn delete_capture_relevant(tx: &Transaction, root: ModelId) -> Result<bool> {
 
 fn refuse_uncaptured_delete_effects(tx: &Transaction, root: ModelId) -> Result<()> {
     let registry = &tx.shared.registry;
-    let covered = registry.model_by_id(root).eventful;
     let ancillary = |model: ModelId| {
         Error::programming(format!(
             "a later release S8: event-relevant ancillary delete effects on model '{}' are not implemented",
@@ -245,12 +245,6 @@ fn refuse_uncaptured_delete_effects(tx: &Transaction, root: ModelId) -> Result<(
         if !seen.insert(model) {
             continue;
         }
-        for &(owner, _) in tx.shared.relations.x2many_to(model) {
-            crate::event_namespace::refuse_uncaptured_mutation(
-                registry.model_by_id(owner),
-                "relation",
-            )?;
-        }
         for &(owner, field) in tx.shared.relations.referencing(model) {
             let spec = registry.model_by_id(owner);
             let field = spec.field_by_id(field);
@@ -266,19 +260,12 @@ fn refuse_uncaptured_delete_effects(tx: &Transaction, root: ModelId) -> Result<(
                     ondelete: OnDelete::Cascade,
                     ..
                 } => {
-                    if !covered {
-                        crate::event_namespace::refuse_uncaptured_mutation(spec, "unlink")?;
-                    }
                     pending.push(owner);
                 }
                 FieldType::Many2one {
                     ondelete: OnDelete::SetNull,
                     ..
-                } => {
-                    if !covered {
-                        crate::event_namespace::refuse_uncaptured_mutation(spec, "unlink")?;
-                    }
-                }
+                } => {}
                 FieldType::Many2one {
                     ondelete: OnDelete::Restrict,
                     ..
@@ -372,17 +359,33 @@ async fn unlink_checked(
         tx.langs_dirty = true;
     }
 
-    let (mut affected, cascaded) = tx.deletion_dependents(model, &ids).await?;
+    // Lock the actual roots before traversing FK references. An insert of a new referencing
+    // row cannot slip in after its target is locked, and PostgreSQL checks the snapshot against
+    // concurrent FK changes. The capture walk also locks the descendants before following them.
+    let known_roots = if relevant {
+        let sql = format!(
+            "SELECT id FROM {} WHERE id=ANY($1::int8[]) ORDER BY id FOR UPDATE",
+            erp_sql::quote(&spec.table)
+        );
+        let values: Vec<i64> = ids.iter().map(|id| id.get()).collect();
+        decode_ids(&tx.query_orm(&sql, &[&values]).await?)?
+    } else {
+        ids.clone()
+    };
+    let (mut affected, cascaded) = tx
+        .deletion_dependents(model, &known_roots, relevant)
+        .await?;
     affected.append(&mut property_affected);
-    let sql = if spec.eventful {
+    let sql = if relevant {
         erp_sql::relational::delete_records_returning(&spec.table)
     } else {
         erp_sql::relational::delete_records(&spec.table)
     };
+    let mut confirmed = 0;
     for chunk in ids.chunks(erp_sql::relational::DELETE_CHUNK) {
         let values: Vec<i64> = chunk.iter().map(|i| i.get()).collect();
         // Followed effects are forgotten below, without a statement scan (C3-R4).
-        if spec.eventful {
+        if relevant {
             let rows = tx.query_orm(&sql, &[&values]).await?;
             let allowed: FxHashSet<i64> = values.iter().copied().collect();
             let mut returned = FxHashSet::default();
@@ -400,6 +403,10 @@ async fn unlink_checked(
                         "outbox: DELETE returned an unexpected or duplicate id",
                     ));
                 }
+            }
+            confirmed += returned.len();
+            if !spec.eventful {
+                continue;
             }
             let mut actual: Vec<i64> = returned.into_iter().collect();
             actual.sort_unstable();
@@ -430,6 +437,15 @@ async fn unlink_checked(
         } else {
             tx.execute_orm(&sql, &[&values]).await?;
         }
+    }
+    if relevant {
+        if confirmed != known_roots.len() {
+            return Err(Error::programming(
+                "outbox: DELETE changed the locked root set",
+            ));
+        }
+        tx.capture_delete_effects(model, &known_roots, &cascaded, &affected)
+            .await?;
     }
     // The references the deleted rows held themselves ended with them: their link rows go, only
     // once the rows are gone (a link removed while its entry stays would leave that reference
@@ -644,10 +660,11 @@ impl Transaction {
         let shared = Arc::clone(&self.shared);
         let graph = &shared.graph;
         let spec = shared.registry.model_by_id(model);
-        if spec
-            .fields
-            .iter()
-            .any(|f| graph.has_dependents((model, f.id)))
+        if spec.eventful
+            || spec
+                .fields
+                .iter()
+                .any(|f| graph.has_dependents((model, f.id)))
         {
             return true;
         }
@@ -655,7 +672,10 @@ impl Transaction {
             .relations
             .x2many_to(model)
             .iter()
-            .any(|k| graph.has_dependents(*k))
+            .any(|(owner, field)| {
+                graph.has_dependents((*owner, *field))
+                    || shared.registry.model_by_id(*owner).eventful
+            })
         {
             return true;
         }
@@ -673,7 +693,9 @@ impl Transaction {
                 FieldType::Many2one {
                     ondelete: OnDelete::SetNull,
                     ..
-                } if graph.has_dependents((rm, rf)) => return true,
+                } if graph.has_dependents((rm, rf)) || shared.registry.model_by_id(rm).eventful => {
+                    return true;
+                }
                 FieldType::Many2one {
                     ondelete: OnDelete::Cascade,
                     ..
@@ -684,6 +706,100 @@ impl Transaction {
         false
     }
 
+    async fn deletion_impact_ids(
+        &mut self,
+        select: &str,
+        values: &[i64],
+        lock: bool,
+    ) -> Result<Vec<RecId>> {
+        if !lock {
+            return decode_ids(&self.query(select, &[&values]).await?);
+        }
+        let limit = crate::outbox::MAX_INDIRECT_IDS;
+        let sql = format!("{select} ORDER BY 1 LIMIT {} FOR UPDATE", limit + 1);
+        let rows = self.query_orm(&sql, &[&values]).await?;
+        if rows.len() > limit {
+            return Err(crate::outbox::limit(
+                "delete effect exceeds 16384 captured record ids",
+            ));
+        }
+        decode_ids(&rows)
+    }
+
+    async fn capture_delete_effects(
+        &mut self,
+        root: ModelId,
+        root_ids: &[RecId],
+        cascaded: &FxHashMap<ModelId, FxHashSet<RecId>>,
+        affected: &[Affected],
+    ) -> Result<()> {
+        let registry = Arc::clone(self.registry());
+        let root_ids: FxHashSet<_> = root_ids.iter().copied().collect();
+        let mut removed = std::collections::BTreeMap::new();
+        let mut models: Vec<_> = cascaded.keys().copied().collect();
+        models.sort_unstable();
+        for model in models {
+            let spec = registry.model_by_id(model);
+            if !spec.eventful {
+                continue;
+            }
+            let candidates = &cascaded[&model];
+            let sql = format!(
+                "SELECT id FROM {} WHERE id=ANY($1::int8[])",
+                erp_sql::quote(&spec.table)
+            );
+            let ids: Vec<i64> = candidates.iter().map(|id| id.get()).collect();
+            let survivors: FxHashSet<_> = decode_ids(&self.query_orm(&sql, &[&ids]).await?)?
+                .into_iter()
+                .collect();
+            let gone: FxHashSet<_> = candidates.difference(&survivors).copied().collect();
+            self.capture_indirect_change(
+                model,
+                crate::outbox::Kind::Unlink,
+                Vec::new(),
+                gone.iter().copied().collect(),
+            )?;
+            removed.insert(model, gone);
+        }
+        let mut changes = std::collections::BTreeMap::<_, FxHashSet<_>>::new();
+        let mut total = 0;
+        for effect in affected {
+            let spec = registry.model_by_id(effect.model);
+            let field = spec.field_by_id(effect.field);
+            if !spec.eventful || !field.store || field.company_dependent {
+                continue;
+            }
+            let ids = changes.entry((effect.model, effect.field)).or_default();
+            for id in &effect.ids {
+                if (effect.model == root && root_ids.contains(id))
+                    || removed
+                        .get(&effect.model)
+                        .is_some_and(|gone| gone.contains(id))
+                {
+                    continue;
+                }
+                if ids.insert(*id) {
+                    total += 1;
+                    if total > crate::outbox::MAX_INDIRECT_IDS {
+                        return Err(crate::outbox::limit(
+                            "delete effect exceeds 16384 captured record ids",
+                        ));
+                    }
+                }
+            }
+        }
+        for ((model, field), ids) in changes {
+            let name = registry.model_by_id(model).field_by_id(field).name;
+            self.capture_indirect_change(
+                model,
+                crate::outbox::Kind::Write,
+                vec![name.to_owned()],
+                ids.into_iter().collect(),
+            )?;
+        }
+        Ok(())
+    }
+
     /// The fields a deletion of `ids` changes that something depends on, with the records
     /// concerned, read before the `DELETE` (module documentation); and the rows the database
     /// will delete by cascade where that matters, per model. The dependents of the deleted
@@ -692,6 +808,7 @@ impl Transaction {
         &mut self,
         model: ModelId,
         ids: &[RecId],
+        capture: bool,
     ) -> Result<(Vec<Affected>, FxHashMap<ModelId, FxHashSet<RecId>>)> {
         let shared = Arc::clone(&self.shared);
         let registry = &shared.registry;
@@ -701,6 +818,7 @@ impl Transaction {
         let mut known: FxHashMap<ModelId, FxHashSet<RecId>> = FxHashMap::default();
         known.entry(model).or_default().extend(ids.iter().copied());
         let mut queue: Vec<(ModelId, Vec<RecId>)> = vec![(model, ids.to_vec())];
+        let mut seen_rows = 0_usize;
         while let Some((m, gone)) = queue.pop() {
             let spec = registry.model_by_id(m);
             let values: Vec<i64> = gone.iter().map(|i| i.get()).collect();
@@ -723,10 +841,11 @@ impl Transaction {
                     FieldType::Many2one {
                         ondelete: OnDelete::SetNull,
                         ..
-                    } if graph.has_dependents((rm, rf)) => {
+                    } if graph.has_dependents((rm, rf))
+                        || capture && registry.model_by_id(rm).eventful =>
+                    {
                         let sql = erp_sql::relational::ids_referencing(table, field.name);
-                        let rows = self.query(&sql, &[&values]).await?;
-                        let found = decode_ids(&rows)?;
+                        let found = self.deletion_impact_ids(&sql, &values, capture).await?;
                         if !found.is_empty() {
                             out.push(Affected {
                                 model: rm,
@@ -742,13 +861,22 @@ impl Transaction {
                         ..
                     } if self.cascade_matters(rm, &mut FxHashSet::default()) => {
                         let sql = erp_sql::relational::ids_referencing(table, field.name);
-                        let rows = self.query(&sql, &[&values]).await?;
                         let seen = known.entry(rm).or_default();
-                        let fresh: Vec<RecId> = decode_ids(&rows)?
+                        let fresh: Vec<RecId> = self
+                            .deletion_impact_ids(&sql, &values, capture)
+                            .await?
                             .into_iter()
                             .filter(|id| seen.insert(*id))
                             .collect();
                         if !fresh.is_empty() {
+                            if capture {
+                                seen_rows = seen_rows.saturating_add(fresh.len());
+                                if seen_rows > crate::outbox::MAX_INDIRECT_IDS {
+                                    return Err(crate::outbox::limit(
+                                        "cascade exceeds 16384 captured record ids",
+                                    ));
+                                }
+                            }
                             cascaded
                                 .entry(rm)
                                 .or_default()
@@ -763,10 +891,11 @@ impl Transaction {
             // stored inverse field
             let mut owner_reads: FxHashMap<FieldId, InverseOwners> = FxHashMap::default();
             for &(xm, xf) in shared.relations.x2many_to(m) {
-                if !graph.has_dependents((xm, xf)) {
+                let owner_spec = registry.model_by_id(xm);
+                let eventful = capture && owner_spec.eventful && owner_spec.field_by_id(xf).store;
+                if !graph.has_dependents((xm, xf)) && !eventful {
                     continue;
                 }
-                let owner_spec = registry.model_by_id(xm);
                 let sql = match &owner_spec.field_by_id(xf).ty {
                     FieldType::One2many { inverse, .. } => match spec.field(inverse) {
                         Some(inv) if inv.has_column() => {
@@ -829,6 +958,15 @@ impl Transaction {
                     FieldType::Many2many {
                         relation: Some(rel),
                         ..
+                    } if eventful => format!(
+                        "SELECT {} FROM {} WHERE {} = ANY($1::int8[])",
+                        erp_sql::quote(&rel.column1),
+                        erp_sql::quote(&rel.table),
+                        erp_sql::quote(&rel.column2)
+                    ),
+                    FieldType::Many2many {
+                        relation: Some(rel),
+                        ..
                     } => erp_sql::relational::m2m_owners(erp_sql::relational::Relation {
                         table: &rel.table,
                         column1: &rel.column1,
@@ -836,8 +974,7 @@ impl Transaction {
                     }),
                     _ => continue,
                 };
-                let rows = self.query(&sql, &[&values]).await?;
-                let found = decode_ids(&rows)?;
+                let found = self.deletion_impact_ids(&sql, &values, eventful).await?;
                 if !found.is_empty() {
                     out.push(Affected {
                         model: xm,

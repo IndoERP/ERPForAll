@@ -30,6 +30,8 @@ use super::types::BlobHandle;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ContentLookup {
+    /// The attachment links to a URL. Only the HTTP composition may authorize a redirect.
+    Url(String),
     /// The caller may read it and it has stored content.
     Found(RouteContent),
     /// No such attachment, a refused read, a URL attachment or one without stored content: one
@@ -81,6 +83,22 @@ pub enum ContentOpenError {
 pub type ContentStream = Pin<Box<dyn AsyncRead + Send>>;
 
 impl RouteContent {
+    /// Prepare the optional store handoff for this already authorized immutable object.
+    pub async fn download_handoff(
+        &self,
+        media_type: &str,
+        attachment_disposition: &str,
+        allow_presign: bool,
+    ) -> std::result::Result<Option<erp_sdk::blob::DownloadHandoff>, ContentOpenError> {
+        self.handle
+            .download_handoff(media_type, attachment_disposition, allow_presign)
+            .await
+            .map_err(|error| match error {
+                BlobError::NotFound { .. } => ContentOpenError::Missing,
+                other => ContentOpenError::Failed(blob_error(other)),
+            })
+    }
+
     /// The attachment's id.
     pub fn attachment_id(&self) -> i64 {
         self.handle.attachment_id()
@@ -99,6 +117,11 @@ impl RouteContent {
     /// The content size in bytes, from the blob row (no byte is fetched).
     pub fn size(&self) -> u64 {
         self.handle.size()
+    }
+
+    /// SHA-256 of the representation served by this handle.
+    pub fn sha256(&self) -> &[u8; 32] {
+        self.handle.sha256()
     }
 
     pub fn digest(&self) -> &str {
@@ -155,6 +178,19 @@ impl AsyncRead for Admitted {
     }
 }
 
+/// Whether this principal may address binary fields of a model through the content route.
+/// Record and field checks are performed by the subsequent bounded ORM read.
+pub async fn field_model_allowed(tx: &mut Transaction, model: &str) -> Result<bool> {
+    if access::DENIED_PARENT_MODELS.contains(&model) {
+        return Ok(false);
+    }
+    let env = tx.env();
+    if env.su() {
+        return Ok(true);
+    }
+    tx.has_group(&env, "base.group_user").await
+}
+
 /// Resolve attachment `id` for the content route under the caller's principal (`tx`'s
 /// environment): the read check first, then the content columns, then the store row.
 ///
@@ -163,6 +199,16 @@ impl AsyncRead for Admitted {
 /// Database errors, an unconfigured attachment store, or a store row that no longer matches its
 /// store (fingerprint); never an access error (a refused read is [`ContentLookup::NotFound`]).
 pub async fn lookup_content(tx: &mut Transaction, id: i64) -> Result<ContentLookup> {
+    match lookup_route(tx, id).await? {
+        ContentLookup::Url(_) => Ok(ContentLookup::NotFound),
+        content => Ok(content),
+    }
+}
+
+/// Resolve a stored blob or URL after the same parent and field authorization.
+/// # Errors
+/// Propagates the database and storage failures of [`lookup_content`].
+pub async fn lookup_route(tx: &mut Transaction, id: i64) -> Result<ContentLookup> {
     if id <= 0 {
         return Ok(ContentLookup::NotFound);
     }
@@ -181,7 +227,7 @@ pub async fn lookup_content(tx: &mut Transaction, id: i64) -> Result<ContentLook
     }
     let rows = tx
         .query(
-            "SELECT type, blob_id, name, mimetype, checksum FROM ir_attachment WHERE id = $1",
+            "SELECT type, blob_id, name, mimetype, checksum, url FROM ir_attachment WHERE id = $1",
             &[&id],
         )
         .await?;
@@ -196,10 +242,9 @@ pub async fn lookup_content(tx: &mut Transaction, id: i64) -> Result<ContentLook
     let name: Option<String> = row.try_get(2).map_err(|e| read(&e))?;
     let mimetype: Option<String> = row.try_get(3).map_err(|e| read(&e))?;
     let checksum: Option<String> = row.try_get(4).map_err(|e| read(&e))?;
-    // a URL attachment's redirect is the `redirect` class and a later slice; it is not served
-    // here and its absence is never reported as missing content
     if kind.as_deref() == Some("url") {
-        return Ok(ContentLookup::NotFound);
+        let url: Option<String> = row.try_get(5).map_err(|e| read(&e))?;
+        return Ok(url.map_or(ContentLookup::NotFound, ContentLookup::Url));
     }
     let Some(blob) = blob else {
         return Ok(ContentLookup::NotFound);
