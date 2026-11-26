@@ -51,9 +51,15 @@ use crate::warehouse_setup::without_defaults;
 /// from the completed source's destination. Other origin edges require chained reservation.
 const READ_CANDIDATES: &str = "SELECT m.id, m.company_id, m.product_id, m.location_id, \
        m.location_dest_id, m.uom_id, m.product_uom_qty - m.quantity, \
-       m.product_qty - m.quantity_product_uom, m.procure_method = 'make_to_order', \
-       EXISTS (SELECT 1 FROM stock_move_move_rel r WHERE r.move_dest_id = m.id \
-               AND (source.id IS NULL OR r.move_orig_id <> source.id)), \
+       m.product_qty - m.quantity_product_uom, \
+       m.procure_method = 'make_to_order' \
+         AND NOT EXISTS (SELECT 1 FROM stock_move_move_rel r \
+                         JOIN stock_move o ON o.id = r.move_orig_id \
+                         WHERE r.move_dest_id = m.id AND o.state = 'done'), \
+       EXISTS (SELECT 1 FROM stock_move_move_rel r \
+               JOIN stock_move o ON o.id = r.move_orig_id \
+               WHERE r.move_dest_id = m.id AND o.state NOT IN ('done', 'cancel') \
+                 AND (source.id IS NULL OR r.move_orig_id <> source.id)), \
        l.usage IN ('supplier', 'customer', 'inventory', 'production') OR NOT pt.is_storable \
      FROM stock_move m \
      LEFT JOIN stock_picking ret ON ret.id=m.picking_id AND ret.company_id=m.company_id \

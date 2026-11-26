@@ -614,9 +614,17 @@ async fn journal_and_default_account_agree_on_the_foreign_currency_body() {
     );
     let journals = records(&tx, main, "account.journal");
 
-    // a bank journal needs its default account until the account is created for it
-    let no_account = create(&journals, &mut tx, vec![journal_vals("Bank", "bank")]).await;
-    assert_refused(no_account, "needs a default account");
+    // a new bank journal auto-creates its default liquidity account when none is provided
+    let auto_bank = create(&journals, &mut tx, vec![journal_vals("Auto Bank", "bank")])
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            auto_bank.cell(&mut tx, "default_account_id").await.unwrap(),
+            Cell::Id(_)
+        ),
+        "bank journal should auto-create its default liquidity account"
+    );
 
     // ... also when a journal becomes a bank journal, or a bank journal loses its account
     let general = create(&journals, &mut tx, vec![journal_vals("Misc", "general")])

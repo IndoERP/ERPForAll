@@ -13,6 +13,43 @@ pub(crate) fn db(err: impl std::fmt::Display) -> Error {
     Error::db(format!("Consolidation query failed: {err}"))
 }
 
+pub(crate) use crate::moves::post::strip_default_context;
+
+/// Ensures the caller is authorized for every legal entity (company) in `group_id`.
+pub(crate) async fn ensure_group_company_access(
+    tx: &mut Transaction,
+    env: &Env,
+    group_id: i64,
+) -> Result<()> {
+    if env.su() {
+        return Ok(());
+    }
+    let unit_rows = tx
+        .query(
+            "SELECT company_id::int8 FROM account_consolidation_unit WHERE group_id = $1",
+            &[&group_id],
+        )
+        .await?;
+    if unit_rows.is_empty() {
+        return Ok(());
+    }
+    let allowed: std::collections::BTreeSet<i64> = tx
+        .companies(env)
+        .await?
+        .into_iter()
+        .map(|c| c.get())
+        .collect();
+    for row in unit_rows {
+        let cid: i64 = row.try_get(0).map_err(db)?;
+        if !allowed.contains(&cid) {
+            return Err(Error::access(format!(
+                "You do not have access to member company {cid} in this consolidation group."
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Extends `res.partner` with a Trading Partner Company link for automatic intercompany
 /// transaction identification and elimination across group entities.
 #[extend(ResPartner, addon = "account")]
@@ -41,7 +78,7 @@ pub struct ResPartnerTradingPartner {
     )]
 )]
 pub struct AccountConsolidationGroup {
-    /// Group name (e.g. "IndoERP Holding Consolidated").
+    /// Group name (e.g. "Group Holding Consolidated").
     #[field(char, required = true, string = "Group Name")]
     pub name: Option<Arc<str>>,
     /// Short group code (e.g. "GRP-HOLDING").
@@ -313,6 +350,53 @@ const DEFAULT_FS_ITEMS: &[(&str, &str, i32, &str, &str, &str)] = &[
 
 #[methods(AccountConsolidationGroup, addon = "account")]
 impl AccountConsolidationGroup {
+    #[constrains("ic_tolerance")]
+    async fn _check_ic_tolerance(
+        this: &RecordSet<AccountConsolidationGroup>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        for tol in this
+            .mapped(tx, AccountConsolidationGroup::IC_TOLERANCE)
+            .await?
+        {
+            if tol < Decimal::ZERO {
+                return Err(Error::validation(
+                    "IC Variance Tolerance cannot be negative.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationGroup>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            for gid in this.as_records().ids() {
+                ensure_group_company_access(tx, this.env(), gid).await?;
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationGroup>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            for gid in this.as_records().ids() {
+                ensure_group_company_access(tx, this.env(), gid).await?;
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     #[method(override)]
     async fn default_get(
         this: &RecordSet<AccountConsolidationGroup>,
@@ -332,7 +416,8 @@ impl AccountConsolidationGroup {
                     &[&cid],
                 )
                 .await?;
-            if let Some(cur) = rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+            if let Some(row) = rows.first() {
+                let cur: i64 = row.try_get(0).map_err(db)?;
                 values.insert("currency_id".to_owned(), Value::Int(cur));
             }
         }
@@ -349,7 +434,9 @@ impl AccountConsolidationGroup {
     ) -> Result<()> {
         let grp = this.ensure_one()?;
         grp.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let gid = grp.as_records().ids()[0];
+        ensure_group_company_access(tx, grp.env(), gid).await?;
 
         let existing: std::collections::BTreeSet<String> = tx
             .query(
@@ -378,7 +465,7 @@ impl AccountConsolidationGroup {
         }
 
         if !vals_list.is_empty() {
-            let clean_env = grp.env().with_context_replaced(erp_sdk::Context::default());
+            let clean_env = strip_default_context(grp.env());
             clean_env
                 .records("account.consolidation.account")?
                 .create(tx, vals_list)
@@ -398,7 +485,9 @@ impl AccountConsolidationGroup {
     ) -> Result<()> {
         let grp = this.ensure_one()?;
         grp.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let gid = grp.as_records().ids()[0];
+        ensure_group_company_access(tx, grp.env(), gid).await?;
 
         // Ensure default chart exists if empty.
         let fs_rows = tx
@@ -454,8 +543,13 @@ impl AccountConsolidationGroup {
                     "SELECT a.id::int8, a.account_type::text \
                      FROM account_account a \
                      JOIN account_account_res_company_rel rel ON rel.account_account_id = a.id \
-                     WHERE rel.res_company_id = $1 AND a.active = true \
+                     WHERE rel.res_company_id = $1 \
                        AND a.account_type <> 'off_balance' \
+                       AND (a.active = true OR EXISTS ( \
+                            SELECT 1 FROM account_move_line l \
+                            WHERE l.account_id = a.id AND l.company_id = $1 \
+                              AND l.parent_state = 'posted' \
+                       )) \
                      ORDER BY a.id",
                     &[&company_id],
                 )
@@ -469,7 +563,7 @@ impl AccountConsolidationGroup {
                 let fs_code = if Some(acc_id) == inv_acc_id {
                     "1550"
                 } else {
-                    default_fs_code_for_account_type(&atype)
+                    default_fs_code_for_account_type(&atype)?
                 };
                 if let Some(&fs_id) = fs_map.get(fs_code) {
                     let mut v = RawVals::new();
@@ -483,7 +577,7 @@ impl AccountConsolidationGroup {
         }
 
         if !vals_list.is_empty() {
-            let clean_env = grp.env().with_context_replaced(erp_sdk::Context::default());
+            let clean_env = strip_default_context(grp.env());
             clean_env
                 .records("account.consolidation.account.map")?
                 .create(tx, vals_list)
@@ -494,22 +588,25 @@ impl AccountConsolidationGroup {
     }
 }
 
-pub(crate) fn default_fs_code_for_account_type(account_type: &str) -> &'static str {
+pub(crate) fn default_fs_code_for_account_type(account_type: &str) -> Result<&'static str> {
     match account_type {
-        "asset_cash" => "1100",
-        "asset_receivable" => "1200",
-        "asset_current" | "asset_prepayments" => "1300",
-        "asset_fixed" | "asset_non_current" => "1500",
-        "liability_payable" => "2100",
-        "liability_current" | "liability_credit_card" => "2200",
-        "liability_non_current" => "2500",
-        "equity" => "3100",
-        "equity_unaffected" => "3200",
-        "income" => "4100",
-        "income_other" => "4200",
-        "expense_direct_cost" => "5100",
-        "expense_depreciation" => "5300",
-        _ => "5200",
+        "asset_cash" => Ok("1100"),
+        "asset_receivable" => Ok("1200"),
+        "asset_current" | "asset_prepayments" => Ok("1300"),
+        "asset_fixed" | "asset_non_current" => Ok("1500"),
+        "liability_payable" => Ok("2100"),
+        "liability_current" | "liability_credit_card" => Ok("2200"),
+        "liability_non_current" => Ok("2500"),
+        "equity" => Ok("3100"),
+        "equity_unaffected" => Ok("3200"),
+        "income" => Ok("4100"),
+        "income_other" => Ok("4200"),
+        "expense_direct_cost" => Ok("5100"),
+        "expense" | "expense_other" => Ok("5200"),
+        "expense_depreciation" => Ok("5300"),
+        other => Err(Error::validation(format!(
+            "Unsupported account type '{other}' for default Group FS mapping; add an explicit consolidation account mapping."
+        ))),
     }
 }
 
@@ -592,8 +689,15 @@ pub struct AccountConsolidationUnit {
 
 #[methods(AccountConsolidationUnit, addon = "account")]
 impl AccountConsolidationUnit {
-    #[constrains("ownership_pct")]
-    async fn _check_ownership(
+    #[constrains(
+        "ownership_pct",
+        "is_parent",
+        "group_id",
+        "company_id",
+        "investment_account_id",
+        "consolidation_method"
+    )]
+    async fn _check_unit_integrity(
         this: &RecordSet<AccountConsolidationUnit>,
         tx: &mut Transaction,
     ) -> Result<()> {
@@ -606,6 +710,57 @@ impl AccountConsolidationUnit {
                     "Consolidation ownership percentage must be > 0 and <= 100.",
                 ));
             }
+        }
+        for method in this
+            .mapped(tx, AccountConsolidationUnit::CONSOLIDATION_METHOD)
+            .await?
+        {
+            if !matches!(method.as_deref(), Some("full" | "proportional" | "equity")) {
+                return Err(Error::validation(format!(
+                    "Unsupported consolidation method {:?}.",
+                    method
+                )));
+            }
+        }
+        tx.flush().await?;
+        let ids: Vec<i64> = this.as_records().ids().to_vec();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let multi_parent = tx
+            .query(
+                "SELECT group_id::int8, count(*)::int8 \
+                 FROM account_consolidation_unit \
+                 WHERE group_id IN (SELECT DISTINCT group_id FROM account_consolidation_unit WHERE id = ANY($1::int8[])) \
+                   AND COALESCE(is_parent, false) = true \
+                 GROUP BY group_id HAVING count(*) > 1 LIMIT 1",
+                &[&ids],
+            )
+            .await?;
+        if !multi_parent.is_empty() {
+            return Err(Error::validation(
+                "A Consolidation Group can have at most one Parent Entity.",
+            ));
+        }
+        let bad_inv = tx
+            .query(
+                "SELECT u.id::int8 \
+                 FROM account_consolidation_unit u \
+                 WHERE u.id = ANY($1::int8[]) \
+                   AND u.investment_account_id IS NOT NULL \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM account_account_res_company_rel rel \
+                       WHERE rel.account_account_id = u.investment_account_id \
+                         AND rel.res_company_id = u.company_id \
+                   ) \
+                 LIMIT 1",
+                &[&ids],
+            )
+            .await?;
+        if !bad_inv.is_empty() {
+            return Err(Error::validation(
+                "Investment in Subsidiary Account must belong to the Consolidation Unit's company.",
+            ));
         }
         Ok(())
     }
@@ -698,7 +853,50 @@ pub struct AccountConsolidationAccount {
 }
 
 #[methods(AccountConsolidationAccount, addon = "account")]
-impl AccountConsolidationAccount {}
+impl AccountConsolidationAccount {
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationAccount>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let group_ids: std::collections::BTreeSet<i64> = this
+                .mapped(tx, AccountConsolidationAccount::GROUP_ID)
+                .await?
+                .into_iter()
+                .flatten()
+                .map(|id| id.get())
+                .collect();
+            for gid in group_ids {
+                ensure_group_company_access(tx, this.env(), gid).await?;
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationAccount>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let group_ids: std::collections::BTreeSet<i64> = this
+                .mapped(tx, AccountConsolidationAccount::GROUP_ID)
+                .await?
+                .into_iter()
+                .flatten()
+                .map(|id| id.get())
+                .collect();
+            for gid in group_ids {
+                ensure_group_company_access(tx, this.env(), gid).await?;
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+}
 
 /// `account.consolidation.account.map`: maps a local legal entity GL account into a Group FS Item.
 #[model(
@@ -753,4 +951,51 @@ pub struct AccountConsolidationAccountMap {
 }
 
 #[methods(AccountConsolidationAccountMap, addon = "account")]
-impl AccountConsolidationAccountMap {}
+impl AccountConsolidationAccountMap {
+    #[constrains("group_id", "company_id", "account_id", "consolidation_account_id")]
+    async fn _check_mapping_integrity(
+        this: &RecordSet<AccountConsolidationAccountMap>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        tx.flush().await?;
+        let ids: Vec<i64> = this.as_records().ids().to_vec();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let bad_fs = tx
+            .query(
+                "SELECT m.id::int8 \
+                 FROM account_consolidation_account_map m \
+                 JOIN account_consolidation_account a ON a.id = m.consolidation_account_id \
+                 WHERE m.id = ANY($1::int8[]) AND a.group_id <> m.group_id \
+                 LIMIT 1",
+                &[&ids],
+            )
+            .await?;
+        if !bad_fs.is_empty() {
+            return Err(Error::validation(
+                "Group FS Item must belong to the same Consolidation Group as the account mapping.",
+            ));
+        }
+        let bad_acc = tx
+            .query(
+                "SELECT m.id::int8 \
+                 FROM account_consolidation_account_map m \
+                 WHERE m.id = ANY($1::int8[]) \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM account_account_res_company_rel rel \
+                       WHERE rel.account_account_id = m.account_id \
+                         AND rel.res_company_id = m.company_id \
+                   ) \
+                 LIMIT 1",
+                &[&ids],
+            )
+            .await?;
+        if !bad_acc.is_empty() {
+            return Err(Error::validation(
+                "Local GL Account must belong to the mapped Consolidation Unit's company.",
+            ));
+        }
+        Ok(())
+    }
+}

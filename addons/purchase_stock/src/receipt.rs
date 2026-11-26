@@ -106,7 +106,14 @@ fn decode(error: impl std::error::Error + Send + Sync + 'static) -> Error {
 }
 
 fn company_scope(env: &Env, company: i64) -> Env {
-    let mut context = erp_sdk::Context::new();
+    let mut context = env.context().clone();
+    let keys: Vec<String> = context
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        context.remove(&k);
+    }
     context.set("allowed_company_ids", Value::list([Value::Int(company)]));
     env.with_context_replaced(context)
 }

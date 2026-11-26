@@ -4,7 +4,7 @@
 Default stock sequences. The orderpoint reference numbering; the name default
      drawn from it comes with the orderpoint behaviour slice. 
 -->
-<odoo>
+<erp>
   <data noupdate="1">
     <record id="sequence_mrp_op" model="ir.sequence">
       <field name="name">Stock orderpoint</field>
@@ -34,4 +34,4 @@ Default stock sequences. The orderpoint reference numbering; the name default
       <field name="company_id" eval="False"/>
     </record>
   </data>
-</odoo>
+</erp>

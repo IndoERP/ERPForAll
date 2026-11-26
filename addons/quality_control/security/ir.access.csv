@@ -3,7 +3,7 @@ access_quality_team_user,Quality: quality.team (user),quality_control.model_qual
 access_quality_team_manager,Quality: quality.team (manager),quality_control.model_quality_team,stock.group_stock_manager,crud,
 access_quality_point_user,Quality: quality.point (user),quality_control.model_quality_point,stock.group_stock_user,r,
 access_quality_point_manager,Quality: quality.point (manager),quality_control.model_quality_point,stock.group_stock_manager,crud,
-access_quality_check_user,Quality: quality.check (user),quality_control.model_quality_check,stock.group_stock_user,crud,
+access_quality_check_user,Quality: quality.check (user),quality_control.model_quality_check,stock.group_stock_user,cru,
 access_quality_check_manager,Quality: quality.check (manager),quality_control.model_quality_check,stock.group_stock_manager,crud,
 access_quality_alert_user,Quality: quality.alert (user),quality_control.model_quality_alert,stock.group_stock_user,crud,
 access_quality_alert_manager,Quality: quality.alert (manager),quality_control.model_quality_alert,stock.group_stock_manager,crud,

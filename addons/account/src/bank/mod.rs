@@ -4,11 +4,17 @@
 
 use std::str::FromStr;
 
+use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RateBook, RoundingTable};
 use erp_sdk::Operation;
+use erp_sdk::money::RateDateRule;
 use erp_sdk::prelude::*;
 
+use crate::moves::post::strip_default_context;
 use crate::moves::post_moves;
 use crate::reconcile::reconcile_lines;
+
+const MAX_CSV_BYTES: usize = 1_048_576;
+const MAX_CSV_ROWS: usize = 5_000;
 
 /// One parsed row from a bank statement CSV snippet (`date,label,amount[,ref]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,18 +25,63 @@ pub struct CsvStatementRow {
     pub reference: Option<String>,
 }
 
+/// Splits one CSV line honoring RFC-4180 double-quoted fields and escaped `""`.
+fn split_csv_line(line: &str) -> Result<Vec<String>> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    cur.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(ch);
+            }
+        } else if ch == '"' && cur.trim().is_empty() {
+            cur.clear();
+            in_quotes = true;
+        } else if ch == ',' {
+            fields.push(cur.trim().to_owned());
+            cur.clear();
+        } else {
+            cur.push(ch);
+        }
+    }
+    if in_quotes {
+        return Err(Error::user("Unterminated quoted field in CSV line."));
+    }
+    fields.push(cur.trim().to_owned());
+    Ok(fields)
+}
+
 /// Pure exact-decimal parser for bank statement CSV lines (`YYYY-MM-DD,Label,Amount[,Reference]`).
 /// Skips empty lines and an optional header row starting with `date`.
 pub fn parse_bank_statement_csv(raw: &str) -> Result<Vec<CsvStatementRow>> {
+    if raw.len() > MAX_CSV_BYTES {
+        return Err(Error::validation(format!(
+            "CSV import exceeds the maximum size of {MAX_CSV_BYTES} bytes."
+        )));
+    }
     let mut rows = Vec::new();
     for (idx, line) in raw.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let cols: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+        let cols = split_csv_line(trimmed)?;
         if idx == 0 && cols.first().is_some_and(|c| c.eq_ignore_ascii_case("date")) {
             continue;
+        }
+        if rows.len() >= MAX_CSV_ROWS {
+            return Err(Error::validation(format!(
+                "CSV import exceeds the maximum of {MAX_CSV_ROWS} transaction rows."
+            )));
         }
         if cols.len() < 3 {
             return Err(Error::user(format!(
@@ -38,31 +89,28 @@ pub fn parse_bank_statement_csv(raw: &str) -> Result<Vec<CsvStatementRow>> {
                 idx + 1
             )));
         }
-        let date = Date::parse_odoo(cols[0]).ok_or_else(|| {
+        let date = Date::parse_odoo(&cols[0]).ok_or_else(|| {
             Error::user(format!(
                 "CSV line {} has an invalid date {:?}; expected YYYY-MM-DD.",
                 idx + 1,
                 cols[0]
             ))
         })?;
-        let label = cols[1].to_owned();
+        let label = cols[1].clone();
         if label.is_empty() {
             return Err(Error::user(format!(
                 "CSV line {} has an empty label.",
                 idx + 1
             )));
         }
-        let amount = Decimal::from_str(cols[2]).map_err(|_| {
+        let amount = Decimal::from_str(&cols[2]).map_err(|_| {
             Error::user(format!(
                 "CSV line {} has an invalid decimal amount {:?}.",
                 idx + 1,
                 cols[2]
             ))
         })?;
-        let reference = cols
-            .get(3)
-            .map(|s| (*s).to_owned())
-            .filter(|s| !s.is_empty());
+        let reference = cols.get(3).filter(|s| !s.is_empty()).cloned();
         rows.push(CsvStatementRow {
             date,
             label,
@@ -85,8 +133,12 @@ pub fn compute_statement_entry_balances(amount: Decimal) -> (Decimal, Decimal) {
     (amount, -amount)
 }
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
+async fn resolve_default_today(tx: &mut Transaction, env: &Env) -> Result<Date> {
+    if let Some(cid) = env.company_id()? {
+        erp_addon_base::company_calendar::business_date(tx, cid).await
+    } else {
+        env.context_today()
+    }
 }
 
 fn db(err: impl std::fmt::Display) -> Error {
@@ -141,7 +193,7 @@ pub struct AccountBankStatement {
     )]
     pub currency_id: Option<RecId>,
     /// Statement date.
-    #[field(date, required = true, default_fn = default_today, string = "Date")]
+    #[field(date, required = true, string = "Date")]
     pub date: Option<Date>,
     /// Opening balance carried from the previous statement.
     #[field(monetary, currency_field = "currency_id", string = "Starting Balance")]
@@ -210,6 +262,10 @@ impl AccountBankStatement {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
         let env = this.env();
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = resolve_default_today(tx, env).await?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
         if let Some(cid) = env.company_id()?
             && names.iter().any(|n| n == "journal_id")
             && !values.contains_key("journal_id")
@@ -222,7 +278,8 @@ impl AccountBankStatement {
                     &[&cid],
                 )
                 .await?;
-            if let Some(jid) = jrows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+            if let Some(row) = jrows.first() {
+                let jid: i64 = row.try_get(0).map_err(db)?;
                 values.insert("journal_id".to_owned(), Value::Int(jid));
             }
         }
@@ -311,21 +368,49 @@ impl AccountBankStatement {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        let mut today_cache: Option<Date> = None;
         for vals in &mut vals_list {
+            if !this.env().su()
+                && let Some(Cell::Str(st)) = vals.get("state")
+                && st.as_ref() != "open"
+            {
+                return Err(Error::validation(
+                    "Bank statements must start in Open status.",
+                ));
+            }
+            if !vals.contains("date") {
+                let d = match today_cache {
+                    Some(d) => d,
+                    None => {
+                        let d = resolve_default_today(tx, this.env()).await?;
+                        today_cache = Some(d);
+                        d
+                    }
+                };
+                vals.insert("date".into(), Cell::Date(d));
+            }
             let needs_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
                 Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
                 _ => false,
             };
             if needs_name {
-                let year = match vals.get("date") {
-                    Some(Cell::Date(d)) => d.ymd().0,
-                    _ => Date::today().ymd().0,
+                let date = match vals.get("date") {
+                    Some(Cell::Date(d)) => *d,
+                    _ => resolve_default_today(tx, this.env()).await?,
                 };
-                let rows = tx
-                    .query("SELECT count(*)::int8 + 1 FROM account_bank_statement", &[])
-                    .await?;
-                let next: i64 = rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(1);
+                let year = date.ymd().0;
+                // Use atomic PG serial sequence instead of non-atomic count(*) + 1.
+                let next: i64 = tx
+                    .query(
+                        "SELECT nextval(pg_get_serial_sequence('account_bank_statement', 'id'))::int8",
+                        &[],
+                    )
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::invariant("Missing nextval row for bank statement."))?
+                    .try_get(0)
+                    .map_err(db)?;
                 vals.insert(
                     "name".into(),
                     Cell::Str(format!("BNKST/{year}/{next:05}").into()),
@@ -333,6 +418,71 @@ impl AccountBankStatement {
             }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBankStatement>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("state") {
+                return Err(Error::validation(
+                    "Bank statement status must be changed through Post or Reopen actions.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let posted = tx
+                    .query(
+                        "SELECT id::int8 FROM account_bank_statement \
+                         WHERE id = ANY($1::int8[]) AND state = 'posted' LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !posted.is_empty() {
+                    return Err(Error::user(
+                        "A posted bank statement cannot be modified; reopen it first.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBankStatement>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let blocked = tx
+                    .query(
+                        "SELECT s.id::int8 FROM account_bank_statement s \
+                         WHERE s.id = ANY($1::int8[]) \
+                           AND (s.state = 'posted' OR EXISTS ( \
+                                SELECT 1 FROM account_bank_statement_line l \
+                                WHERE l.statement_id = s.id AND COALESCE(l.is_reconciled, false) = true \
+                           )) \
+                         LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !blocked.is_empty() {
+                    return Err(Error::user(
+                        "Cannot delete a posted bank statement or one with reconciled transactions.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     /// Parses pasted CSV rows (`YYYY-MM-DD,Label,Amount[,Ref]`) and appends them as statement lines.
@@ -344,23 +494,29 @@ impl AccountBankStatement {
     ) -> Result<()> {
         let stmt = this.ensure_one()?;
         stmt.as_records().check_access(tx, Operation::Write).await?;
-        let state = stmt.get(tx, AccountBankStatement::STATE).await?;
-        if state.as_deref() != Some("open") {
+        tx.flush().await?;
+        let sid = stmt.as_records().ids()[0];
+        let srows = tx
+            .query(
+                "SELECT state::text, journal_id::int8, COALESCE(csv_import_data, '')::text \
+                 FROM account_bank_statement WHERE id = $1 FOR UPDATE",
+                &[&sid],
+            )
+            .await?;
+        let Some(srow) = srows.first() else {
+            return Err(Error::missing("Bank statement not found."));
+        };
+        let state: String = srow.try_get(0).map_err(db)?;
+        if state != "open" {
             return Err(Error::user(
                 "Only open statements can import new CSV transactions.",
             ));
         }
-        let raw = stmt
-            .get(tx, AccountBankStatement::CSV_IMPORT_DATA)
-            .await?
-            .unwrap_or_default();
+        let journal_id: Option<i64> = srow.try_get(1).map_err(db)?;
+        let journal_id = journal_id
+            .ok_or_else(|| Error::validation("Choose a journal for this bank statement."))?;
+        let raw: String = srow.try_get(2).map_err(db)?;
         let parsed = parse_bank_statement_csv(&raw)?;
-        let sid = stmt.as_records().ids()[0];
-        let journal_id = stmt
-            .get(tx, AccountBankStatement::JOURNAL_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Choose a journal for this bank statement."))?
-            .get();
         let mut line_vals = Vec::with_capacity(parsed.len());
         for row in parsed {
             let mut v = RawVals::new();
@@ -374,14 +530,15 @@ impl AccountBankStatement {
             }
             line_vals.push(v);
         }
-        stmt.env()
+        strip_default_context(stmt.env())
             .records("account.bank.statement.line")?
             .create(tx, line_vals)
             .await?;
+        let uid = stmt.env().uid();
         tx.execute(
             "UPDATE account_bank_statement SET csv_import_data = NULL, \
-             write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&sid],
+             write_uid = $2, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+            &[&sid, &uid],
         )
         .await?;
         refresh_statement_totals(tx, sid).await?;
@@ -408,7 +565,22 @@ impl AccountBankStatement {
     ) -> Result<()> {
         let stmt = this.ensure_one()?;
         stmt.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let sid = stmt.as_records().ids()[0];
+        let srows = tx
+            .query(
+                "SELECT state::text FROM account_bank_statement WHERE id = $1 FOR UPDATE",
+                &[&sid],
+            )
+            .await?;
+        let Some(srow) = srows.first() else {
+            return Err(Error::missing("Bank statement not found."));
+        };
+        if srow.try_get::<_, String>(0).map_err(db)? != "open" {
+            return Err(Error::user(
+                "Only open bank statements can reconcile transactions.",
+            ));
+        }
         let rows = tx
             .query(
                 "SELECT id::int8 FROM account_bank_statement_line \
@@ -451,13 +623,11 @@ impl AccountBankStatement {
     ) -> Result<()> {
         let stmt = this.ensure_one()?;
         stmt.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let sid = stmt.as_records().ids()[0];
-        refresh_statement_totals(tx, sid).await?;
         let rows = tx
             .query(
-                "SELECT state::text, COALESCE(balance_end, 0), COALESCE(balance_end_real, 0), \
-                        COALESCE(unreconciled_count, 0) \
-                 FROM account_bank_statement WHERE id = $1",
+                "SELECT state::text FROM account_bank_statement WHERE id = $1 FOR UPDATE",
                 &[&sid],
             )
             .await?;
@@ -468,9 +638,21 @@ impl AccountBankStatement {
         if state != "open" {
             return Err(Error::user("Only open bank statements can be posted."));
         }
-        let end_computed: Decimal = row.try_get(1).map_err(db)?;
-        let end_real: Decimal = row.try_get(2).map_err(db)?;
-        let unrec: i32 = row.try_get(3).map_err(db)?;
+        refresh_statement_totals(tx, sid).await?;
+        let rows = tx
+            .query(
+                "SELECT COALESCE(balance_end, 0), COALESCE(balance_end_real, 0), \
+                        COALESCE(unreconciled_count, 0) \
+                 FROM account_bank_statement WHERE id = $1",
+                &[&sid],
+            )
+            .await?;
+        let row = rows
+            .first()
+            .ok_or_else(|| Error::missing("Bank statement not found."))?;
+        let end_computed: Decimal = row.try_get(0).map_err(db)?;
+        let end_real: Decimal = row.try_get(1).map_err(db)?;
+        let unrec: i32 = row.try_get(2).map_err(db)?;
         if end_computed != end_real {
             let diff = end_real - end_computed;
             return Err(Error::user(format!(
@@ -484,17 +666,25 @@ impl AccountBankStatement {
                  before posting the statement."
             )));
         }
-        tx.execute(
-            "UPDATE account_bank_statement SET state = 'posted', \
-             write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&sid],
-        )
-        .await?;
+        let uid = stmt.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_bank_statement SET state = 'posted', \
+                 write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'open'",
+                &[&sid, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::user(
+                "Bank statement state changed concurrently; reload and retry.",
+            ));
+        }
         tx.invalidate_records(stmt.as_records(), Some(&["state"]))
             .await
     }
 
-    /// Reopens a posted statement for additional adjustments.
+    /// Reopens a posted statement for additional adjustments (managers only, honoring lock dates).
     #[method]
     #[rpc(effect = write)]
     pub async fn action_reopen(
@@ -503,11 +693,55 @@ impl AccountBankStatement {
     ) -> Result<()> {
         let stmt = this.ensure_one()?;
         stmt.as_records().check_access(tx, Operation::Write).await?;
+        if !stmt.env().su()
+            && !tx
+                .has_group(stmt.env(), "account.group_account_manager")
+                .await?
+        {
+            return Err(Error::access(
+                "Only Accounting Managers can reopen a posted bank statement.",
+            ));
+        }
+        tx.flush().await?;
         let sid = stmt.as_records().ids()[0];
+        let rows = tx
+            .query(
+                "SELECT state::text, company_id::int8, date \
+                 FROM account_bank_statement WHERE id = $1 FOR UPDATE",
+                &[&sid],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Bank statement not found."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        let company_id: i64 = row.try_get(1).map_err(db)?;
+        let date: Date = row.try_get(2).map_err(db)?;
+        if state != "posted" {
+            return Err(Error::user("Only posted bank statements can be reopened."));
+        }
+        // Respect company hard / fiscal lock dates on statement date.
+        let lock_rows = tx
+            .query(
+                "SELECT hard_lock_date, fiscalyear_lock_date FROM res_company WHERE id = $1",
+                &[&company_id],
+            )
+            .await?;
+        if let Some(lrow) = lock_rows.first() {
+            let hard: Option<Date> = lrow.try_get(0).map_err(db)?;
+            let fy: Option<Date> = lrow.try_get(1).map_err(db)?;
+            if hard.is_some_and(|d| date <= d) || fy.is_some_and(|d| date <= d) {
+                return Err(Error::validation(format!(
+                    "Cannot reopen bank statement dated {date}: period is locked."
+                )));
+            }
+        }
+        let uid = stmt.env().uid();
         tx.execute(
             "UPDATE account_bank_statement SET state = 'open', \
-             write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&sid],
+             write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'posted'",
+            &[&sid, &uid],
         )
         .await?;
         tx.invalidate_records(stmt.as_records(), Some(&["state"]))
@@ -564,7 +798,7 @@ pub struct AccountBankStatementLine {
     )]
     pub currency_id: Option<RecId>,
     /// Transaction date.
-    #[field(date, required = true, default_fn = default_today, string = "Date")]
+    #[field(date, required = true, string = "Date")]
     pub date: Option<Date>,
     /// Bank statement description / label.
     #[field(char, required = true, string = "Label")]
@@ -640,6 +874,10 @@ impl AccountBankStatementLine {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
         let env = this.env();
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = resolve_default_today(tx, env).await?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
         if let Some(cid) = env.company_id()?
             && names.iter().any(|n| n == "journal_id")
             && !values.contains_key("journal_id")
@@ -652,7 +890,8 @@ impl AccountBankStatementLine {
                     &[&cid],
                 )
                 .await?;
-            if let Some(jid) = jrows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+            if let Some(row) = jrows.first() {
+                let jid: i64 = row.try_get(0).map_err(db)?;
                 values.insert("journal_id".to_owned(), Value::Int(jid));
             }
         }
@@ -697,17 +936,41 @@ impl AccountBankStatementLine {
         sup: Super,
     ) -> Result<Records> {
         let mut stmt_ids = Vec::new();
+        let mut today_cache: Option<Date> = None;
         for vals in &mut vals_list {
+            if !this.env().su() && (vals.contains("is_reconciled") || vals.contains("move_id")) {
+                return Err(Error::validation(
+                    "Bank statement line reconciliation state is managed by the Reconcile action.",
+                ));
+            }
+            if !vals.contains("date") {
+                let d = match today_cache {
+                    Some(d) => d,
+                    None => {
+                        let d = resolve_default_today(tx, this.env()).await?;
+                        today_cache = Some(d);
+                        d
+                    }
+                };
+                vals.insert("date".into(), Cell::Date(d));
+            }
             if let Some(Cell::Id(sid)) = vals.get("statement_id") {
                 stmt_ids.push(*sid);
-                if !vals.contains("journal_id") {
-                    let rows = tx
-                        .query(
-                            "SELECT journal_id::int8 FROM account_bank_statement WHERE id = $1",
-                            &[sid],
-                        )
-                        .await?;
-                    if let Some(jid) = rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+                let rows = tx
+                    .query(
+                        "SELECT journal_id::int8, state::text FROM account_bank_statement WHERE id = $1",
+                        &[sid],
+                    )
+                    .await?;
+                if let Some(row) = rows.first() {
+                    let jid: i64 = row.try_get(0).map_err(db)?;
+                    let st: String = row.try_get(1).map_err(db)?;
+                    if !this.env().su() && st == "posted" {
+                        return Err(Error::user(
+                            "Cannot add transactions to a posted bank statement.",
+                        ));
+                    }
+                    if !vals.contains("journal_id") {
                         vals.insert("journal_id".into(), Cell::Id(jid));
                     }
                 }
@@ -722,6 +985,72 @@ impl AccountBankStatementLine {
         Ok(created)
     }
 
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBankStatementLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("is_reconciled") || vals.contains("move_id") {
+                return Err(Error::validation(
+                    "Bank statement line reconciliation state is managed by the Reconcile action.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let blocked = tx
+                    .query(
+                        "SELECT l.id::int8 FROM account_bank_statement_line l \
+                         LEFT JOIN account_bank_statement s ON s.id = l.statement_id \
+                         WHERE l.id = ANY($1::int8[]) \
+                           AND (COALESCE(l.is_reconciled, false) = true OR COALESCE(s.state, 'open') = 'posted') \
+                         LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !blocked.is_empty() {
+                    return Err(Error::user(
+                        "Cannot modify a reconciled bank transaction or a line on a posted statement.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBankStatementLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let blocked = tx
+                    .query(
+                        "SELECT l.id::int8 FROM account_bank_statement_line l \
+                         LEFT JOIN account_bank_statement s ON s.id = l.statement_id \
+                         WHERE l.id = ANY($1::int8[]) \
+                           AND (COALESCE(l.is_reconciled, false) = true OR COALESCE(s.state, 'open') = 'posted') \
+                         LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !blocked.is_empty() {
+                    return Err(Error::user(
+                        "Cannot delete a reconciled bank transaction or a line on a posted statement.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Reconciles one statement line: creates & posts a balanced bank journal entry, and when
     /// `matched_move_id` is chosen, reconciles its counterpart item against the invoice/bill's
     /// open receivable/payable item so the invoice becomes Paid or Partially Paid.
@@ -733,168 +1062,235 @@ impl AccountBankStatementLine {
     ) -> Result<()> {
         let line = this.ensure_one()?;
         line.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let lid = line.as_records().ids()[0];
-        let env = line
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let base_env = strip_default_context(line.env());
 
-        let rows = tx
-            .query(
-                "SELECT l.statement_id::int8, l.journal_id::int8, j.company_id::int8, \
-                        j.default_account_id::int8, COALESCE(j.currency_id, c.currency_id)::int8, \
-                        l.date, l.payment_ref::text, l.partner_id::int8, COALESCE(l.amount, 0), \
-                        l.matched_move_id::int8, l.counterpart_account_id::int8, \
-                        COALESCE(l.is_reconciled, false) \
-                 FROM account_bank_statement_line l \
-                 JOIN account_journal j ON j.id = l.journal_id \
-                 JOIN res_company c ON c.id = j.company_id \
-                 WHERE l.id = $1 FOR UPDATE OF l",
-                &[&lid],
-            )
-            .await?;
-        let Some(row) = rows.first() else {
-            return Err(Error::missing("Bank statement line not found."));
-        };
-        let statement_id: Option<i64> = row.try_get(0).map_err(db)?;
-        let journal_id: i64 = row.try_get(1).map_err(db)?;
-        let company_id: i64 = row.try_get(2).map_err(db)?;
-        let bank_account_id: Option<i64> = row.try_get(3).map_err(db)?;
-        let currency_id: i64 = row.try_get(4).map_err(db)?;
-        let date: Date = row.try_get(5).map_err(db)?;
-        let label: String = row.try_get(6).map_err(db)?;
-        let mut partner_id: Option<i64> = row.try_get(7).map_err(db)?;
-        let amount: Decimal = row.try_get(8).map_err(db)?;
-        let matched_move_id: Option<i64> = row.try_get(9).map_err(db)?;
-        let counterpart_account_opt: Option<i64> = row.try_get(10).map_err(db)?;
-        let is_reconciled: bool = row.try_get(11).map_err(db)?;
-
-        if is_reconciled {
-            return Err(Error::user(
-                "This bank statement line is already reconciled.",
-            ));
-        }
-        if amount.is_zero() {
-            return Err(Error::user(
-                "A bank statement line with a zero amount cannot be reconciled.",
-            ));
-        }
-        let bank_account = bank_account_id
-            .ok_or_else(|| Error::user("The bank journal has no default account configured."))?;
-
-        let mut target_open_line_ids: Vec<i64> = Vec::new();
-        let counterpart_account = if let Some(mid) = matched_move_id {
-            let mrows = tx
+        tx.savepoint(async |tx| {
+            let rows = tx
                 .query(
-                    "SELECT l.id::int8, l.account_id::int8, m.partner_id::int8 \
-                     FROM account_move_line l \
-                     JOIN account_move m ON m.id = l.move_id \
-                     LEFT JOIN account_open_item o ON o.line_id = l.id \
-                     WHERE l.move_id = $1 AND l.display_type = 'payment_term' \
-                       AND l.full_reconcile_id IS NULL \
-                       AND COALESCE(o.amount_residual, l.balance) <> 0 \
-                     ORDER BY l.id",
-                    &[&mid],
+                    "SELECT l.statement_id::int8, l.journal_id::int8, j.company_id::int8, \
+                            j.default_account_id::int8, COALESCE(j.currency_id, c.currency_id)::int8, \
+                            c.currency_id::int8, l.date, l.payment_ref::text, l.partner_id::int8, \
+                            COALESCE(l.amount, 0), l.matched_move_id::int8, \
+                            l.counterpart_account_id::int8, COALESCE(l.is_reconciled, false) \
+                     FROM account_bank_statement_line l \
+                     JOIN account_journal j ON j.id = l.journal_id \
+                     JOIN res_company c ON c.id = j.company_id \
+                     WHERE l.id = $1 FOR UPDATE OF l",
+                    &[&lid],
                 )
                 .await?;
-            if mrows.is_empty() {
+            let Some(row) = rows.first() else {
+                return Err(Error::missing("Bank statement line not found."));
+            };
+            let statement_id: Option<i64> = row.try_get(0).map_err(db)?;
+            let journal_id: i64 = row.try_get(1).map_err(db)?;
+            let company_id: i64 = row.try_get(2).map_err(db)?;
+            let bank_account_id: Option<i64> = row.try_get(3).map_err(db)?;
+            let currency_id: i64 = row.try_get(4).map_err(db)?;
+            let company_currency_id: i64 = row.try_get(5).map_err(db)?;
+            let date: Date = row.try_get(6).map_err(db)?;
+            let label: String = row.try_get(7).map_err(db)?;
+            let mut partner_id: Option<i64> = row.try_get(8).map_err(db)?;
+            let amount: Decimal = row.try_get(9).map_err(db)?;
+            let matched_move_id: Option<i64> = row.try_get(10).map_err(db)?;
+            let counterpart_account_opt: Option<i64> = row.try_get(11).map_err(db)?;
+            let is_reconciled: bool = row.try_get(12).map_err(db)?;
+
+            if is_reconciled {
                 return Err(Error::user(
-                    "The selected invoice or bill has no open receivable/payable items left to reconcile.",
+                    "This bank statement line is already reconciled.",
                 ));
             }
-            let first_acc: i64 = mrows[0].try_get(1).map_err(db)?;
-            if partner_id.is_none() {
-                partner_id = mrows[0].try_get(2).map_err(db)?;
+            if amount.is_zero() {
+                return Err(Error::user(
+                    "A bank statement line with a zero amount cannot be reconciled.",
+                ));
             }
-            for mr in &mrows {
-                target_open_line_ids.push(mr.try_get(0).map_err(db)?);
+            let bank_account = bank_account_id
+                .ok_or_else(|| Error::user("The bank journal has no default account configured."))?;
+            let env = base_env.with_company(company_id)?;
+
+            // Convert journal currency amount to company currency via RateBook/RoundingTable.
+            let company_amount = if currency_id == company_currency_id {
+                amount
+            } else {
+                let from_rec = RecId::from_real(currency_id)
+                    .ok_or_else(|| Error::invariant("Invalid bank journal currency id."))?;
+                let to_rec = RecId::from_real(company_currency_id)
+                    .ok_or_else(|| Error::invariant("Invalid company currency id."))?;
+                let co_rec = RecId::from_real(company_id)
+                    .ok_or_else(|| Error::invariant("Invalid company id."))?;
+                let currencies = [from_rec, to_rec];
+                let rounding = RoundingTable::load(&env, tx, &currencies).await?;
+                let book = RateBook::load(
+                    &env,
+                    tx,
+                    co_rec,
+                    date,
+                    RateDateRule::OnOrBefore,
+                    &currencies,
+                )
+                .await?;
+                book.snapshot(from_rec, to_rec)?
+                    .convert_exact(amount)?
+                    .quantize(rounding.get(to_rec)?.increment(), CURRENCY_ROUNDING_MODE)?
+            };
+            let (bank_bal, counterpart_bal) = compute_statement_entry_balances(company_amount);
+            let (bank_cur, counterpart_cur) = compute_statement_entry_balances(amount);
+
+            let mut target_open_line_ids: Vec<i64> = Vec::new();
+            let counterpart_account = if let Some(mid) = matched_move_id {
+                let mrows = tx
+                    .query(
+                        "SELECT l.id::int8, l.account_id::int8, m.partner_id::int8, \
+                                m.state::text, m.company_id::int8, l.currency_id::int8, \
+                                COALESCE(o.amount_residual, l.balance) \
+                         FROM account_move_line l \
+                         JOIN account_move m ON m.id = l.move_id \
+                         LEFT JOIN account_open_item o ON o.line_id = l.id \
+                         WHERE l.move_id = $1 AND l.display_type = 'payment_term' \
+                           AND l.full_reconcile_id IS NULL \
+                           AND COALESCE(o.amount_residual, l.balance) <> 0 \
+                         ORDER BY l.id",
+                        &[&mid],
+                    )
+                    .await?;
+                if mrows.is_empty() {
+                    return Err(Error::user(
+                        "The selected invoice or bill has no open receivable/payable items left to reconcile.",
+                    ));
+                }
+                let mstate: String = mrows[0].try_get(3).map_err(db)?;
+                let mcompany: i64 = mrows[0].try_get(4).map_err(db)?;
+                if mstate != "posted" {
+                    return Err(Error::user(
+                        "Only posted invoices or bills can be matched on a bank statement line.",
+                    ));
+                }
+                if mcompany != company_id {
+                    return Err(Error::user(
+                        "The matched invoice or bill belongs to another company.",
+                    ));
+                }
+                let first_acc: i64 = mrows[0].try_get(1).map_err(db)?;
+                if partner_id.is_none() {
+                    partner_id = mrows[0].try_get(2).map_err(db)?;
+                }
+                let mut has_opposite_sign = false;
+                for mr in &mrows {
+                    let lcur: i64 = mr.try_get(5).map_err(db)?;
+                    let lres: Decimal = mr.try_get(6).map_err(db)?;
+                    if lcur != currency_id
+                        && lcur != company_currency_id
+                        && currency_id != company_currency_id
+                    {
+                        return Err(Error::user(
+                            "The matched invoice/bill currency does not match this bank journal currency.",
+                        ));
+                    }
+                    if (counterpart_bal > Decimal::ZERO && lres < Decimal::ZERO)
+                        || (counterpart_bal < Decimal::ZERO && lres > Decimal::ZERO)
+                    {
+                        has_opposite_sign = true;
+                    }
+                    target_open_line_ids.push(mr.try_get(0).map_err(db)?);
+                }
+                if !has_opposite_sign {
+                    return Err(Error::user(
+                        "The bank statement line sign does not oppose the matched invoice/bill balance (check inflow vs outflow).",
+                    ));
+                }
+                first_acc
+            } else if let Some(acc) = counterpart_account_opt {
+                acc
+            } else {
+                return Err(Error::user(
+                    "Choose either a 'Match Invoice/Bill' or a 'Counterpart Account' before reconciling.",
+                ));
+            };
+
+            let mut mvals = RawVals::new();
+            mvals.insert("move_type".into(), Cell::Str("entry".into()));
+            mvals.insert("journal_id".into(), Cell::Id(journal_id));
+            mvals.insert("company_id".into(), Cell::Id(company_id));
+            mvals.insert("currency_id".into(), Cell::Id(currency_id));
+            mvals.insert("date".into(), Cell::Date(date));
+            mvals.insert("ref".into(), Cell::Str(label.as_str().into()));
+            if let Some(pid) = partner_id {
+                mvals.insert("partner_id".into(), Cell::Id(pid));
             }
-            first_acc
-        } else if let Some(acc) = counterpart_account_opt {
-            acc
-        } else {
-            return Err(Error::user(
-                "Choose either a 'Match Invoice/Bill' or a 'Counterpart Account' before reconciling.",
-            ));
-        };
 
-        let (bank_bal, counterpart_bal) = compute_statement_entry_balances(amount);
+            let unchecked_moves = crate::moves::unchecked(&env.records("account.move")?);
+            let created_move = unchecked_moves.create(tx, vec![mvals]).await?;
+            let move_id = created_move.ids()[0];
 
-        let mut mvals = RawVals::new();
-        mvals.insert("move_type".into(), Cell::Str("entry".into()));
-        mvals.insert("journal_id".into(), Cell::Id(journal_id));
-        mvals.insert("company_id".into(), Cell::Id(company_id));
-        mvals.insert("currency_id".into(), Cell::Id(currency_id));
-        mvals.insert("date".into(), Cell::Date(date));
-        mvals.insert("ref".into(), Cell::Str(label.as_str().into()));
-        if let Some(pid) = partner_id {
-            mvals.insert("partner_id".into(), Cell::Id(pid));
-        }
+            let mut bank_line = RawVals::new();
+            bank_line.insert("move_id".into(), Cell::Id(move_id));
+            bank_line.insert("account_id".into(), Cell::Id(bank_account));
+            bank_line.insert("name".into(), Cell::Str(label.as_str().into()));
+            bank_line.insert("currency_id".into(), Cell::Id(currency_id));
+            bank_line.insert("balance".into(), Cell::Decimal(bank_bal));
+            bank_line.insert("amount_currency".into(), Cell::Decimal(bank_cur));
+            if let Some(pid) = partner_id {
+                bank_line.insert("partner_id".into(), Cell::Id(pid));
+            }
 
-        let unchecked_moves = crate::moves::unchecked(&env.records("account.move")?);
-        let created_move = unchecked_moves.create(tx, vec![mvals]).await?;
-        let move_id = created_move.ids()[0];
+            let mut cp_line = RawVals::new();
+            cp_line.insert("move_id".into(), Cell::Id(move_id));
+            cp_line.insert("account_id".into(), Cell::Id(counterpart_account));
+            cp_line.insert("name".into(), Cell::Str(label.as_str().into()));
+            cp_line.insert("currency_id".into(), Cell::Id(currency_id));
+            cp_line.insert("balance".into(), Cell::Decimal(counterpart_bal));
+            cp_line.insert("amount_currency".into(), Cell::Decimal(counterpart_cur));
+            if let Some(pid) = partner_id {
+                cp_line.insert("partner_id".into(), Cell::Id(pid));
+            }
 
-        let mut bank_line = RawVals::new();
-        bank_line.insert("move_id".into(), Cell::Id(move_id));
-        bank_line.insert("account_id".into(), Cell::Id(bank_account));
-        bank_line.insert("name".into(), Cell::Str(label.as_str().into()));
-        bank_line.insert("currency_id".into(), Cell::Id(currency_id));
-        bank_line.insert("balance".into(), Cell::Decimal(bank_bal));
-        bank_line.insert("amount_currency".into(), Cell::Decimal(bank_bal));
-        if let Some(pid) = partner_id {
-            bank_line.insert("partner_id".into(), Cell::Id(pid));
-        }
+            let unchecked_lines = crate::moves::unchecked(&env.records("account.move.line")?);
+            let created_lines = unchecked_lines.create(tx, vec![bank_line, cp_line]).await?;
+            let cp_line_id = created_lines.ids()[1];
 
-        let mut cp_line = RawVals::new();
-        cp_line.insert("move_id".into(), Cell::Id(move_id));
-        cp_line.insert("account_id".into(), Cell::Id(counterpart_account));
-        cp_line.insert("name".into(), Cell::Str(label.as_str().into()));
-        cp_line.insert("currency_id".into(), Cell::Id(currency_id));
-        cp_line.insert("balance".into(), Cell::Decimal(counterpart_bal));
-        cp_line.insert("amount_currency".into(), Cell::Decimal(counterpart_bal));
-        if let Some(pid) = partner_id {
-            cp_line.insert("partner_id".into(), Cell::Id(pid));
-        }
+            let move_rec = env.records("account.move")?.browse([move_id])?;
+            post_moves(tx, &move_rec).await?;
 
-        let unchecked_lines = crate::moves::unchecked(&env.records("account.move.line")?);
-        let created_lines = unchecked_lines.create(tx, vec![bank_line, cp_line]).await?;
-        let cp_line_id = created_lines.ids()[1];
+            if !target_open_line_ids.is_empty() {
+                target_open_line_ids.push(cp_line_id);
+                target_open_line_ids.sort_unstable();
+                target_open_line_ids.dedup();
+                let to_rec = env
+                    .records("account.move.line")?
+                    .browse(target_open_line_ids)?;
+                reconcile_lines(tx, &to_rec).await?;
+            }
 
-        let move_rec = env.records("account.move")?.browse([move_id])?;
-        post_moves(tx, &move_rec).await?;
-
-        if !target_open_line_ids.is_empty() {
-            target_open_line_ids.push(cp_line_id);
-            target_open_line_ids.sort_unstable();
-            target_open_line_ids.dedup();
-            let to_rec = env
-                .records("account.move.line")?
-                .browse(target_open_line_ids)?;
-            reconcile_lines(tx, &to_rec).await?;
-        }
-
-        tx.execute(
-            "UPDATE account_bank_statement_line \
-             SET move_id = $2, is_reconciled = true, counterpart_account_id = $3, \
-                 partner_id = COALESCE(partner_id, $4), write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&lid, &move_id, &counterpart_account, &partner_id],
-        )
-        .await?;
-        tx.invalidate_records(
-            line.as_records(),
-            Some(&[
-                "move_id",
-                "is_reconciled",
-                "counterpart_account_id",
-                "partner_id",
-            ]),
-        )
-        .await?;
-        if let Some(sid) = statement_id {
-            refresh_statement_totals(tx, sid).await?;
-        }
-        Ok(())
+            let uid = line.env().uid();
+            tx.execute(
+                "UPDATE account_bank_statement_line \
+                 SET move_id = $2, is_reconciled = true, counterpart_account_id = $3, \
+                     partner_id = COALESCE(partner_id, $4), write_uid = $5, \
+                     write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1",
+                &[&lid, &move_id, &counterpart_account, &partner_id, &uid],
+            )
+            .await?;
+            tx.invalidate_records(
+                line.as_records(),
+                Some(&[
+                    "move_id",
+                    "is_reconciled",
+                    "counterpart_account_id",
+                    "partner_id",
+                ]),
+            )
+            .await?;
+            if let Some(sid) = statement_id {
+                refresh_statement_totals(tx, sid).await?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
 

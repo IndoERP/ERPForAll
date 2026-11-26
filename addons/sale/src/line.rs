@@ -965,6 +965,7 @@ impl SaleOrderLine {
             .with(SaleOrderLine::PRODUCT_UOM_QTY)
             .with(SaleOrderLine::DISCOUNT)
             .with(SaleOrderLine::TAX_IDS)
+            .with(SaleOrderLine::ANALYTIC_ACCOUNT_ID)
             .with(SaleOrderLine::ORDER_ID))
     }
 

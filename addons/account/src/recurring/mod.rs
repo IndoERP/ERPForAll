@@ -2,10 +2,13 @@
 //! Recurring & Deferred Entries (`account.recurring.entry`) for automated periodic postings,
 //! deferred revenue recognition, and prepaid expense amortization.
 
+use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RoundingTable};
 use erp_sdk::Operation;
+use erp_sdk::money::Increment;
 use erp_sdk::prelude::*;
 
 use crate::fiscal::calendar::add_months;
+use crate::moves::post::strip_default_context;
 use crate::moves::post_moves;
 
 /// Pure exact-decimal period installment allocator conserving `sum == total_amount` across
@@ -14,6 +17,17 @@ pub fn compute_deferred_period_amount(
     total_amount: Decimal,
     total_periods: i32,
     period_index: i32,
+) -> Result<Decimal> {
+    let inc = Increment::new(Decimal::new(1, 2))?;
+    compute_deferred_period_amount_inc(total_amount, total_periods, period_index, &inc)
+}
+
+/// Currency-increment-aware period installment allocator conserving `sum == total_amount`.
+pub fn compute_deferred_period_amount_inc(
+    total_amount: Decimal,
+    total_periods: i32,
+    period_index: i32,
+    inc: &Increment,
 ) -> Result<Decimal> {
     if total_amount <= Decimal::ZERO {
         return Err(Error::user("Total amount must be greater than zero."));
@@ -24,7 +38,10 @@ pub fn compute_deferred_period_amount(
     if period_index < 1 || period_index > total_periods {
         return Err(Error::user("Period index is out of range."));
     }
-    let base = (total_amount / Decimal::from(total_periods)).round_dp(2);
+    let base = inc.quantize(
+        total_amount / Decimal::from(total_periods),
+        CURRENCY_ROUNDING_MODE,
+    )?;
     if period_index == total_periods {
         Ok(total_amount - base * Decimal::from(total_periods - 1))
     } else {
@@ -32,8 +49,16 @@ pub fn compute_deferred_period_amount(
     }
 }
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
+fn db(err: impl std::fmt::Display) -> Error {
+    Error::db(format!("Recurring entry query failed: {err}"))
+}
+
+async fn resolve_default_today(tx: &mut Transaction, env: &Env) -> Result<Date> {
+    if let Some(cid) = env.company_id()? {
+        erp_addon_base::company_calendar::business_date(tx, cid).await
+    } else {
+        env.context_today()
+    }
 }
 
 /// `account.recurring.entry`: schedule that posts periodic recurring or deferred journal entries.
@@ -112,7 +137,7 @@ pub struct AccountRecurringEntry {
     )]
     pub partner_id: Option<RecId>,
     /// First posting date.
-    #[field(date, required = true, default_fn = default_today, string = "Start Date")]
+    #[field(date, required = true, string = "Start Date")]
     pub start_date: Option<Date>,
     /// Months between postings (1 = monthly, 3 = quarterly).
     #[field(integer, required = true, default = 1, string = "Interval (Months)")]
@@ -173,6 +198,10 @@ impl AccountRecurringEntry {
     ) -> Result<erp_sdk::ValueMap> {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "start_date") && !values.contains_key("start_date") {
+            let today = resolve_default_today(tx, this.env()).await?;
+            values.insert("start_date".to_owned(), Value::Date(today));
+        }
         if let Some(cid) = this.env().company_id()? {
             if names.iter().any(|n| n == "company_id") && !values.contains_key("company_id") {
                 values.insert("company_id".to_owned(), Value::Int(cid));
@@ -186,12 +215,107 @@ impl AccountRecurringEntry {
                         &[&cid],
                     )
                     .await?;
-                if let Some(jid) = rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+                if let Some(row) = rows.first() {
+                    let jid: i64 = row.try_get(0).map_err(db)?;
                     values.insert("journal_id".to_owned(), Value::Int(jid));
                 }
             }
         }
         Ok(values)
+    }
+
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<AccountRecurringEntry>,
+        tx: &mut Transaction,
+        mut vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        let mut today_cache: Option<Date> = None;
+        for vals in &mut vals_list {
+            if !this.env().su()
+                && let Some(Cell::Str(st)) = vals.get("state")
+                && st.as_ref() != "draft"
+            {
+                return Err(Error::validation(
+                    "Recurring schedules must start in Draft status.",
+                ));
+            }
+            if !vals.contains("start_date") {
+                let d = match today_cache {
+                    Some(d) => d,
+                    None => {
+                        let d = resolve_default_today(tx, this.env()).await?;
+                        today_cache = Some(d);
+                        d
+                    }
+                };
+                vals.insert("start_date".into(), Cell::Date(d));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountRecurringEntry>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("state") || vals.contains("posted_periods") {
+                return Err(Error::validation(
+                    "Schedule status and posted period counters are managed by schedule actions.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let locked = tx
+                    .query(
+                        "SELECT id::int8 FROM account_recurring_entry \
+                         WHERE id = ANY($1::int8[]) AND state IN ('running', 'done') LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !locked.is_empty() {
+                    return Err(Error::user(
+                        "A running or completed schedule cannot be edited directly.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountRecurringEntry>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let blocked = tx
+                    .query(
+                        "SELECT id::int8 FROM account_recurring_entry \
+                         WHERE id = ANY($1::int8[]) \
+                           AND (state <> 'draft' OR COALESCE(posted_periods, 0) > 0) \
+                         LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !blocked.is_empty() {
+                    return Err(Error::user(
+                        "Only draft schedules with no posted periods can be deleted.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     /// Activates the schedule and sets `next_date = start_date`.
@@ -203,10 +327,27 @@ impl AccountRecurringEntry {
     ) -> Result<()> {
         let rec = this.ensure_one()?;
         rec.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let rid = rec.as_records().ids()[0];
-        let total = rec.get(tx, AccountRecurringEntry::TOTAL_AMOUNT).await?;
-        let periods = rec.get(tx, AccountRecurringEntry::TOTAL_PERIODS).await?;
-        let interval = rec.get(tx, AccountRecurringEntry::PERIOD_MONTHS).await?;
+        let rows = tx
+            .query(
+                "SELECT state::text, COALESCE(total_amount, 0), COALESCE(total_periods, 0), \
+                        COALESCE(period_months, 0), start_date \
+                 FROM account_recurring_entry WHERE id = $1 FOR UPDATE",
+                &[&rid],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Recurring schedule not found."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        if state != "draft" {
+            return Err(Error::user("Only draft schedules can be started."));
+        }
+        let total: Decimal = row.try_get(1).map_err(db)?;
+        let periods: i32 = row.try_get(2).map_err(db)?;
+        let interval: i32 = row.try_get(3).map_err(db)?;
+        let start: Option<Date> = row.try_get(4).map_err(db)?;
         if total <= Decimal::ZERO {
             return Err(Error::user("Total amount must be greater than zero."));
         }
@@ -215,16 +356,14 @@ impl AccountRecurringEntry {
                 "Total periods and interval months must be greater than zero.",
             ));
         }
-        let start = rec
-            .get(tx, AccountRecurringEntry::START_DATE)
-            .await?
-            .unwrap_or_else(Date::today);
+        let start = start.ok_or_else(|| Error::validation("Start Date is required."))?;
+        let uid = rec.env().uid();
         tx.execute(
             "UPDATE account_recurring_entry \
              SET state = 'running', next_date = COALESCE(next_date, $2), \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&rid, &start],
+                 write_uid = $3, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'draft'",
+            &[&rid, &start, &uid],
         )
         .await?;
         tx.invalidate_records(rec.as_records(), Some(&["state", "next_date"]))
@@ -240,64 +379,73 @@ impl AccountRecurringEntry {
     ) -> Result<()> {
         let rec = this.ensure_one()?;
         rec.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let rid = rec.as_records().ids()[0];
-        let state = rec.get(tx, AccountRecurringEntry::STATE).await?;
-        if state.as_deref() != Some("running") {
+        let rows = tx
+            .query(
+                "SELECT state::text, COALESCE(posted_periods, 0), COALESCE(total_periods, 0), \
+                        COALESCE(total_amount, 0), COALESCE(period_months, 0), \
+                        COALESCE(next_date, start_date), COALESCE(name, 'Recurring Entry')::text, \
+                        company_id::int8, currency_id::int8, journal_id::int8, \
+                        debit_account_id::int8, credit_account_id::int8, partner_id::int8 \
+                 FROM account_recurring_entry WHERE id = $1 FOR UPDATE",
+                &[&rid],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Recurring schedule not found."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        if state != "running" {
             return Err(Error::user(
                 "Start the schedule before posting periodic entries.",
             ));
         }
-        let posted = rec.get(tx, AccountRecurringEntry::POSTED_PERIODS).await?;
-        let total_periods = rec.get(tx, AccountRecurringEntry::TOTAL_PERIODS).await?;
+        let posted: i32 = row.try_get(1).map_err(db)?;
+        let total_periods: i32 = row.try_get(2).map_err(db)?;
         if posted >= total_periods {
             return Err(Error::user(
                 "All scheduled periods have already been posted.",
             ));
         }
         let next_idx = posted + 1;
-        let total_amount = rec.get(tx, AccountRecurringEntry::TOTAL_AMOUNT).await?;
-        let amount = compute_deferred_period_amount(total_amount, total_periods, next_idx)?;
-        let interval = rec.get(tx, AccountRecurringEntry::PERIOD_MONTHS).await?;
-        let post_date = rec
-            .get(tx, AccountRecurringEntry::NEXT_DATE)
-            .await?
-            .or(rec.get(tx, AccountRecurringEntry::START_DATE).await?)
-            .unwrap_or_else(Date::today);
-        let name = rec
-            .get(tx, AccountRecurringEntry::NAME)
-            .await?
-            .unwrap_or_else(|| Arc::from("Recurring Entry"));
-        let company_id = rec
-            .get(tx, AccountRecurringEntry::COMPANY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Schedule has no company."))?
-            .get();
-        let currency_id = rec
-            .get(tx, AccountRecurringEntry::CURRENCY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Schedule has no currency."))?
-            .get();
-        let journal_id = rec
-            .get(tx, AccountRecurringEntry::JOURNAL_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Schedule has no journal."))?
-            .get();
-        let debit_acc = rec
-            .get(tx, AccountRecurringEntry::DEBIT_ACCOUNT_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Schedule has no debit account."))?
-            .get();
-        let credit_acc = rec
-            .get(tx, AccountRecurringEntry::CREDIT_ACCOUNT_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Schedule has no credit account."))?
-            .get();
-        let partner_id = rec
-            .get(tx, AccountRecurringEntry::PARTNER_ID)
-            .await?
-            .map(|p| p.get());
+        let total_amount: Decimal = row.try_get(3).map_err(db)?;
+        let interval: i32 = row.try_get(4).map_err(db)?;
+        let post_date: Date = row
+            .try_get::<_, Option<Date>>(5)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no posting date."))?;
+        let name: String = row.try_get(6).map_err(db)?;
+        let company_id: i64 = row
+            .try_get::<_, Option<i64>>(7)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no company."))?;
+        let currency_id: i64 = row
+            .try_get::<_, Option<i64>>(8)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no currency."))?;
+        let journal_id: i64 = row
+            .try_get::<_, Option<i64>>(9)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no journal."))?;
+        let debit_acc: i64 = row
+            .try_get::<_, Option<i64>>(10)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no debit account."))?;
+        let credit_acc: i64 = row
+            .try_get::<_, Option<i64>>(11)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Schedule has no credit account."))?;
+        let partner_id: Option<i64> = row.try_get(12).map_err(db)?;
 
-        let env = rec.env().with_context_replaced(erp_sdk::Context::default());
+        let env = strip_default_context(rec.env()).with_company(company_id)?;
+        let cur_rec = RecId::from_real(currency_id)
+            .ok_or_else(|| Error::invariant("Invalid schedule currency id."))?;
+        let rounding = RoundingTable::load(&env, tx, &[cur_rec]).await?;
+        let inc = rounding.get(cur_rec)?.increment();
+        let amount =
+            compute_deferred_period_amount_inc(total_amount, total_periods, next_idx, inc)?;
+
         let label = format!("{name} ({next_idx}/{total_periods})");
         let mut mvals = RawVals::new();
         mvals.insert("move_type".into(), Cell::Str("entry".into()));
@@ -350,12 +498,13 @@ impl AccountRecurringEntry {
         } else {
             Some(add_months(post_date, interval)?)
         };
+        let uid = rec.env().uid();
         tx.execute(
             "UPDATE account_recurring_entry \
              SET posted_periods = $2, next_date = $3, last_move_id = $4, state = $5, \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&rid, &next_idx, &next_date, &move_id, &new_state],
+                 write_uid = $6, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'running'",
+            &[&rid, &next_idx, &next_date, &move_id, &new_state, &uid],
         )
         .await?;
         tx.invalidate_records(
@@ -373,11 +522,34 @@ impl AccountRecurringEntry {
     ) -> Result<()> {
         let rec = this.ensure_one()?;
         rec.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let rid = rec.as_records().ids()[0];
+        let rows = tx
+            .query(
+                "SELECT state::text, COALESCE(posted_periods, 0) \
+                 FROM account_recurring_entry WHERE id = $1 FOR UPDATE",
+                &[&rid],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Recurring schedule not found."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        let posted: i32 = row.try_get(1).map_err(db)?;
+        if state == "done" || posted > 0 {
+            return Err(Error::user(
+                "A schedule that has already posted journal entries cannot be reset to draft.",
+            ));
+        }
+        if state != "running" {
+            return Err(Error::user("Schedule is already in draft status."));
+        }
+        let uid = rec.env().uid();
         tx.execute(
             "UPDATE account_recurring_entry SET state = 'draft', \
-             write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&rid],
+             write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'running'",
+            &[&rid, &uid],
         )
         .await?;
         tx.invalidate_records(rec.as_records(), Some(&["state"]))

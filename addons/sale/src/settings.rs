@@ -109,26 +109,28 @@ fn settings() -> Result<Vec<SettingDecl>> {
 }
 erp_sdk::setting_declarations!(settings);
 
-async fn read_bool(tx: &mut Transaction, key: &str, fallback: bool) -> Result<bool> {
+async fn read_bool(tx: &mut Transaction, key: &str) -> Result<bool> {
     let env = tx.env().sudo(true);
     let read = read_values(&env, tx, SettingsScope::Global {}, vec![key.to_owned()]).await?;
     let read = serde_json::to_value(&read)
         .map_err(|error| Error::internal(format!("sales settings: {error}")))?;
-    Ok(read["values"]
+    let entry = read["values"]
         .as_array()
         .and_then(|values| values.iter().find(|v| v["key"] == key))
-        .and_then(|entry| entry["value"].as_bool())
-        .unwrap_or(fallback))
+        .ok_or_else(|| Error::internal(format!("sales setting '{key}' missing from response")))?;
+    entry["value"]
+        .as_bool()
+        .ok_or_else(|| Error::internal(format!("sales setting '{key}' is not a boolean")))
 }
 
 /// The value of [`LOCK_CONFIRMED`], read with the framework's rights.
 pub(crate) async fn lock_confirmed(tx: &mut Transaction) -> Result<bool> {
-    read_bool(tx, LOCK_CONFIRMED, false).await
+    read_bool(tx, LOCK_CONFIRMED).await
 }
 
 /// The value of [`AUTOMATIC_INVOICE`].
 pub async fn automatic_invoice(tx: &mut Transaction) -> Result<bool> {
-    read_bool(tx, AUTOMATIC_INVOICE, false).await
+    read_bool(tx, AUTOMATIC_INVOICE).await
 }
 
 /// The value of [`QUOTATION_VALIDITY_DAYS`].
@@ -143,10 +145,22 @@ pub(crate) async fn quotation_validity_days(tx: &mut Transaction) -> Result<i32>
     .await?;
     let read = serde_json::to_value(&read)
         .map_err(|error| Error::internal(format!("sales settings: {error}")))?;
-    Ok(read["values"]
+    let entry = read["values"]
         .as_array()
         .and_then(|values| values.iter().find(|v| v["key"] == QUOTATION_VALIDITY_DAYS))
-        .and_then(|entry| entry["value"].as_i64())
-        .and_then(|n| i32::try_from(n).ok())
-        .unwrap_or(30))
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "sales setting '{QUOTATION_VALIDITY_DAYS}' missing from response"
+            ))
+        })?;
+    let raw = entry["value"].as_i64().ok_or_else(|| {
+        Error::internal(format!(
+            "sales setting '{QUOTATION_VALIDITY_DAYS}' is not an integer"
+        ))
+    })?;
+    i32::try_from(raw).map_err(|_| {
+        Error::validation(format!(
+            "sales setting '{QUOTATION_VALIDITY_DAYS}' ({raw}) is out of i32 range"
+        ))
+    })
 }

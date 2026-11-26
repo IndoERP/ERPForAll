@@ -60,7 +60,7 @@ pub(crate) async fn company_annual_count_date(
     tx: &mut Transaction,
     company_id: i64,
 ) -> Result<(u8, u8)> {
-    let env = tx.env().sudo(true);
+    let env = tx.env().sudo(true).with_company(company_id)?;
     let wire_company = u64::try_from(company_id)
         .ok()
         .and_then(|id| erp_sdk::views::wire::WireId::try_from(id).ok())
@@ -76,30 +76,57 @@ pub(crate) async fn company_annual_count_date(
     .await?;
     let json = erp_sdk::serde_json::to_value(&read)
         .map_err(|e| Error::internal(format!("annual inventory settings: {e}")))?;
-    let values = json["values"].as_array();
-    let month = values
-        .and_then(|arr| arr.iter().find(|v| v["key"] == MONTH_KEY))
-        .and_then(|entry| entry["value"].as_str())
+    let values = json["values"]
+        .as_array()
+        .ok_or_else(|| Error::internal("annual inventory settings response missing 'values'"))?;
+    let month_entry = values
+        .iter()
+        .find(|v| v["key"] == MONTH_KEY)
+        .ok_or_else(|| Error::internal(format!("setting '{MONTH_KEY}' missing from response")))?;
+    let month = month_entry["value"]
+        .as_str()
         .and_then(|s| s.parse::<u8>().ok())
         .filter(|m| (1..=12).contains(m))
-        .unwrap_or(12);
-    let day = values
-        .and_then(|arr| arr.iter().find(|v| v["key"] == DAY_KEY))
-        .and_then(|entry| entry["value"].as_i64())
+        .ok_or_else(|| {
+            Error::validation(format!(
+                "setting '{MONTH_KEY}' must be a month between 1 and 12"
+            ))
+        })?;
+    let day_entry = values
+        .iter()
+        .find(|v| v["key"] == DAY_KEY)
+        .ok_or_else(|| Error::internal(format!("setting '{DAY_KEY}' missing from response")))?;
+    let day = day_entry["value"]
+        .as_i64()
         .and_then(|d| u8::try_from(d).ok())
         .filter(|d| (1..=31).contains(d))
-        .unwrap_or(31);
+        .ok_or_else(|| {
+            Error::validation(format!(
+                "setting '{DAY_KEY}' must be a day between 1 and 31"
+            ))
+        })?;
     Ok((month, day))
 }
 
-/// Compute the next scheduled count date from today: if `location_id` defines a positive
-/// `cyclic_inventory_frequency`, returns `today + frequency days`; otherwise returns the next
-/// occurrence of the company's configured annual count month/day.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Compute the next scheduled count date from the company's business date: if `location_id`
+/// defines a positive `cyclic_inventory_frequency`, returns `today + frequency days`; otherwise
+/// returns the next occurrence of the company's configured annual count month/day.
 pub(crate) async fn next_scheduled_count_date(
     tx: &mut Transaction,
     company_id: i64,
     location_id: i64,
 ) -> Result<Date> {
+    let today = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
     let freq_rows = tx
         .query(
             "SELECT cyclic_inventory_frequency FROM stock_location WHERE id = $1",
@@ -113,51 +140,21 @@ pub(crate) async fn next_scheduled_count_date(
         .map_err(db_err)?
         .unwrap_or(0);
     if freq > 0 {
-        let rows = tx
-            .query(
-                "SELECT ((CURRENT_DATE + ($1::int4 * INTERVAL '1 day'))::date)::text",
-                &[&freq],
-            )
-            .await?;
-        let text: String = rows[0].try_get(0).map_err(db_err)?;
-        return parse_iso_date(&text);
+        return Ok(Date::from_days(today.days() + freq));
     }
     let (month, day) = company_annual_count_date(tx, company_id).await?;
-    let m = i32::from(month);
-    let d = i32::from(day);
-    let rows = tx
-        .query(
-            "SELECT (CASE \
-               WHEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4, $1, \
-                              LEAST($2, EXTRACT(DAY FROM (make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4, $1, 1) + INTERVAL '1 month - 1 day'))::int4)) > CURRENT_DATE \
-               THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4, $1, \
-                              LEAST($2, EXTRACT(DAY FROM (make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4, $1, 1) + INTERVAL '1 month - 1 day'))::int4)) \
-               ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4 + 1, $1, \
-                              LEAST($2, EXTRACT(DAY FROM (make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int4 + 1, $1, 1) + INTERVAL '1 month - 1 day'))::int4)) \
-             END)::text",
-            &[&m, &d],
-        )
-        .await?;
-    let text: String = rows[0].try_get(0).map_err(db_err)?;
-    parse_iso_date(&text)
-}
-
-fn parse_iso_date(text: &str) -> Result<Date> {
-    let mut parts = text.split('-');
-    let year: i32 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::internal(format!("Invalid ISO date year in '{text}'.")))?;
-    let month: u32 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::internal(format!("Invalid ISO date month in '{text}'.")))?;
-    let day: u32 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::internal(format!("Invalid ISO date day in '{text}'.")))?;
-    Date::from_ymd(year, month, day)
-        .ok_or_else(|| Error::internal(format!("Invalid ISO date '{text}'.")))
+    let (year, _, _) = today.ymd();
+    let m = u32::from(month);
+    let d_this = u32::from(day).min(days_in_month(year, m));
+    let this_year = Date::from_ymd(year, m, d_this)
+        .ok_or_else(|| Error::internal("Failed to construct annual count date."))?;
+    if this_year > today {
+        return Ok(this_year);
+    }
+    let next_year = year + 1;
+    let d_next = u32::from(day).min(days_in_month(next_year, m));
+    Date::from_ymd(next_year, m, d_next)
+        .ok_or_else(|| Error::internal("Failed to construct next annual count date."))
 }
 
 /// Apply an exact inventory adjustment delta for a quant key via a done `is_inventory` stock move
@@ -328,7 +325,8 @@ impl StockQuant {
         tx.flush().await?;
         let rows = tx
             .query(
-                "SELECT id::int8, company_id::int8, location_id::int8, quantity, inventory_date \
+                "SELECT id::int8, company_id::int8, location_id::int8, quantity, \
+                        inventory_date IS NOT NULL \
                  FROM stock_quant WHERE id = ANY($1) ORDER BY id",
                 &[&ids],
             )
@@ -338,19 +336,11 @@ impl StockQuant {
             let company_id: i64 = row.try_get(1).map_err(db_err)?;
             let location_id: i64 = row.try_get(2).map_err(db_err)?;
             let qty: Decimal = row.try_get(3).map_err(db_err)?;
-            let inv_date: Option<String> = tx
-                .query(
-                    "SELECT inventory_date::text FROM stock_quant WHERE id = $1",
-                    &[&id],
-                )
-                .await?
-                .first()
-                .and_then(|r| r.try_get(0).ok())
-                .flatten();
+            let has_inv_date: bool = row.try_get(4).map_err(db_err)?;
             let mut vals = RawVals::new();
             vals.insert("inventory_quantity".into(), Cell::Decimal(qty));
             vals.insert("inventory_quantity_set".into(), Cell::Bool(true));
-            if inv_date.is_none() {
+            if !has_inv_date {
                 let next_date = next_scheduled_count_date(tx, company_id, location_id).await?;
                 vals.insert("inventory_date".into(), Cell::Date(next_date));
             }
@@ -426,18 +416,31 @@ impl StockQuant {
     ) -> Result<()> {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
+        if !records.env().su()
+            && !tx
+                .has_group(records.env(), "stock.group_stock_manager")
+                .await?
+        {
+            return Err(Error::access(
+                "Only an Inventory Administrator can apply physical inventory adjustments.",
+            ));
+        }
         let ids = records.ids();
         if ids.is_empty() {
             return Ok(());
         }
         tx.savepoint(async move |tx| {
             tx.flush().await?;
+            // Order by canonical quant key (company, product, location, lot, package, owner)
+            // so quant_engine lock ordering is strictly ascending across all applied rows.
             let rows = tx
                 .query(
                     "SELECT id::int8, company_id::int8, product_id::int8, location_id::int8, \
                             lot_id::int8, package_id::int8, owner_id::int8, quantity, \
                             inventory_quantity, inventory_quantity_set, inventory_note \
-                     FROM stock_quant WHERE id = ANY($1) ORDER BY id FOR UPDATE",
+                     FROM stock_quant WHERE id = ANY($1) \
+                     ORDER BY company_id, product_id, location_id, \
+                              lot_id NULLS LAST, package_id NULLS LAST, owner_id NULLS LAST",
                     &[&ids],
                 )
                 .await?;
@@ -484,7 +487,9 @@ impl StockQuant {
                         "SELECT count(*)::int8 FROM stock_quant WHERE id = $1",
                         &[&id],
                     )
-                    .await?[0]
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::internal("Quant existence check returned no row."))?
                     .try_get(0)
                     .map_err(db_err)?;
                 if still_exists > 0 {
@@ -536,6 +541,7 @@ pub struct StockInventoryAdjustmentNew {
         comodel = "stock.location",
         required = true,
         ondelete = "restrict",
+        check_company = true,
         string = "Location"
     )]
     pub location_id: Option<RecId>,
@@ -610,6 +616,15 @@ impl StockInventoryAdjustmentNew {
     ) -> Result<Value> {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
+        if !records.env().su()
+            && !tx
+                .has_group(records.env(), "stock.group_stock_manager")
+                .await?
+        {
+            return Err(Error::access(
+                "Only an Inventory Administrator can apply physical inventory adjustments.",
+            ));
+        }
         let id = records.ensure_one()?.int()?;
         tx.savepoint(async move |tx| {
             tx.flush().await?;

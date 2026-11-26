@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 <!--
-The Sales menu (sale/views/sale_menus.xml:4-40, laid out anew). The root ships inactive: the
-     application addon sale_management switches it on.
+The Sales application menu. The root ships inactive: the application addon
+sale_management switches it on.
 -->
 <erp>
   <menuitem id="sale_menu_root" name="Sales" active="False" groups="sales_team.group_sale_salesman" sequence="30" web_icon="lucide:handshake">
@@ -12,16 +12,16 @@ The Sales menu (sale/views/sale_menus.xml:4-40, laid out anew). The root ships i
       <menuitem id="menu_sale_teams_dashboard" name="Sales Teams" action="action_sale_teams_dashboard" sequence="30"/>
       <menuitem id="res_partner_menu" name="Customers" action="action_customers" sequence="40"/>
     </menuitem>
-    <menuitem id="product_menu_catalog" name="Products" sequence="30">
+    <menuitem id="product_menu_catalog" name="Products" groups="sales_team.group_sale_salesman" sequence="30">
       <menuitem id="menu_product_template_action" name="Products" action="product.product_template_action" sequence="10"/>
       <menuitem id="menu_product_product_action" name="Product Variants" action="product.product_product_action" sequence="20"/>
       <menuitem id="menu_product_pricelist_main" name="Pricelists" action="product.product_pricelist_action2" sequence="30"/>
       <menuitem id="menu_loyalty_program" name="Discounts &amp; Loyalty" action="action_loyalty_program" sequence="40"/>
     </menuitem>
-    <menuitem id="menu_sale_report" name="Reporting" sequence="40">
+    <menuitem id="menu_sale_report" name="Reporting" groups="sales_team.group_sale_salesman" sequence="40">
       <menuitem id="menu_sale_dynamic_report" groups="sales_team.group_sale_salesman" name="Sales Report" action="action_sale_dynamic_report" sequence="10"/>
       <menuitem id="menu_sale_by_product_report" groups="sales_team.group_sale_salesman" name="Sales by Product" action="action_sale_by_product_report" sequence="15"/>
-      <menuitem id="menu_sale_analysis" name="Sales Pivot &amp; Graph" action="action_sale_order_analysis" sequence="20"/>
+      <menuitem id="menu_sale_analysis" groups="sales_team.group_sale_salesman" name="Sales Pivot &amp; Graph" action="action_sale_order_analysis" sequence="20"/>
     </menuitem>
     <menuitem id="menu_sale_config" name="Configuration" groups="sales_team.group_sale_manager" sequence="90">
       <menuitem id="menu_sale_settings" name="Settings" action="sale_settings_action" groups="base.group_system" sequence="5"/>

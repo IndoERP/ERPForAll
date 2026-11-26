@@ -508,11 +508,11 @@
 
   <menuitem id="menu_analytic_items" name="Analytic Items" parent="menu_finance_entries" action="action_analytic_line" groups="account.group_cost_center_controlling" sequence="40"/>
   <menuitem id="menu_cost_allocation_runs" name="Cost Allocation Runs" parent="menu_finance_entries" action="action_cost_allocation_run" groups="account.group_cost_center_controlling" sequence="42"/>
-  <menuitem id="menu_analytic_plans" name="Analytic Plans" parent="menu_finance_configuration" action="action_analytic_plan" groups="account.group_cost_center_controlling" sequence="75"/>
-  <menuitem id="menu_analytic_accounts" name="Cost &amp; Profit Centers" parent="menu_finance_configuration" action="action_analytic_account" groups="account.group_cost_center_controlling" sequence="76"/>
-  <menuitem id="menu_analytic_distribution_models" name="Default Cost Center Rules" parent="menu_finance_configuration" action="action_analytic_distribution_model" groups="account.group_cost_center_controlling" sequence="77"/>
-  <menuitem id="menu_analytic_skf" name="Statistical Key Figures" parent="menu_finance_configuration" action="action_analytic_skf" groups="account.group_cost_center_controlling" sequence="78"/>
-  <menuitem id="menu_cost_allocation_cycles" name="Cost Allocation Cycles" parent="menu_finance_configuration" action="action_cost_allocation_cycle" groups="account.group_cost_center_controlling" sequence="79"/>
+  <menuitem id="menu_analytic_plans" name="Analytic Plans" parent="menu_finance_configuration" action="action_analytic_plan" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="81"/>
+  <menuitem id="menu_analytic_accounts" name="Cost &amp; Profit Centers" parent="menu_finance_configuration" action="action_analytic_account" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="82"/>
+  <menuitem id="menu_analytic_distribution_models" name="Default Cost Center Rules" parent="menu_finance_configuration" action="action_analytic_distribution_model" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="83"/>
+  <menuitem id="menu_analytic_skf" name="Statistical Key Figures" parent="menu_finance_configuration" action="action_analytic_skf" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="84"/>
+  <menuitem id="menu_cost_allocation_cycles" name="Cost Allocation Cycles" parent="menu_finance_configuration" action="action_cost_allocation_cycle" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="85"/>
   <record id="menu_analytic_items" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
   <record id="menu_cost_allocation_runs" model="ir.ui.menu"><field name="web_icon">lucide:split</field></record>
   <record id="menu_analytic_plans" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>

@@ -17,7 +17,7 @@ access_loyalty_rule_user,loyalty.rule.user,model_loyalty_rule,sales_team.group_s
 access_loyalty_rule_manager,loyalty.rule.manager,model_loyalty_rule,sales_team.group_sale_manager,crud,
 access_loyalty_reward_user,loyalty.reward.user,model_loyalty_reward,sales_team.group_sale_salesman,r,
 access_loyalty_reward_manager,loyalty.reward.manager,model_loyalty_reward,sales_team.group_sale_manager,crud,
-access_loyalty_card_user,loyalty.card.user,model_loyalty_card,sales_team.group_sale_salesman,ru,
+access_loyalty_card_user,loyalty.card.user,model_loyalty_card,sales_team.group_sale_salesman,r,
 access_loyalty_card_manager,loyalty.card.manager,model_loyalty_card,sales_team.group_sale_manager,crud,
 access_sale_order_template_user,sale.order.template.user,model_sale_order_template,sales_team.group_sale_salesman,r,
 access_sale_order_template_manager,sale.order.template.manager,model_sale_order_template,sales_team.group_sale_manager,crud,
@@ -25,7 +25,8 @@ access_sale_order_template_line_user,sale.order.template.line.user,model_sale_or
 access_sale_order_template_line_manager,sale.order.template.line.manager,model_sale_order_template_line,sales_team.group_sale_manager,crud,
 access_sale_order_template_option_user,sale.order.template.option.user,model_sale_order_template_option,sales_team.group_sale_salesman,r,
 access_sale_order_template_option_manager,sale.order.template.option.manager,model_sale_order_template_option,sales_team.group_sale_manager,crud,
-access_sale_order_option_user,sale.order.option.user,model_sale_order_option,sales_team.group_sale_salesman,crud,
+access_sale_order_option_user,sale.order.option.user,model_sale_order_option,sales_team.group_sale_salesman,crud,"['|', ('salesman_id', '=', user.id), ('salesman_id', '=', False)]"
+access_sale_order_option_all_leads,sale.order.option.all_leads,model_sale_order_option,sales_team.group_sale_salesman_all_leads,crud,
 access_sale_order_option_manager,sale.order.option.manager,model_sale_order_option,sales_team.group_sale_manager,crud,
 access_sale_quotation_send_user,sale.quotation.send.user,model_sale_quotation_send,sales_team.group_sale_salesman,crud,"[('create_uid', '=', user.id)]"
 access_sale_order_sign_wizard_user,sale.order.sign.wizard.user,model_sale_order_sign_wizard,sales_team.group_sale_salesman,crud,"[('create_uid', '=', user.id)]"

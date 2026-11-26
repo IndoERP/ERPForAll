@@ -108,8 +108,8 @@ fn parse_gs1_date(raw: &str) -> Result<String> {
 /// or raw FNC1 `\x1D`-delimited format) into structured elements.
 ///
 /// # Errors
-/// Returns `Validation` when the input exceeds 512 bytes, has malformed parentheses, or
-/// contains an invalid fixed-length AI payload.
+/// Returns `Validation` when the input exceeds 512 bytes, contains non-ASCII characters,
+/// has malformed parentheses, or contains an unknown or invalid Application Identifier.
 pub fn parse_gs1_elements(input: &str) -> Result<Vec<Gs1Element>> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -120,9 +120,16 @@ pub fn parse_gs1_elements(input: &str) -> Result<Vec<Gs1Element>> {
             "GS1 barcode exceeds maximum length of 512 bytes.",
         ));
     }
+    if !trimmed.is_ascii() {
+        return Err(Error::validation(
+            "GS1 barcode must contain ASCII characters only.",
+        ));
+    }
     // Strip leading symbology identifier (`]C1`, `]e0`, `]d2`, `]Q3`) if present.
-    let body = if trimmed.starts_with(']') && trimmed.len() >= 3 {
-        &trimmed[3..]
+    let body = if trimmed.starts_with(']') {
+        trimmed
+            .get(3..)
+            .ok_or_else(|| Error::validation("Truncated GS1 symbology identifier."))?
     } else {
         trimmed
     };
@@ -149,7 +156,11 @@ fn classify_ai(ai: &str, raw_value: &str) -> Result<Gs1Element> {
             }
             ("quantity", raw_value.to_owned())
         }
-        other => ("unknown", format!("{other}:{raw_value}")),
+        other => {
+            return Err(Error::validation(format!(
+                "Unsupported GS1 Application Identifier '({other})'."
+            )));
+        }
     };
     Ok(Gs1Element {
         ai: ai.to_owned(),
@@ -229,24 +240,35 @@ fn parse_raw_gs1(body: &str) -> Result<Vec<Gs1Element>> {
     Ok(elements)
 }
 
+/// Maximum raw byte length accepted by [`split_combined_barcode`] before splitting.
+const MAX_COMBINED_BYTES: usize = 16 * 1024;
+
 /// Split a combined barcode scan using the configured separator (non-empty chunks, bounded to 64 parts).
 ///
 /// # Errors
-/// Returns `Validation` when the separator is empty or more than 64 combined parts are supplied.
+/// Returns `Validation` when the separator is empty, input exceeds 16 KiB, or more than 64
+/// combined parts are supplied.
 pub fn split_combined_barcode(input: &str, separator: &str) -> Result<Vec<String>> {
     if separator.is_empty() {
         return Err(Error::validation("Barcode separator cannot be empty."));
     }
-    let parts: Vec<String> = input
+    if input.len() > MAX_COMBINED_BYTES {
+        return Err(Error::validation(
+            "Combined barcode exceeds maximum length of 16 KiB.",
+        ));
+    }
+    let mut parts = Vec::new();
+    for part in input
         .split(separator)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if parts.len() > 64 {
-        return Err(Error::validation(
-            "Combined barcode exceeds the limit of 64 segments.",
-        ));
+    {
+        if parts.len() >= 64 {
+            return Err(Error::validation(
+                "Combined barcode exceeds the limit of 64 segments.",
+            ));
+        }
+        parts.push(part.to_owned());
     }
     Ok(parts)
 }
@@ -297,15 +319,20 @@ impl Gs1BarcodeNomenclature {
         for segment in segments {
             let mut entry = BTreeMap::new();
             entry.insert("raw".into(), serde_json::Value::String(segment.clone()));
-            if let Ok(gs1) = parse_gs1_elements(&segment)
-                && !gs1.is_empty()
-                && gs1.iter().any(|e| e.kind != "unknown")
-            {
-                let items: Vec<serde_json::Value> = gs1
-                    .into_iter()
-                    .map(|e| serde_json::json!({"ai": e.ai, "kind": e.kind, "value": e.value}))
-                    .collect();
-                entry.insert("gs1".into(), serde_json::Value::Array(items));
+            let looks_like_gs1 = segment.starts_with('(')
+                || segment.starts_with("]C1")
+                || segment.starts_with("]d2")
+                || segment.starts_with("]e0")
+                || segment.starts_with("]Q3");
+            if looks_like_gs1 {
+                let gs1 = parse_gs1_elements(&segment)?;
+                if !gs1.is_empty() {
+                    let items: Vec<serde_json::Value> = gs1
+                        .into_iter()
+                        .map(|e| serde_json::json!({"ai": e.ai, "kind": e.kind, "value": e.value}))
+                        .collect();
+                    entry.insert("gs1".into(), serde_json::Value::Array(items));
+                }
             }
             results.push(entry);
         }

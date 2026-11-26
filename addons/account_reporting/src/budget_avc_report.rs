@@ -104,6 +104,7 @@ struct BudgetMetrics {
     committed: Decimal,
     actual: Decimal,
     exceeded: bool,
+    is_revenue: bool,
 }
 
 impl BudgetMetrics {
@@ -116,6 +117,13 @@ impl BudgetMetrics {
         } else {
             ((self.committed + self.actual) / self.released * Decimal::from(100)).round_dp(2)
         }
+    }
+    fn is_zero(&self) -> bool {
+        self.original.is_zero()
+            && self.revision.is_zero()
+            && self.released.is_zero()
+            && self.committed.is_zero()
+            && self.actual.is_zero()
     }
 }
 
@@ -137,7 +145,7 @@ fn build_cells(
             "actual" => ReportCell::monetary(Some(m.actual), scale, Some(currency)),
             "available" => {
                 let c = ReportCell::monetary(Some(m.available()), scale, Some(currency));
-                if m.exceeded || m.available() < Decimal::ZERO {
+                if !m.is_revenue && (m.exceeded || m.available() < Decimal::ZERO) {
                     c.with_danger(true)
                 } else {
                     c
@@ -145,7 +153,7 @@ fn build_cells(
             }
             "util_pct" => {
                 let c = ReportCell::number(CellKind::Percent, Some(m.util_pct()), 2);
-                if m.exceeded || m.util_pct() > Decimal::from(100) {
+                if !m.is_revenue && (m.exceeded || m.util_pct() > Decimal::from(100)) {
                     c.with_danger(true)
                 } else {
                     c
@@ -171,7 +179,7 @@ fn locate(report: &ReportDef, id: &LineId) -> Result<BudgetTarget> {
         return Err(invalid("Line id does not belong to Budget AVC Report."));
     }
     match id.segments() {
-        [seg]
+        [_, seg]
             if seg.kind() == &SegmentKind::Group("budget_id".to_owned())
                 && seg.model() == "account.budget" =>
         {
@@ -183,7 +191,7 @@ fn locate(report: &ReportDef, id: &LineId) -> Result<BudgetTarget> {
                 .ok_or_else(|| invalid("Invalid budget id."))?;
             Ok(BudgetTarget::Budget(bid))
         }
-        [_, seg]
+        [_, _, seg]
             if seg.kind() == &SegmentKind::Group("line_id".to_owned())
                 && seg.model() == "account.budget.line" =>
         {
@@ -212,6 +220,11 @@ impl ReportProvider for BudgetAvcReport {
         _strict: bool,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            if options.order.is_some() {
+                return Err(invalid(
+                    "Budget AVC Report rows are ordered by budget start date.",
+                ));
+            }
             if let Some(key) = options.provider.keys().next() {
                 return Err(invalid(format!(
                     "Budget AVC Report does not accept option '{key}'."
@@ -226,16 +239,14 @@ impl ReportProvider for BudgetAvcReport {
                 ));
             }
             for col in &report.columns {
-                if !matches!(
-                    col.label.as_str(),
-                    "original"
-                        | "revision"
-                        | "released"
-                        | "committed"
-                        | "actual"
-                        | "available"
-                        | "util_pct"
-                ) {
+                let ok = match col.label.as_str() {
+                    "util_pct" => col.kind == CellKind::Percent,
+                    "original" | "revision" | "released" | "committed" | "actual" | "available" => {
+                        col.kind == CellKind::Monetary
+                    }
+                    _ => false,
+                };
+                if !ok {
                     return Err(invalid(format!(
                         "Unknown Budget AVC Report column '{}'.",
                         col.label
@@ -289,6 +300,7 @@ impl ReportProvider for BudgetAvcReport {
                         "id",
                         "name",
                         "version_code",
+                        "budget_type",
                         "total_original",
                         "total_revision",
                         "total_released",
@@ -307,6 +319,7 @@ impl ReportProvider for BudgetAvcReport {
                 let bid = int_field(&row, "id")?;
                 let name = text_field(&row, "name")?;
                 let ver = text_field(&row, "version_code")?;
+                let btype = text_field(&row, "budget_type")?;
                 let label = if ver.is_empty() {
                     name
                 } else {
@@ -319,7 +332,11 @@ impl ReportProvider for BudgetAvcReport {
                     committed: dec_field(&row, "total_committed")?,
                     actual: dec_field(&row, "total_practical")?,
                     exceeded: false,
+                    is_revenue: btype == "revenue",
                 };
+                if options.hide_zero && m.is_zero() {
+                    continue;
+                }
                 grand.original += m.original;
                 grand.revision += m.revision;
                 grand.released += m.released;
@@ -332,13 +349,12 @@ impl ReportProvider for BudgetAvcReport {
                     &bid.to_string(),
                 ));
                 let mut line = Line::new(
-                    lid.clone(),
+                    lid,
                     label,
                     LineKind::Group,
                     build_cells(report, currency, scale, m, false),
                 );
                 line.unfoldable = true;
-                line.unfolded = options.unfold_all || options.unfolded.contains(&lid);
                 line.caret = vec!["open"];
                 out.push(line);
             }
@@ -365,10 +381,51 @@ impl ReportProvider for BudgetAvcReport {
             let BudgetTarget::Budget(bid) = locate(report, line)? else {
                 return Err(invalid("Only Budget rows can be unfolded."));
             };
+            let max_page = cx.bounds().max_screen_lines as u64;
+            if page.limit == 0 || page.limit > max_page {
+                return Err(invalid(format!(
+                    "Page limit must be between 1 and {max_page}."
+                )));
+            }
             let company = options.companies[0];
+            let from = options
+                .period
+                .from
+                .ok_or_else(|| invalid("Budget AVC Report requires a date range."))?;
+            let to = options.period.to;
             let (currency, scale) = company_currency(cx, company).await?;
 
-            let domain = cond(json!([["budget_id", "=", bid]]))?;
+            // Verify budget belongs to the selected company, is active, and overlaps the period.
+            let b_rows = cx
+                .env()
+                .records("account.budget")?
+                .search_with(
+                    cx.tx(),
+                    &cond(json!([
+                        ["id", "=", bid],
+                        ["company_id", "=", company],
+                        ["state", "in", ["confirm", "validate", "done"]],
+                        ["date_from", "<=", day(to)],
+                        ["date_to", ">=", day(from)]
+                    ]))?,
+                    &SearchOptions::new().limit(1),
+                )
+                .await?
+                .read_rows(cx.tx(), &["budget_type"], Load::Raw)
+                .await?;
+            let Some(brow) = b_rows.iter().next().map(Value::Row) else {
+                return Err(invalid(
+                    "Budget is not accessible for this company and period.",
+                ));
+            };
+            let is_revenue = text_field(&brow, "budget_type")? == "revenue";
+
+            let domain = cond(json!([
+                ["budget_id", "=", bid],
+                ["company_id", "=", company],
+                ["date_from", "<=", day(to)],
+                ["date_to", ">=", day(from)]
+            ]))?;
             let rec = cx.env().records("account.budget.line")?;
             let total_count = rec.search_count(cx.tx(), &domain, None).await?;
             let found = rec
@@ -410,6 +467,7 @@ impl ReportProvider for BudgetAvcReport {
                     committed: dec_field(&row, "committed_amount")?,
                     actual: dec_field(&row, "practical_amount")?,
                     exceeded: status == "exceeded",
+                    is_revenue,
                 };
                 let cid = line.child(Segment::group(
                     "line_id",
@@ -443,15 +501,28 @@ impl ReportProvider for BudgetAvcReport {
 
     fn drill<'a>(
         &'a self,
-        _cx: &'a mut ReportCx<'_>,
+        cx: &'a mut ReportCx<'_>,
         report: &'a ReportDef,
-        _options: &'a Options,
+        options: &'a Options,
         line: &'a LineId,
         target: &'a DrillTarget,
     ) -> BoxFuture<'a, Result<Json>> {
         Box::pin(async move {
+            let company = options.companies[0];
             match (locate(report, line)?, target) {
                 (BudgetTarget::Budget(bid), DrillTarget::Item(item)) if item == "open" => {
+                    let visible = cx
+                        .env()
+                        .records("account.budget")?
+                        .search_count(
+                            cx.tx(),
+                            &cond(json!([["id", "=", bid], ["company_id", "=", company]]))?,
+                            None,
+                        )
+                        .await?;
+                    if visible == 0 {
+                        return Err(invalid("Budget is not accessible in this company."));
+                    }
                     Ok(json!({
                         "type": "ir.actions.act_window",
                         "name": "Budget",
@@ -461,16 +532,55 @@ impl ReportProvider for BudgetAvcReport {
                         "views": [[false, "form"]]
                     }))
                 }
-                (BudgetTarget::Line(lid), DrillTarget::Item(item)) if item == "open" => Ok(json!({
-                    "type": "ir.actions.act_window",
-                    "name": "Budget Line",
-                    "res_model": "account.budget.line",
-                    "res_id": lid,
-                    "target": "current",
-                    "views": [[false, "form"]]
-                })),
-                (BudgetTarget::Line(lid), DrillTarget::Cell(_)) => {
-                    let dom = cond(json!([["budget_line_id", "=", lid]]))?;
+                (BudgetTarget::Line(lid), DrillTarget::Item(item)) if item == "open" => {
+                    let visible = cx
+                        .env()
+                        .records("account.budget.line")?
+                        .search_count(
+                            cx.tx(),
+                            &cond(json!([["id", "=", lid], ["company_id", "=", company]]))?,
+                            None,
+                        )
+                        .await?;
+                    if visible == 0 {
+                        return Err(invalid("Budget Line is not accessible in this company."));
+                    }
+                    Ok(json!({
+                        "type": "ir.actions.act_window",
+                        "name": "Budget Line",
+                        "res_model": "account.budget.line",
+                        "res_id": lid,
+                        "target": "current",
+                        "views": [[false, "form"]]
+                    }))
+                }
+                (BudgetTarget::Line(lid), DrillTarget::Cell(col_idx)) => {
+                    let col = report
+                        .columns
+                        .get(*col_idx)
+                        .ok_or_else(|| invalid("Budget AVC Report column index out of range."))?;
+                    if col.label != "committed" {
+                        return Err(invalid(
+                            "Only Committed (PO) cells drill into Purchase Commitments.",
+                        ));
+                    }
+                    let visible = cx
+                        .env()
+                        .records("account.budget.line")?
+                        .search_count(
+                            cx.tx(),
+                            &cond(json!([["id", "=", lid], ["company_id", "=", company]]))?,
+                            None,
+                        )
+                        .await?;
+                    if visible == 0 {
+                        return Err(invalid("Budget Line is not accessible in this company."));
+                    }
+                    let dom = cond(json!([
+                        ["budget_line_id", "=", lid],
+                        ["company_id", "=", company],
+                        ["state", "in", ["open", "partially_billed"]]
+                    ]))?;
                     Ok(json!({
                         "type": "ir.actions.act_window",
                         "name": "Open Purchase Commitments",

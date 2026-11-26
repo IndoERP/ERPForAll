@@ -165,7 +165,7 @@
         <field name="state" type="col"/>
         <field name="product_uom_qty" type="measure"/>
         <field name="price_subtotal" type="measure"/>
-        <field name="margin" type="measure"/>
+        <field name="margin" type="measure" groups="sales_team.group_sale_salesman"/>
       </pivot>
     </field>
   </record>

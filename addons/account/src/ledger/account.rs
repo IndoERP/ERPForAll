@@ -308,21 +308,32 @@ impl AccountAccount {
     }
 
     /// Display name combining the active company's account code and the account name (`"101401 Bank"`).
-    #[compute(depends = ["name", "code"], depends_context = ["company"])]
+    #[compute(depends = ["name", "code_mapping_ids.code"], depends_context = ["company"])]
     async fn _compute_display_name(
         this: &RecordSet<AccountAccount>,
         tx: &mut Transaction,
         out: &mut Assign<'_, AccountAccount>,
     ) -> Result<()> {
         let names = this.mapped(tx, AccountAccount::NAME).await?;
+        let ids: Vec<i64> = this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .filter_map(|id| id.as_real().map(|real| real.get()))
+            .collect();
         let codes = if this.env().company_id()?.is_some() {
-            this.mapped(tx, AccountAccount::CODE).await?
+            let root = active_root_company(tx, this.env()).await?;
+            codes_by_account(tx, this.env(), &ids, root).await?
         } else {
-            vec![None; names.len()]
+            BTreeMap::new()
         };
-        for (index, (name, code)) in names.into_iter().zip(codes).enumerate() {
+        for (index, (rec_id, name)) in this.as_records().rec_ids().iter().zip(names).enumerate() {
+            let code = rec_id
+                .as_real()
+                .and_then(|real| codes.get(&real.get()))
+                .map(String::as_str);
             let label = match (
-                code.as_deref().filter(|s| !s.is_empty()),
+                code.filter(|s| !s.is_empty()),
                 name.as_deref().filter(|s| !s.is_empty()),
             ) {
                 (Some(c), Some(n)) => Some(Arc::<str>::from(format!("{c} {n}"))),

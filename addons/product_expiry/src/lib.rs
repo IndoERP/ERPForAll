@@ -61,23 +61,14 @@ pub struct ExpiryDates {
     pub alert_date: Option<DateTime>,
 }
 
-/// Derive lot lifecycle dates from a receipt/creation timestamp and product template durations.
-///
-/// - `expiration_date` = `base + expiration_time` (days)
-/// - `use_date` = `expiration_date - use_time` (days) when `use_time > 0`
-/// - `removal_date` = `expiration_date - removal_time` (days) when `removal_time > 0`
-/// - `alert_date` = `expiration_date - alert_time` (days) when `alert_time > 0`
-pub fn compute_expiry_dates(
-    base: DateTime,
-    expiration_time: i32,
+/// Derive secondary lifecycle dates (`use_date`, `removal_date`, `alert_date`) from an
+/// explicit `expiration_date` and product template offsets.
+pub fn compute_expiry_dates_from_expiration(
+    exp: DateTime,
     use_time: i32,
     removal_time: i32,
     alert_time: i32,
 ) -> Result<ExpiryDates> {
-    if expiration_time <= 0 {
-        return Ok(ExpiryDates::default());
-    }
-    let exp = add_days(base, expiration_time)?;
     let use_date = if use_time > 0 {
         Some(add_days(exp, -use_time)?)
     } else {
@@ -99,6 +90,26 @@ pub fn compute_expiry_dates(
         removal_date,
         alert_date,
     })
+}
+
+/// Derive lot lifecycle dates from a receipt/creation timestamp and product template durations.
+///
+/// - `expiration_date` = `base + expiration_time` (days)
+/// - `use_date` = `expiration_date - use_time` (days) when `use_time > 0`
+/// - `removal_date` = `expiration_date - removal_time` (days) when `removal_time > 0`
+/// - `alert_date` = `expiration_date - alert_time` (days) when `alert_time > 0`
+pub fn compute_expiry_dates(
+    base: DateTime,
+    expiration_time: i32,
+    use_time: i32,
+    removal_time: i32,
+    alert_time: i32,
+) -> Result<ExpiryDates> {
+    if expiration_time <= 0 {
+        return Ok(ExpiryDates::default());
+    }
+    let exp = add_days(base, expiration_time)?;
+    compute_expiry_dates_from_expiration(exp, use_time, removal_time, alert_time)
 }
 
 #[extend(ProductTemplate, addon = "product_expiry")]
@@ -143,6 +154,35 @@ pub struct ProductTemplateExpiry {
         string = "Alert Time (Days)"
     )]
     pub alert_time: i32,
+}
+
+#[methods(ProductTemplate, addon = "product_expiry")]
+impl ProductTemplateExpiry {
+    #[constrains("expiration_time", "use_time", "removal_time", "alert_time")]
+    async fn _check_nonnegative_expiry_durations(
+        this: &RecordSet<ProductTemplate>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let exp_times = this
+            .mapped(tx, ProductTemplateExpiry::EXPIRATION_TIME)
+            .await?;
+        let use_times = this.mapped(tx, ProductTemplateExpiry::USE_TIME).await?;
+        let rem_times = this.mapped(tx, ProductTemplateExpiry::REMOVAL_TIME).await?;
+        let alert_times = this.mapped(tx, ProductTemplateExpiry::ALERT_TIME).await?;
+        for (((exp_t, use_t), rem_t), alert_t) in exp_times
+            .into_iter()
+            .zip(use_times)
+            .zip(rem_times)
+            .zip(alert_times)
+        {
+            if exp_t < 0 || use_t < 0 || rem_t < 0 || alert_t < 0 {
+                return Err(Error::validation(
+                    "Product expiration, best-before, removal, and alert durations cannot be negative.",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[extend(StockLot, addon = "product_expiry")]
@@ -237,7 +277,15 @@ impl StockLotExpiry {
                     _ => None,
                 };
                 if let Some((exp_t, use_t, rem_t, alert_t)) = pid.and_then(|id| rules.get(&id)) {
-                    let dates = compute_expiry_dates(now, *exp_t, *use_t, *rem_t, *alert_t)?;
+                    let dates = match vals.get("expiration_date") {
+                        Some(Cell::DateTime(explicit_exp)) => compute_expiry_dates_from_expiration(
+                            *explicit_exp,
+                            *use_t,
+                            *rem_t,
+                            *alert_t,
+                        )?,
+                        _ => compute_expiry_dates(now, *exp_t, *use_t, *rem_t, *alert_t)?,
+                    };
                     let set_if_missing =
                         |vals: &mut RawVals, key: &'static str, dt: Option<DateTime>| {
                             if let Some(dt) = dt

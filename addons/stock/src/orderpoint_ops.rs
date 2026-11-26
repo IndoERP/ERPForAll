@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use erp_addon_base::ir_config_setting::read_values;
+use erp_sdk::sequence::draw_by_code;
 use erp_sdk::settings::SettingsScope;
-use erp_sdk::{Operation, ValueMap, prelude::*};
+use erp_sdk::{CompanyId, Operation, ValueMap, prelude::*};
 
 use crate::orderpoint::StockWarehouseOrderpoint;
 
@@ -16,9 +17,9 @@ fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::db("A replenishment rule could not be read.").with_source(e)
 }
 
-/// Read the company's configured replenishment horizon in days (`stock.horizon_days`, default 365).
+/// Read the company's configured replenishment horizon in days (`stock.horizon_days`).
 pub(crate) async fn company_horizon_days(tx: &mut Transaction, company_id: i64) -> Result<i64> {
-    let env = tx.env().sudo(true);
+    let env = tx.env().sudo(true).with_company(company_id)?;
     let wire_company = u64::try_from(company_id)
         .ok()
         .and_then(|id| erp_sdk::views::wire::WireId::try_from(id).ok())
@@ -34,33 +35,32 @@ pub(crate) async fn company_horizon_days(tx: &mut Transaction, company_id: i64) 
     .await?;
     let json = erp_sdk::serde_json::to_value(&read)
         .map_err(|e| Error::internal(format!("horizon setting read: {e}")))?;
-    let days = json["values"]
+    let entry = json["values"]
         .as_array()
         .and_then(|arr| arr.iter().find(|v| v["key"] == HORIZON_KEY))
-        .and_then(|entry| entry["value"].as_i64())
+        .ok_or_else(|| Error::internal(format!("setting '{HORIZON_KEY}' missing from response")))?;
+    let days = entry["value"]
+        .as_i64()
         .filter(|d| (1..=3650).contains(d))
-        .unwrap_or(365);
+        .ok_or_else(|| {
+            Error::validation(format!(
+                "setting '{HORIZON_KEY}' must be an integer between 1 and 3650"
+            ))
+        })?;
     Ok(days)
 }
 
 async fn next_orderpoint_name(env: &Env, tx: &mut Transaction, company_id: i64) -> Result<String> {
-    let seq_env = env.with_company(company_id)?.sudo(true);
-    let seqs = seq_env.records("ir.sequence")?;
-    if let Ok(Value::Str(code)) = seqs
-        .call::<_, Value>(tx, "next_by_code", ("stock.orderpoint".to_owned(),))
-        .await
-        && !code.is_empty()
-    {
-        return Ok(code.to_string());
-    }
-    let rows = tx
-        .query(
-            "SELECT COALESCE(max(id), 0)::int8 + 1 FROM stock_warehouse_orderpoint",
-            &[],
-        )
-        .await?;
-    let next: i64 = rows[0].try_get(0).map_err(db_err)?;
-    Ok(format!("OP/{next:05}"))
+    let company = CompanyId::new(company_id)?;
+    let today = env.context_today()?;
+    draw_by_code(
+        tx,
+        &env.sudo(true),
+        "stock.orderpoint",
+        company,
+        Some(today),
+    )
+    .await
 }
 
 /// Pure exact-decimal helper computing `qty_to_order` from `forecast`, `min_qty`, `max_qty`,
@@ -417,23 +417,35 @@ impl StockWarehouseOrderpoint {
     ) -> Result<()> {
         let records = this.as_records();
         records.check_access(tx, Operation::Write).await?;
-        if records.ids().is_empty() {
+        let ids = records.ids();
+        if ids.is_empty() {
             return Ok(());
         }
-        let rows = tx.query("SELECT (CURRENT_DATE + 7)::text", &[]).await?;
-        let text: String = rows[0].try_get(0).map_err(db_err)?;
-        let mut parts = text.split('-');
-        let year: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(2026);
-        let month: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-        let day: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-        let target_date = Date::from_ymd(year, month, day)
-            .ok_or_else(|| Error::internal("Failed to compute snooze date."))?;
-        records
-            .write(
-                tx,
-                RawVals::new().set_cell("snoozed_until", Cell::Date(target_date)),
-            )
-            .await
+        let companies = this
+            .mapped(tx, StockWarehouseOrderpoint::COMPANY_ID)
+            .await?;
+        let mut date_by_company: BTreeMap<i64, Date> = BTreeMap::new();
+        for (id, comp) in ids.into_iter().zip(companies) {
+            let cid = comp
+                .ok_or_else(|| Error::invariant("Replenishment rule has no company."))?
+                .get();
+            let target_date = if let Some(&d) = date_by_company.get(&cid) {
+                d
+            } else {
+                let today = erp_addon_base::company_calendar::business_date(tx, cid).await?;
+                let d = Date::from_days(today.days() + 7);
+                date_by_company.insert(cid, d);
+                d
+            };
+            records
+                .browse([id])?
+                .write(
+                    tx,
+                    RawVals::new().set_cell("snoozed_until", Cell::Date(target_date)),
+                )
+                .await?;
+        }
+        Ok(())
     }
 }
 

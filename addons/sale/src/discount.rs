@@ -2,11 +2,14 @@
 //! Sales Order Discount wizard (`sale.order.discount`): line percentage discount, global
 //! percentage discount line, or fixed discount amount line.
 
-use erp_sdk::Operation;
+use std::collections::BTreeMap;
+
+use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RoundingTable};
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
+use erp_sdk::{Command, Operation};
 
-use crate::order::SaleOrder;
+use crate::order::{SaleOrder, strip_default_context};
 
 /// Pure exact-decimal calculation for a global percentage discount on an order's untaxed amount.
 pub fn compute_global_discount(untaxed_amount: Decimal, percent: Decimal) -> Result<Decimal> {
@@ -20,7 +23,11 @@ pub fn compute_global_discount(untaxed_amount: Decimal, percent: Decimal) -> Res
             "Add at least one positive order line before applying a percentage discount.",
         ));
     }
-    Ok((untaxed_amount * percent / Decimal::from(100)).round_dp(2))
+    let raw = untaxed_amount
+        .checked_mul(percent)
+        .and_then(|v| v.checked_div(Decimal::from(100)))
+        .ok_or_else(|| Error::validation("Discount calculation overflowed."))?;
+    Ok(raw.round_dp(2))
 }
 
 /// `sale.order.discount`: transient dialog opened from a Sales Order to apply discounts.
@@ -107,84 +114,180 @@ impl SaleOrderDiscount {
             .await?;
         let fixed_amt = wizard.get(tx, SaleOrderDiscount::DISCOUNT_AMOUNT).await?;
 
-        let env = wizard
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let env = strip_default_context(wizard.env());
         let order_rec = env.records("sale.order")?.browse([order_id])?;
         order_rec.check_access(tx, Operation::Write).await?;
 
-        let msg = match kind.as_ref() {
-            "sol_discount" => {
-                if pct < Decimal::ZERO || pct > Decimal::from(100) {
-                    return Err(Error::user(
-                        "Discount percentage must be between 0 and 100.",
-                    ));
-                }
-                let lines = env
-                    .records("sale.order.line")?
-                    .search(
-                        tx,
-                        &Domain::and([
-                            Domain::condition("order_id", Operator::Eq, order_id)?,
-                            Domain::condition("display_type", Operator::Eq, false)?,
-                        ]),
-                    )
-                    .await?;
-                if lines.is_empty() {
-                    return Err(Error::user(
-                        "Add at least one product line before applying a line discount.",
-                    ));
-                }
-                let mut vals = RawVals::new();
-                vals.insert("discount".into(), Cell::Decimal(pct));
-                lines.write(tx, vals).await?;
-                format!("Applied {pct}% discount to all order lines.")
-            }
-            "so_discount" => {
-                let untaxed = match order_rec.cell(tx, "amount_untaxed").await? {
-                    Cell::Decimal(d) => d,
-                    _ => Decimal::ZERO,
-                };
-                let disc = compute_global_discount(untaxed, pct)?;
-                let uom_id = default_unit_uom_id(tx).await?;
-                let mut lvals = RawVals::new();
-                lvals.insert("order_id".into(), Cell::Id(order_id));
-                lvals.insert(
-                    "name".into(),
-                    Cell::Str(format!("Global Discount ({pct}%)").into()),
-                );
-                lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
-                lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
-                lvals.insert("price_unit".into(), Cell::Decimal(-disc));
-                env.records("sale.order.line")?
-                    .create(tx, vec![lvals])
-                    .await?;
-                format!("Added global discount line (-{disc}).")
-            }
-            "amount" => {
-                if fixed_amt <= Decimal::ZERO {
-                    return Err(Error::user(
-                        "Fixed discount amount must be greater than zero.",
-                    ));
-                }
-                let uom_id = default_unit_uom_id(tx).await?;
-                let mut lvals = RawVals::new();
-                lvals.insert("order_id".into(), Cell::Id(order_id));
-                lvals.insert("name".into(), Cell::Str("Fixed Discount".into()));
-                lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
-                lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
-                lvals.insert("price_unit".into(), Cell::Decimal(-fixed_amt));
-                env.records("sale.order.line")?
-                    .create(tx, vec![lvals])
-                    .await?;
-                format!("Added fixed discount line (-{fixed_amt}).")
-            }
-            other => {
-                return Err(Error::validation(format!("Unknown discount type: {other}")));
-            }
-        };
+        let msg = tx
+            .savepoint(async |tx| {
+                tx.flush().await?;
+                order_rec.lock_for_update(tx, true).await?;
 
-        wizard.as_records().unlink(tx).await?;
+                let state = match order_rec.cell(tx, "state").await? {
+                    Cell::Str(s) => s.to_string(),
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "sale.order.state returned {other:?}"
+                        )));
+                    }
+                };
+                if state != "draft" && state != "sent" {
+                    return Err(Error::user(
+                        "Discounts can only be applied to draft or sent quotations.",
+                    ));
+                }
+                if order_rec.cell(tx, "locked").await? == Cell::Bool(true) {
+                    return Err(Error::user(
+                        "This sales order is locked and cannot be discounted.",
+                    ));
+                }
+                let currency_id = match order_rec.cell(tx, "currency_id").await? {
+                    Cell::Id(id) => id,
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "Sales order {order_id} has no valid currency ({other:?})."
+                        )));
+                    }
+                };
+                let cur_rec = RecId::from_real(currency_id)
+                    .ok_or_else(|| Error::invariant("Invalid order currency id."))?;
+                let rounding = RoundingTable::load(&env, tx, &[cur_rec]).await?;
+                let inc = rounding.get(cur_rec)?.increment();
+
+                let msg = match kind.as_ref() {
+                    "sol_discount" => {
+                        if pct < Decimal::ZERO || pct > Decimal::from(100) {
+                            return Err(Error::user(
+                                "Discount percentage must be between 0 and 100.",
+                            ));
+                        }
+                        let lines = env
+                            .records("sale.order.line")?
+                            .search(
+                                tx,
+                                &Domain::and([
+                                    Domain::condition("order_id", Operator::Eq, order_id)?,
+                                    Domain::condition("display_type", Operator::Eq, false)?,
+                                ]),
+                            )
+                            .await?;
+                        if lines.is_empty() {
+                            return Err(Error::user(
+                                "Add at least one product line before applying a line discount.",
+                            ));
+                        }
+                        let mut vals = RawVals::new();
+                        vals.insert("discount".into(), Cell::Decimal(pct));
+                        lines.write(tx, vals).await?;
+                        format!("Applied {pct}% discount to all order lines.")
+                    }
+                    "so_discount" => {
+                        if pct <= Decimal::ZERO || pct > Decimal::from(100) {
+                            return Err(Error::user(
+                                "Discount percentage must be greater than 0 and at most 100.",
+                            ));
+                        }
+                        let line_rows = tx
+                            .query(
+                                "SELECT l.id::int8, COALESCE(l.price_subtotal, 0), r.account_tax_id::int8 \
+                                 FROM sale_order_line l \
+                                 LEFT JOIN account_tax_sale_order_line_rel r ON r.sale_order_line_id = l.id \
+                                 WHERE l.order_id = $1 AND l.display_type IS NULL \
+                                   AND NOT COALESCE(l.is_downpayment, false) \
+                                 ORDER BY l.id, r.account_tax_id",
+                                &[&order_id],
+                            )
+                            .await?;
+                        let mut per_line: BTreeMap<i64, (Decimal, Vec<i64>)> = BTreeMap::new();
+                        for row in line_rows {
+                            let lid: i64 = row
+                                .try_get(0)
+                                .map_err(|e| Error::db(format!("discount lines: {e}")))?;
+                            let sub: Decimal = row
+                                .try_get(1)
+                                .map_err(|e| Error::db(format!("discount lines: {e}")))?;
+                            let tid: Option<i64> = row
+                                .try_get(2)
+                                .map_err(|e| Error::db(format!("discount lines: {e}")))?;
+                            let entry = per_line.entry(lid).or_insert((sub, Vec::new()));
+                            if let Some(t) = tid {
+                                entry.1.push(t);
+                            }
+                        }
+                        let mut by_tax: BTreeMap<Vec<i64>, Decimal> = BTreeMap::new();
+                        for (sub, taxes) in per_line.into_values() {
+                            *by_tax.entry(taxes).or_insert(Decimal::ZERO) += sub;
+                        }
+                        let uom_id = default_unit_uom_id(tx).await?;
+                        let mut new_lines = Vec::new();
+                        let mut total_disc = Decimal::ZERO;
+                        for (taxes, base) in by_tax {
+                            if base <= Decimal::ZERO {
+                                continue;
+                            }
+                            let raw_disc = compute_global_discount(base, pct)?;
+                            let disc = inc.quantize(raw_disc, CURRENCY_ROUNDING_MODE)?;
+                            if disc.is_zero() {
+                                continue;
+                            }
+                            total_disc += disc;
+                            let mut lvals = RawVals::new();
+                            lvals.insert("order_id".into(), Cell::Id(order_id));
+                            lvals.insert(
+                                "name".into(),
+                                Cell::Str(format!("Global Discount ({pct}%)").into()),
+                            );
+                            lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
+                            lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
+                            lvals.insert("price_unit".into(), Cell::Decimal(-disc));
+                            lvals.insert_commands(
+                                "tax_ids".into(),
+                                vec![Command::set(
+                                    taxes.iter().copied().filter_map(RecId::from_real),
+                                )],
+                            );
+                            new_lines.push(lvals);
+                        }
+                        if new_lines.is_empty() {
+                            return Err(Error::user(
+                                "Add at least one positive order line before applying a percentage discount.",
+                            ));
+                        }
+                        env.records("sale.order.line")?
+                            .create(tx, new_lines)
+                            .await?;
+                        format!("Added global discount line (-{total_disc}).")
+                    }
+                    "amount" => {
+                        if fixed_amt <= Decimal::ZERO {
+                            return Err(Error::user(
+                                "Fixed discount amount must be greater than zero.",
+                            ));
+                        }
+                        let disc = inc.quantize(fixed_amt, CURRENCY_ROUNDING_MODE)?;
+                        let uom_id = default_unit_uom_id(tx).await?;
+                        let mut lvals = RawVals::new();
+                        lvals.insert("order_id".into(), Cell::Id(order_id));
+                        lvals.insert("name".into(), Cell::Str("Fixed Discount".into()));
+                        lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
+                        lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
+                        lvals.insert("price_unit".into(), Cell::Decimal(-disc));
+                        lvals.insert_commands("tax_ids".into(), vec![Command::clear()]);
+                        env.records("sale.order.line")?
+                            .create(tx, vec![lvals])
+                            .await?;
+                        format!("Added fixed discount line (-{disc}).")
+                    }
+                    other => {
+                        return Err(Error::validation(format!("Unknown discount type: {other}")));
+                    }
+                };
+
+                wizard.as_records().unlink(tx).await?;
+                Ok(msg)
+            })
+            .await?;
+
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",
@@ -197,26 +300,10 @@ impl SaleOrderDiscount {
     }
 }
 
-/// Resolves the default unit of measure (`uom.product_uom_unit`, else first active UoM)
-/// required by non-section `sale.order.line` records.
+/// Resolves the seeded default unit of measure (`uom.product_uom_unit`) without arbitrary
+/// fallbacks to unrelated units.
 pub(crate) async fn default_unit_uom_id(tx: &mut Transaction) -> Result<i64> {
-    let rows = tx
-        .query(
-            "SELECT res_id::int8 FROM ir_model_data \
-             WHERE module = 'uom' AND name = 'product_uom_unit' LIMIT 1",
-            &[],
-        )
-        .await?;
-    if let Some(id) = rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
-        return Ok(id);
-    }
-    let fallback = tx
-        .query("SELECT id::int8 FROM uom_uom ORDER BY id LIMIT 1", &[])
-        .await?;
-    fallback
-        .first()
-        .and_then(|r| r.try_get::<_, i64>(0).ok())
-        .ok_or_else(|| Error::validation("No unit of measure is configured."))
+    erp_addon_product::defaults::default_unit_id(tx).await
 }
 
 #[methods(SaleOrder, addon = "sale")]

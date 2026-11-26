@@ -32,18 +32,34 @@ fn the_sales_application_shows_the_sales_menu() {
         let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
         let (active, children) = menu(&mut tx, "sale", "sale_menu_root").await;
         assert!(!active, "sale alone keeps its root menu hidden");
-        assert_eq!(children, ["sale.sale_order_menu", "sale.menu_sale_config"]);
+        assert_eq!(
+            children,
+            [
+                "sale.sale_order_menu",
+                "sale.product_menu_catalog",
+                "sale.menu_sale_report",
+                "sale.menu_sale_config",
+            ]
+        );
         let (_, orders) = menu(&mut tx, "sale", "sale_order_menu").await;
         assert_eq!(
             orders,
             [
                 "sale.menu_sale_quotations",
                 "sale.menu_sale_order",
-                "sale.res_partner_menu"
+                "sale.menu_sale_teams_dashboard",
+                "sale.res_partner_menu",
             ]
         );
         let (_, config) = menu(&mut tx, "sale", "menu_sale_config").await;
-        assert_eq!(config, ["sale.sales_team_config"]);
+        assert_eq!(
+            config,
+            [
+                "sale.menu_sale_settings",
+                "sale.sales_team_config",
+                "sale.menu_sale_order_template",
+            ]
+        );
         tx.rollback().await.unwrap();
 
         let application = [ModuleName::new("sale_management").unwrap()];

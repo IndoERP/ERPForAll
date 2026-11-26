@@ -2586,7 +2586,7 @@ fn finish_response(
             Some(CrossOriginForm(origin)) => (
                 "Wrong address for this server",
                 format!(
-                    "This page was opened at a different address than the one the server is set up for. Open {}/erp/login and sign in there.",
+                    "This page was opened at a different address than the one the server is set up for. Open {}/erp and try again.",
                     page_brand::escape_html(origin)
                 ),
             ),

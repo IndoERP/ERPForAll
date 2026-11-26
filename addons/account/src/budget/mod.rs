@@ -18,6 +18,18 @@ pub fn compute_budget_line_metrics(
     date_to: Date,
     today: Date,
 ) -> (Decimal, Decimal) {
+    compute_budget_line_metrics_with_scale(planned, practical, date_from, date_to, today, 2)
+}
+
+/// Currency-scale-aware budget line theoretical & achievement calculation.
+pub fn compute_budget_line_metrics_with_scale(
+    planned: Decimal,
+    practical: Decimal,
+    date_from: Date,
+    date_to: Date,
+    today: Date,
+    scale: u32,
+) -> (Decimal, Decimal) {
     let total_days = (date_to.days() - date_from.days() + 1).max(1);
     let theoretical = if today.days() < date_from.days() {
         Decimal::ZERO
@@ -25,7 +37,7 @@ pub fn compute_budget_line_metrics(
         planned
     } else {
         let elapsed = today.days() - date_from.days() + 1;
-        (planned * Decimal::from(elapsed) / Decimal::from(total_days)).round_dp(2)
+        (planned * Decimal::from(elapsed) / Decimal::from(total_days)).round_dp(scale)
     };
     let pct = if !theoretical.is_zero() {
         (practical / theoretical * Decimal::from(100)).round_dp(2)
@@ -41,14 +53,22 @@ pub(crate) fn db(err: impl std::fmt::Display) -> Error {
     Error::db(format!("Budget query failed: {err}"))
 }
 
-pub(crate) fn default_year_start(_ctx: &erp_sdk::DefaultContext) -> Value {
-    let (y, _, _) = Date::today().ymd();
-    Value::Date(Date::from_ymd(y, 1, 1).unwrap_or_else(Date::today))
-}
-
-pub(crate) fn default_year_end(_ctx: &erp_sdk::DefaultContext) -> Value {
-    let (y, _, _) = Date::today().ymd();
-    Value::Date(Date::from_ymd(y, 12, 31).unwrap_or_else(Date::today))
+async fn resolve_default_year_bounds(
+    tx: &mut Transaction,
+    env: &Env,
+    company_id: Option<i64>,
+) -> Result<(Date, Date)> {
+    let today = if let Some(cid) = company_id {
+        erp_addon_base::company_calendar::business_date(tx, cid).await?
+    } else {
+        env.context_today()?
+    };
+    let (y, _, _) = today.ymd();
+    let start = Date::from_ymd(y, 1, 1)
+        .ok_or_else(|| Error::invariant(format!("Could not construct start of year {y}")))?;
+    let end = Date::from_ymd(y, 12, 31)
+        .ok_or_else(|| Error::invariant(format!("Could not construct end of year {y}")))?;
+    Ok((start, end))
 }
 
 /// `account.budget.profile`: Availability Control (AVC) tolerance and enforcement profile.
@@ -234,10 +254,10 @@ pub struct AccountBudget {
     )]
     pub currency_id: Option<RecId>,
     /// Budget start date.
-    #[field(date, required = true, default_fn = default_year_start, string = "Start Date")]
+    #[field(date, required = true, string = "Start Date")]
     pub date_from: Option<Date>,
     /// Budget end date.
-    #[field(date, required = true, default_fn = default_year_end, string = "End Date")]
+    #[field(date, required = true, string = "End Date")]
     pub date_to: Option<Date>,
     /// Workflow status.
     #[field(
@@ -333,13 +353,65 @@ impl AccountBudget {
     ) -> Result<erp_sdk::ValueMap> {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        let cid = this.env().company_id()?;
         if names.iter().any(|n| n == "company_id")
             && !values.contains_key("company_id")
-            && let Some(cid) = this.env().company_id()?
+            && let Some(c) = cid
         {
-            values.insert("company_id".to_owned(), Value::Int(cid));
+            values.insert("company_id".to_owned(), Value::Int(c));
+        }
+        let need_from = names.iter().any(|n| n == "date_from") && !values.contains_key("date_from");
+        let need_to = names.iter().any(|n| n == "date_to") && !values.contains_key("date_to");
+        if need_from || need_to {
+            let (start, end) = resolve_default_year_bounds(tx, this.env(), cid).await?;
+            if need_from {
+                values.insert("date_from".to_owned(), Value::Date(start));
+            }
+            if need_to {
+                values.insert("date_to".to_owned(), Value::Date(end));
+            }
         }
         Ok(values)
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBudget>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            if vals.contains("state") {
+                return Err(Error::user(
+                    "Budget status cannot be edited directly; use Confirm, Approve, Close, or Cancel.",
+                ));
+            }
+            for state in this.mapped(tx, AccountBudget::STATE).await? {
+                if matches!(state.as_deref(), Some("validate" | "done")) {
+                    return Err(Error::user(
+                        "Approved or closed budgets cannot be edited directly; submit a Budget Amendment instead.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBudget>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            for state in this.mapped(tx, AccountBudget::STATE).await? {
+                if matches!(state.as_deref(), Some("validate" | "done")) {
+                    return Err(Error::user("Approved or closed budgets cannot be deleted."));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     #[compute(depends = [
@@ -356,50 +428,60 @@ impl AccountBudget {
         tx: &mut Transaction,
         out: &mut Assign<'_, AccountBudget>,
     ) -> Result<()> {
-        for (i, rid) in this.as_records().rec_ids().iter().enumerate() {
-            let (orig, rev, planned, released, committed, practical) =
-                if let Some(real) = rid.as_real() {
-                    let rows = tx
-                        .query(
-                            "SELECT COALESCE(SUM(original_amount), 0), \
-                                    COALESCE(SUM(revision_amount), 0), \
-                                    COALESCE(SUM(planned_amount), 0), \
-                                    COALESCE(SUM(released_amount), 0), \
-                                    COALESCE(SUM(committed_amount), 0), \
-                                    COALESCE(SUM(practical_amount), 0) \
-                             FROM account_budget_line WHERE budget_id = $1",
-                            &[&real.get()],
-                        )
-                        .await?;
-                    if let Some(row) = rows.first() {
-                        (
-                            row.try_get::<_, Decimal>(0).map_err(db)?,
-                            row.try_get::<_, Decimal>(1).map_err(db)?,
-                            row.try_get::<_, Decimal>(2).map_err(db)?,
-                            row.try_get::<_, Decimal>(3).map_err(db)?,
-                            row.try_get::<_, Decimal>(4).map_err(db)?,
-                            row.try_get::<_, Decimal>(5).map_err(db)?,
-                        )
-                    } else {
-                        (
-                            Decimal::ZERO,
-                            Decimal::ZERO,
-                            Decimal::ZERO,
-                            Decimal::ZERO,
-                            Decimal::ZERO,
-                            Decimal::ZERO,
-                        )
-                    }
-                } else {
+        let rec_ids = this.as_records().rec_ids();
+        let real_ids: Vec<i64> = rec_ids
+            .iter()
+            .filter_map(|r| r.as_real())
+            .map(|r| r.get())
+            .collect();
+        let mut by_budget = std::collections::HashMap::<
+            i64,
+            (Decimal, Decimal, Decimal, Decimal, Decimal, Decimal),
+        >::new();
+        if !real_ids.is_empty() {
+            tx.flush().await?;
+            let rows = tx
+                .query(
+                    "SELECT budget_id::int8, \
+                            COALESCE(SUM(original_amount), 0), \
+                            COALESCE(SUM(revision_amount), 0), \
+                            COALESCE(SUM(planned_amount), 0), \
+                            COALESCE(SUM(released_amount), 0), \
+                            COALESCE(SUM(committed_amount), 0), \
+                            COALESCE(SUM(practical_amount), 0) \
+                     FROM account_budget_line \
+                     WHERE budget_id = ANY($1::int8[]) \
+                     GROUP BY budget_id",
+                    &[&real_ids],
+                )
+                .await?;
+            for row in rows {
+                let bid: i64 = row.try_get(0).map_err(db)?;
+                by_budget.insert(
+                    bid,
                     (
-                        Decimal::ZERO,
-                        Decimal::ZERO,
-                        Decimal::ZERO,
-                        Decimal::ZERO,
-                        Decimal::ZERO,
-                        Decimal::ZERO,
-                    )
-                };
+                        row.try_get(1).map_err(db)?,
+                        row.try_get(2).map_err(db)?,
+                        row.try_get(3).map_err(db)?,
+                        row.try_get(4).map_err(db)?,
+                        row.try_get(5).map_err(db)?,
+                        row.try_get(6).map_err(db)?,
+                    ),
+                );
+            }
+        }
+        for (i, rid) in rec_ids.iter().enumerate() {
+            let (orig, rev, planned, released, committed, practical) = rid
+                .as_real()
+                .and_then(|r| by_budget.get(&r.get()).copied())
+                .unwrap_or((
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                ));
             out.set(i, AccountBudget::TOTAL_ORIGINAL, orig)?;
             out.set(i, AccountBudget::TOTAL_REVISION, rev)?;
             out.set(i, AccountBudget::TOTAL_PLANNED, planned)?;
@@ -430,27 +512,76 @@ impl AccountBudget {
         this: &RecordSet<AccountBudget>,
         tx: &mut Transaction,
     ) -> Result<()> {
-        // Ensure original/released defaults are normalized on every line before activating AVC.
-        let ids = this.as_records().ids();
-        tx.execute(
-            "UPDATE account_budget_line \
-             SET original_amount = CASE WHEN COALESCE(original_amount, 0) = 0 AND COALESCE(planned_amount, 0) <> 0 \
-                                        THEN planned_amount ELSE COALESCE(original_amount, 0) END, \
-                 revision_amount = COALESCE(revision_amount, 0), \
-                 planned_amount = CASE WHEN COALESCE(original_amount, 0) = 0 AND COALESCE(planned_amount, 0) <> 0 \
-                                       THEN planned_amount ELSE COALESCE(original_amount, 0) + COALESCE(revision_amount, 0) END, \
-                 release_pct = CASE WHEN COALESCE(release_pct, 0) <= 0 THEN 100 ELSE release_pct END \
-             WHERE budget_id = ANY($1::int8[])",
+        // Authorize and flush BEFORE running raw SQL normalization.
+        this.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
+        let mut ids = this.as_records().ids();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Lock budget rows in sorted canonical ID order first.
+        let b_rows = tx
+            .query(
+                "SELECT id::int8, state::text FROM account_budget \
+                 WHERE id = ANY($1::int8[]) ORDER BY id FOR UPDATE",
+                &[&ids],
+            )
+            .await?;
+        for r in &b_rows {
+            let st: String = r.try_get(1).map_err(db)?;
+            if !matches!(st.as_str(), "draft" | "confirm") {
+                return Err(Error::user(format!(
+                    "Only a draft or confirmed budget can be validated (current status: '{st}')."
+                )));
+            }
+        }
+        // Lock lines in canonical ID order and normalize original/planned/released while
+        // preserving deliberate 0% staged release (`release_pct = 0`).
+        tx.query(
+            "SELECT id::int8 FROM account_budget_line \
+             WHERE budget_id = ANY($1::int8[]) ORDER BY id FOR UPDATE",
             &[&ids],
         )
         .await?;
         tx.execute(
-            "UPDATE account_budget_line \
-             SET released_amount = CASE WHEN COALESCE(released_amount, 0) = 0 AND COALESCE(planned_amount, 0) <> 0 \
-                                        THEN ROUND(planned_amount * release_pct / 100.0, 2) \
-                                        ELSE released_amount END \
-             WHERE budget_id = ANY($1::int8[])",
+            "UPDATE account_budget_line l \
+             SET original_amount = CASE WHEN COALESCE(l.original_amount, 0) = 0 \
+                                             AND COALESCE(l.revision_amount, 0) = 0 \
+                                             AND COALESCE(l.planned_amount, 0) <> 0 \
+                                        THEN l.planned_amount ELSE COALESCE(l.original_amount, 0) END, \
+                 revision_amount = COALESCE(l.revision_amount, 0), \
+                 planned_amount = CASE WHEN COALESCE(l.original_amount, 0) = 0 \
+                                            AND COALESCE(l.revision_amount, 0) = 0 \
+                                            AND COALESCE(l.planned_amount, 0) <> 0 \
+                                       THEN l.planned_amount \
+                                       ELSE COALESCE(l.original_amount, 0) + COALESCE(l.revision_amount, 0) END, \
+                 release_pct = COALESCE(l.release_pct, 100) \
+             WHERE l.budget_id = ANY($1::int8[])",
             &[&ids],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE account_budget_line l \
+             SET released_amount = CASE WHEN l.released_amount IS NULL \
+                                             OR (l.released_amount = 0 AND l.release_pct > 0 AND l.planned_amount <> 0) \
+                                        THEN ROUND(l.planned_amount * l.release_pct / 100.0, COALESCE(cur.decimal_places, 2)) \
+                                        ELSE l.released_amount END \
+             FROM res_currency cur \
+             WHERE cur.id = l.currency_id AND l.budget_id = ANY($1::int8[])",
+            &[&ids],
+        )
+        .await?;
+        tx.invalidate_model(
+            "account.budget.line",
+            Some(&[
+                "original_amount",
+                "revision_amount",
+                "planned_amount",
+                "release_pct",
+                "released_amount",
+            ]),
         )
         .await?;
         set_budget_state(this, tx, "validate").await?;
@@ -548,14 +679,16 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
             "SELECT l.id::int8, l.company_id::int8, COALESCE(b.budget_type, 'opex')::text, \
                     l.account_id::int8, l.analytic_account_id::int8, l.asset_id::int8, \
                     l.date_from, l.date_to, COALESCE(l.planned_amount, 0), \
-                    COALESCE(l.released_amount, l.planned_amount, 0), \
+                    COALESCE(l.released_amount, 0), \
                     COALESCE(p.warning_threshold_pct, 80), \
                     COALESCE(p.blocking_threshold_pct, 100), \
-                    COALESCE(p.tolerance_amount, 0) \
+                    COALESCE(p.tolerance_amount, 0), \
+                    COALESCE(cur.decimal_places, 2)::int4 \
              FROM account_budget_line l \
              JOIN account_budget b ON b.id = l.budget_id \
+             JOIN res_currency cur ON cur.id = l.currency_id \
              LEFT JOIN account_budget_profile p ON p.id = b.profile_id \
-             WHERE l.id = ANY($1::int8[]) ORDER BY l.id",
+             WHERE l.id = ANY($1::int8[]) ORDER BY l.id FOR UPDATE OF l",
             &[&line_ids],
         )
         .await?;
@@ -574,35 +707,41 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
         let warn_pct: Decimal = row.try_get(10).map_err(db)?;
         let block_pct: Decimal = row.try_get(11).map_err(db)?;
         let tol_amt: Decimal = row.try_get(12).map_err(db)?;
+        let scale_i32: i32 = row.try_get(13).map_err(db)?;
+        let scale = u32::try_from(scale_i32)
+            .map_err(|_| Error::validation(format!("Invalid currency scale {scale_i32}.")))?;
 
-        let today = erp_addon_base::company_calendar::business_date(tx, company_id)
-            .await
-            .unwrap_or_else(|_| Date::today());
+        let today = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
 
-        let committed: Decimal = tx
+        let c_rows = tx
             .query(
                 "SELECT COALESCE(SUM(open_amount), 0) FROM account_budget_commitment \
                  WHERE budget_line_id = $1 AND state IN ('open', 'partially_billed')",
                 &[&lid],
             )
-            .await?
+            .await?;
+        let committed: Decimal = c_rows
             .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO);
+            .ok_or_else(|| Error::invariant("Commitment aggregate returned no row."))?
+            .try_get(0)
+            .map_err(db)?;
 
         let is_revenue = budget_type == "revenue";
         let practical: Decimal = if let Some(aid) = asset_id {
             // CAPEX / CIP project budget: sum posted CIP/Asset debits on this asset in period.
-            tx.query(
-                "SELECT COALESCE(SUM(balance), 0) FROM account_move_line \
-                 WHERE asset_id = $1 AND company_id = $2 \
-                   AND parent_state = 'posted' AND date >= $3 AND date <= $4",
-                &[&aid, &company_id, &d_from, &d_to],
-            )
-            .await?
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO)
+            let p_rows = tx
+                .query(
+                    "SELECT COALESCE(SUM(balance), 0) FROM account_move_line \
+                     WHERE asset_id = $1 AND company_id = $2 \
+                       AND parent_state = 'posted' AND date >= $3 AND date <= $4",
+                    &[&aid, &company_id, &d_from, &d_to],
+                )
+                .await?;
+            p_rows
+                .first()
+                .ok_or_else(|| Error::invariant("Asset practical aggregate returned no row."))?
+                .try_get(0)
+                .map_err(db)?
         } else if let Some(cc_id) = analytic_id {
             // Cost Center subtree rollup + optional GL account filter.
             if let Some(acc) = account_id {
@@ -621,11 +760,14 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
                        AND (cc.id = p.id OR (p.parent_path IS NOT NULL AND cc.parent_path IS NOT NULL \
                             AND starts_with(cc.parent_path, p.parent_path)))"
                 );
-                tx.query(&sql, &[&cc_id, &acc, &company_id, &d_from, &d_to])
-                    .await?
+                let p_rows = tx
+                    .query(&sql, &[&cc_id, &acc, &company_id, &d_from, &d_to])
+                    .await?;
+                p_rows
                     .first()
-                    .and_then(|r| r.try_get(0).ok())
-                    .unwrap_or(Decimal::ZERO)
+                    .ok_or_else(|| Error::invariant("Analytic GL aggregate returned no row."))?
+                    .try_get(0)
+                    .map_err(db)?
             } else {
                 let sign_expr = if is_revenue { "l.amount" } else { "-l.amount" };
                 let sql = format!(
@@ -633,15 +775,18 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
                      FROM account_analytic_line l \
                      JOIN account_analytic_account cc ON cc.id = l.account_id \
                      JOIN account_analytic_account p ON p.id = $1 \
-                     WHERE l.date >= $2 AND l.date <= $3 \
+                     WHERE l.company_id = $4 AND l.date >= $2 AND l.date <= $3 \
                        AND (cc.id = p.id OR (p.parent_path IS NOT NULL AND cc.parent_path IS NOT NULL \
                             AND starts_with(cc.parent_path, p.parent_path)))"
                 );
-                tx.query(&sql, &[&cc_id, &d_from, &d_to])
-                    .await?
+                let p_rows = tx
+                    .query(&sql, &[&cc_id, &d_from, &d_to, &company_id])
+                    .await?;
+                p_rows
                     .first()
-                    .and_then(|r| r.try_get(0).ok())
-                    .unwrap_or(Decimal::ZERO)
+                    .ok_or_else(|| Error::invariant("Analytic line aggregate returned no row."))?
+                    .try_get(0)
+                    .map_err(db)?
             }
         } else if let Some(acc) = account_id {
             let sign_expr = if is_revenue { "-balance" } else { "balance" };
@@ -650,24 +795,25 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
                  WHERE account_id = $1 AND company_id = $2 \
                    AND parent_state = 'posted' AND date >= $3 AND date <= $4"
             );
-            tx.query(&sql, &[&acc, &company_id, &d_from, &d_to])
-                .await?
+            let p_rows = tx.query(&sql, &[&acc, &company_id, &d_from, &d_to]).await?;
+            p_rows
                 .first()
-                .and_then(|r| r.try_get(0).ok())
-                .unwrap_or(Decimal::ZERO)
+                .ok_or_else(|| Error::invariant("Account practical aggregate returned no row."))?
+                .try_get(0)
+                .map_err(db)?
         } else {
             Decimal::ZERO
         };
 
         let (theoretical, pct) =
-            compute_budget_line_metrics(planned, practical, d_from, d_to, today);
+            compute_budget_line_metrics_with_scale(planned, practical, d_from, d_to, today, scale);
         let assigned = committed + practical;
         let avc_status = if is_revenue {
             "ok"
         } else {
             let base = released.abs();
-            let block_limit = (base * block_pct / Decimal::from(100)).round_dp(2) + tol_amt;
-            let warn_limit = (base * warn_pct / Decimal::from(100)).round_dp(2);
+            let block_limit = (base * block_pct / Decimal::from(100)).round_dp(scale) + tol_amt;
+            let warn_limit = (base * warn_pct / Decimal::from(100)).round_dp(scale);
             if !base.is_zero() && assigned > block_limit {
                 "exceeded"
             } else if !base.is_zero() && assigned >= warn_limit {
@@ -702,11 +848,61 @@ async fn set_budget_state(
     target: &str,
 ) -> Result<()> {
     this.as_records().check_access(tx, Operation::Write).await?;
-    let ids = this.as_records().ids();
+    tx.flush().await?;
+    let mut ids = this.as_records().ids();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let locked = tx
+        .query(
+            "SELECT id::int8, state::text FROM account_budget \
+             WHERE id = ANY($1::int8[]) ORDER BY id FOR UPDATE",
+            &[&ids],
+        )
+        .await?;
+    for row in &locked {
+        let bid: i64 = row.try_get(0).map_err(db)?;
+        let cur: String = row.try_get(1).map_err(db)?;
+        let allowed = match target {
+            "confirm" => cur == "draft",
+            "validate" => matches!(cur.as_str(), "draft" | "confirm"),
+            "done" => cur == "validate",
+            "cancel" => matches!(cur.as_str(), "draft" | "confirm" | "validate"),
+            "draft" => matches!(cur.as_str(), "confirm" | "cancel" | "validate"),
+            _ => false,
+        };
+        if !allowed {
+            return Err(Error::user(format!(
+                "Cannot transition budget {bid} from '{cur}' to '{target}'."
+            )));
+        }
+    }
+    if matches!(target, "draft" | "cancel") {
+        let open_commitments: i64 = tx
+            .query(
+                "SELECT count(*)::int8 \
+                 FROM account_budget_commitment c \
+                 JOIN account_budget_line l ON l.id = c.budget_line_id \
+                 WHERE l.budget_id = ANY($1::int8[]) \
+                   AND c.state IN ('open', 'partially_billed')",
+                &[&ids],
+            )
+            .await?[0]
+            .try_get(0)
+            .map_err(db)?;
+        if open_commitments > 0 {
+            return Err(Error::user(
+                "Cannot reset or cancel a budget with open Purchase Order commitments. Release or carry forward commitments first.",
+            ));
+        }
+    }
+    let uid = this.env().uid();
     tx.execute(
-        "UPDATE account_budget SET state = $2, write_date = now() AT TIME ZONE 'UTC' \
+        "UPDATE account_budget SET state = $2, write_uid = $3, write_date = now() AT TIME ZONE 'UTC' \
          WHERE id = ANY($1::int8[])",
-        &[&ids, &target],
+        &[&ids, &target, &uid],
     )
     .await?;
     tx.invalidate_records(this.as_records(), Some(&["state"]))
@@ -720,7 +916,10 @@ async fn set_budget_state(
     description = "Budget Line",
     order = "date_from, id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_company_period", "(company_id, date_from, date_to)"),
+    ],
 )]
 pub struct AccountBudgetLine {
     /// Owning budget.
@@ -781,10 +980,10 @@ pub struct AccountBudgetLine {
     )]
     pub asset_id: Option<RecId>,
     /// Line period start date.
-    #[field(date, required = true, default_fn = default_year_start, string = "Start Date")]
+    #[field(date, required = true, string = "Start Date")]
     pub date_from: Option<Date>,
     /// Line period end date.
-    #[field(date, required = true, default_fn = default_year_end, string = "End Date")]
+    #[field(date, required = true, string = "End Date")]
     pub date_to: Option<Date>,
     /// Initial approved baseline budget.
     #[field(
@@ -881,37 +1080,131 @@ pub struct AccountBudgetLine {
 #[methods(AccountBudgetLine, addon = "account")]
 impl AccountBudgetLine {
     #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountBudgetLine>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        let need_from = names.iter().any(|n| n == "date_from") && !values.contains_key("date_from");
+        let need_to = names.iter().any(|n| n == "date_to") && !values.contains_key("date_to");
+        if need_from || need_to {
+            let cid = this.env().company_id()?;
+            let (start, end) = resolve_default_year_bounds(tx, this.env(), cid).await?;
+            if need_from {
+                values.insert("date_from".to_owned(), Value::Date(start));
+            }
+            if need_to {
+                values.insert("date_to".to_owned(), Value::Date(end));
+            }
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
     async fn create(
         this: &RecordSet<AccountBudgetLine>,
         tx: &mut Transaction,
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        if !this.env().su() {
+            let budget_ids: Vec<i64> = vals_list
+                .iter()
+                .filter_map(|v| match v.get("budget_id") {
+                    Some(Cell::Id(id)) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            if !budget_ids.is_empty() {
+                let locked_count: i64 = tx
+                    .query(
+                        "SELECT count(*)::int8 FROM account_budget \
+                         WHERE id = ANY($1::int8[]) AND state IN ('validate', 'done')",
+                        &[&budget_ids],
+                    )
+                    .await?[0]
+                    .try_get(0)
+                    .map_err(db)?;
+                if locked_count > 0 {
+                    return Err(Error::user(
+                        "Cannot add lines directly to an approved or closed budget; submit a Budget Amendment.",
+                    ));
+                }
+            }
+        }
         for vals in &mut vals_list {
             normalize_budget_line_vals(vals);
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
     }
 
-    #[compute(depends = ["released_amount", "planned_amount", "committed_amount", "practical_amount"])]
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBudgetLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            let ids = this.as_records().ids();
+            let locked_count: i64 = tx
+                .query(
+                    "SELECT count(*)::int8 FROM account_budget_line l \
+                     JOIN account_budget b ON b.id = l.budget_id \
+                     WHERE l.id = ANY($1::int8[]) AND b.state IN ('validate', 'done')",
+                    &[&ids],
+                )
+                .await?[0]
+                .try_get(0)
+                .map_err(db)?;
+            if locked_count > 0 {
+                return Err(Error::user(
+                    "Lines of an approved or closed budget cannot be edited directly; submit a Budget Amendment.",
+                ));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBudgetLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            let ids = this.as_records().ids();
+            let locked_count: i64 = tx
+                .query(
+                    "SELECT count(*)::int8 FROM account_budget_line l \
+                     JOIN account_budget b ON b.id = l.budget_id \
+                     WHERE l.id = ANY($1::int8[]) AND b.state IN ('validate', 'done')",
+                    &[&ids],
+                )
+                .await?[0]
+                .try_get(0)
+                .map_err(db)?;
+            if locked_count > 0 {
+                return Err(Error::user(
+                    "Lines of an approved or closed budget cannot be deleted.",
+                ));
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
+    #[compute(depends = ["released_amount", "committed_amount", "practical_amount"])]
     fn _compute_availability(batch: &mut Batch<'_, AccountBudgetLine>) -> Result<()> {
         for i in batch.indices() {
             let released = batch.get(i, AccountBudgetLine::RELEASED_AMOUNT)?;
-            let planned = batch.get(i, AccountBudgetLine::PLANNED_AMOUNT)?;
-            let effective_released = if released.is_zero() && !planned.is_zero() {
-                planned
-            } else {
-                released
-            };
             let committed = batch.get(i, AccountBudgetLine::COMMITTED_AMOUNT)?;
             let practical = batch.get(i, AccountBudgetLine::PRACTICAL_AMOUNT)?;
             let assigned = committed + practical;
             batch.set(i, AccountBudgetLine::ASSIGNED_AMOUNT, assigned)?;
-            batch.set(
-                i,
-                AccountBudgetLine::AVAILABLE_AMOUNT,
-                effective_released - assigned,
-            )?;
+            batch.set(i, AccountBudgetLine::AVAILABLE_AMOUNT, released - assigned)?;
         }
         Ok(())
     }
@@ -933,10 +1226,11 @@ fn normalize_budget_line_vals(vals: &mut RawVals) {
 
     let (final_orig, final_planned) = match (orig, planned) {
         (Some(o), None) => (o, o + rev),
-        (None, Some(p)) => (p, p + rev),
-        (Some(o), Some(p)) if o.is_zero() && !p.is_zero() => (p, p + rev),
+        (None, Some(p)) if rev.is_zero() => (p, p),
+        (None, Some(p)) => (p - rev, p),
+        (Some(o), Some(p)) if o.is_zero() && rev.is_zero() && !p.is_zero() => (p, p),
         (Some(o), Some(_)) => (o, o + rev),
-        (None, None) => (Decimal::ZERO, Decimal::ZERO),
+        (None, None) => (Decimal::ZERO, rev),
     };
     vals.insert("original_amount".into(), Cell::Decimal(final_orig));
     vals.insert("planned_amount".into(), Cell::Decimal(final_planned));

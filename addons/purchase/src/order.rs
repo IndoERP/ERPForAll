@@ -43,10 +43,30 @@ const DRAFT_BILLS: &str = "SELECT DISTINCT k.bill_id::int8 FROM purchase_direct_
     WHERE k.order_id = ANY($1) AND m.state = 'draft' ORDER BY 1";
 
 /// Fields only the operations write (5).
-const OPERATION_FIELDS: [&str; 3] = ["state", "locked", "date_approve"];
+const OPERATION_FIELDS: [&str; 4] = ["state", "locked", "date_approve", "mail_reminder_confirmed"];
 
 /// Fields a client write never sets: the operation fields and the number, given only at create.
-const WRITE_REFUSED: [&str; 4] = ["state", "locked", "date_approve", "name"];
+const WRITE_REFUSED: [&str; 5] = [
+    "state",
+    "locked",
+    "date_approve",
+    "mail_reminder_confirmed",
+    "name",
+];
+
+/// Returns a copy of `env` with `default_*` keys removed while preserving `tz`, `lang`,
+/// `company_id`, `allowed_company_ids`, and all other caller context entries.
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
+}
 
 /// Fields computed from the lines; never written by a client.
 const AMOUNT_FIELDS: [&str; 6] = [
@@ -623,68 +643,7 @@ impl PurchaseOrder {
         // record Purchase Commitments before approving orders.
         let order_ids = sorted_ids(orders);
         if !order_ids.is_empty() {
-            let line_rows = tx
-                .query(
-                    "SELECT l.id::int8, o.name::text, o.company_id::int8, \
-                            COALESCE(o.date_order::date, CURRENT_DATE), \
-                            l.analytic_account_id::int8, l.asset_id::int8, \
-                            COALESCE(l.price_subtotal, 0), COALESCE(o.amount_total, 0), \
-                            COALESCE(o.amount_total_cc, 0), a.account_asset_id::int8 \
-                     FROM purchase_order_line l \
-                     JOIN purchase_order o ON o.id = l.order_id \
-                     LEFT JOIN account_asset a ON a.id = l.asset_id \
-                     WHERE l.order_id = ANY($1::int8[]) \
-                     ORDER BY l.id",
-                    &[&order_ids],
-                )
-                .await?;
-            let mut requests = Vec::new();
-            for r in line_rows {
-                let lid: i64 = r.try_get(0).map_err(db)?;
-                let oname: String = r.try_get(1).map_err(db)?;
-                let cid: i64 = r.try_get(2).map_err(db)?;
-                let odate: Date = r.try_get(3).map_err(db)?;
-                let cc_id: Option<i64> = r.try_get(4).map_err(db)?;
-                let asset_id: Option<i64> = r.try_get(5).map_err(db)?;
-                let subtotal: Decimal = r.try_get(6).map_err(db)?;
-                let o_tot: Decimal = r.try_get(7).map_err(db)?;
-                let o_tot_cc: Decimal = r.try_get(8).map_err(db)?;
-                let asset_acc: Option<i64> = r.try_get(9).map_err(db)?;
-
-                if let Some(cc) = cc_id {
-                    erp_addon_account::controlling::validate_center_for_commitment(tx, cc, odate)
-                        .await?;
-                }
-                if cc_id.is_none() && asset_id.is_none() {
-                    continue;
-                }
-                let cc_amount = if !o_tot.is_zero() && !o_tot_cc.is_zero() && o_tot != o_tot_cc {
-                    (subtotal * o_tot_cc / o_tot).round_dp(2)
-                } else {
-                    subtotal.round_dp(2)
-                };
-                if cc_amount > Decimal::ZERO {
-                    requests.push(erp_addon_account::budget::avc::CommitmentRequest {
-                        source_model: "purchase.order.line".to_owned(),
-                        source_id: lid,
-                        source_ref: oname,
-                        company_id: cid,
-                        account_id: asset_acc,
-                        analytic_account_id: cc_id,
-                        asset_id,
-                        date: odate,
-                        amount: cc_amount,
-                    });
-                }
-            }
-            if !requests.is_empty() {
-                erp_addon_account::budget::avc::check_and_record_commitments(
-                    tx,
-                    orders.env(),
-                    &requests,
-                )
-                .await?;
-            }
+            sync_order_commitments(tx, orders.env(), &order_ids).await?;
         }
         orders
             .write_base(
@@ -1260,6 +1219,103 @@ async fn fill_defaults(tx: &mut Transaction, env: &Env, vals: &mut RawVals) -> R
         let name =
             draw_by_code(tx, env, SEQUENCE_CODE, CompanyId::new(company)?, Some(date)).await?;
         vals.insert("name".into(), Cell::Str(name.into()));
+    }
+    Ok(())
+}
+
+/// Validates Cost Center commitment locks and records/updates real-time Budget AVC Purchase
+/// Commitments for all lines of `order_ids` in exact company currency.
+pub(crate) async fn sync_order_commitments(
+    tx: &mut Transaction,
+    env: &Env,
+    order_ids: &[i64],
+) -> Result<()> {
+    if order_ids.is_empty() {
+        return Ok(());
+    }
+    tx.flush().await?;
+    let line_rows = tx
+        .query(
+            "SELECT l.id::int8, o.name::text, o.company_id::int8, o.currency_id::int8, \
+                    o.date_order, l.analytic_account_id::int8, l.asset_id::int8, \
+                    COALESCE(l.price_subtotal, 0), a.account_asset_id::int8, \
+                    a.company_id::int8 \
+             FROM purchase_order_line l \
+             JOIN purchase_order o ON o.id = l.order_id \
+             LEFT JOIN account_asset a ON a.id = l.asset_id \
+             WHERE l.order_id = ANY($1::int8[]) \
+             ORDER BY l.id",
+            &[&order_ids],
+        )
+        .await?;
+    let mut requests = Vec::new();
+    let mut referenced_assets = Vec::new();
+    for r in &line_rows {
+        if let Some(aid) = r.try_get::<_, Option<i64>>(6).map_err(db)? {
+            referenced_assets.push(aid);
+        }
+    }
+    if !referenced_assets.is_empty() {
+        referenced_assets.sort_unstable();
+        referenced_assets.dedup();
+        env.records("account.asset")?
+            .browse(referenced_assets)?
+            .check_access(tx, Operation::Read)
+            .await?;
+    }
+    for r in line_rows {
+        let lid: i64 = r.try_get(0).map_err(db)?;
+        let oname: String = r.try_get(1).map_err(db)?;
+        let cid: i64 = r.try_get(2).map_err(db)?;
+        let cur_id: i64 = r.try_get(3).map_err(db)?;
+        let date_order: Option<DateTime> = r.try_get(4).map_err(db)?;
+        let cc_id: Option<i64> = r.try_get(5).map_err(db)?;
+        let asset_id: Option<i64> = r.try_get(6).map_err(db)?;
+        let subtotal: Decimal = r.try_get(7).map_err(db)?;
+        let asset_acc: Option<i64> = r.try_get(8).map_err(db)?;
+        let asset_company: Option<i64> = r.try_get(9).map_err(db)?;
+
+        if asset_id.is_some() && asset_company != Some(cid) {
+            return Err(Error::validation(
+                "CIP Asset on a purchase order line must belong to the same company as the order.",
+            ));
+        }
+        let odate = match date_order {
+            Some(dt) => dt.date(),
+            None => erp_addon_base::company_calendar::business_date(tx, cid).await?,
+        };
+        if let Some(cc) = cc_id {
+            erp_addon_account::controlling::validate_center_for_commitment(tx, cc, odate).await?;
+        }
+        if cc_id.is_none() && asset_id.is_none() {
+            continue;
+        }
+        if subtotal <= Decimal::ZERO {
+            continue;
+        }
+        let cur_rec = RecId::from_real(cur_id)
+            .ok_or_else(|| Error::invariant(format!("Invalid order currency {cur_id}.")))?;
+        let co_rec = RecId::from_real(cid)
+            .ok_or_else(|| Error::invariant(format!("Invalid order company {cid}.")))?;
+        let co_env = env.with_company(cid)?;
+        let cc_amount =
+            in_company_currency(tx, &co_env, subtotal, cur_rec, co_rec, date_order).await?;
+        if cc_amount > Decimal::ZERO {
+            requests.push(erp_addon_account::budget::avc::CommitmentRequest {
+                source_model: "purchase.order.line".to_owned(),
+                source_id: lid,
+                source_ref: oname,
+                company_id: cid,
+                account_id: asset_acc,
+                analytic_account_id: cc_id,
+                asset_id,
+                date: odate,
+                amount: cc_amount,
+            });
+        }
+    }
+    if !requests.is_empty() {
+        erp_addon_account::budget::avc::check_and_record_commitments(tx, env, &requests).await?;
     }
     Ok(())
 }

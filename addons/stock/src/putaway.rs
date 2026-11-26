@@ -153,11 +153,23 @@ pub(crate) async fn location_has_capacity(
             }
         }
     }
-    if allow_new == "empty" && has_any {
-        return Ok(false);
-    }
-    if allow_new == "same" && has_other {
-        return Ok(false);
+    match allow_new.as_str() {
+        "empty" => {
+            if has_any {
+                return Ok(false);
+            }
+        }
+        "same" => {
+            if has_other {
+                return Ok(false);
+            }
+        }
+        "mixed" => {}
+        other => {
+            return Err(Error::validation(format!(
+                "Unknown storage category allow_new_product policy '{other}'."
+            )));
+        }
     }
 
     // Per-product quantity capacity limit
@@ -224,7 +236,12 @@ pub(crate) async fn resolve_putaway_location(
             &[&product_id],
         )
         .await?;
-    let categ_id: Option<i64> = cat_rows.first().and_then(|r| r.try_get(0).ok()).flatten();
+    let categ_id: Option<i64> = cat_rows
+        .first()
+        .map(|r| r.try_get::<_, Option<i64>>(0))
+        .transpose()
+        .map_err(db_err)?
+        .flatten();
     let rules = tx
         .query(
             "SELECT location_out_id::int8 \

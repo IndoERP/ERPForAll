@@ -52,96 +52,96 @@ pub struct AccountAnalyticDistributionProduct {
 
 /// Applies default cost center assignment rules (`account.analytic.distribution.model`) to
 /// accountable lines of `move_ids` that do not yet specify an analytic account.
+///
+/// Runs in a single set-based statement so batch posting stays O(1) in query count.
 pub async fn apply_default_cost_centers(tx: &mut Transaction, move_ids: &[i64]) -> Result<()> {
     if move_ids.is_empty() {
         return Ok(());
     }
-    let lines = tx
-        .query(
-            "SELECT l.id::int8, l.company_id::int8, l.partner_id::int8, l.product_id::int8, \
-                    COALESCE(cm.code, '')::text, COALESCE(a.cost_center_policy, 'optional')::text \
-             FROM account_move_line l \
-             JOIN account_account a ON a.id = l.account_id \
-             LEFT JOIN res_company comp ON comp.id = l.company_id \
-             LEFT JOIN account_account_code cm \
-               ON cm.account_id = l.account_id \
-              AND cm.company_id = COALESCE(NULLIF(split_part(comp.parent_path, '/', 1), '')::int8, l.company_id) \
-             WHERE l.move_id = ANY($1::int8[]) \
-               AND l.analytic_account_id IS NULL \
-               AND l.account_id IS NOT NULL \
-               AND COALESCE(l.balance, 0) <> 0 \
-               AND COALESCE(a.cost_center_policy, 'optional') <> 'forbidden' \
-             ORDER BY l.id",
+    let updated = tx
+        .execute(
+            "WITH matched AS ( \
+               SELECT DISTINCT ON (l.id) \
+                 l.id AS line_id, \
+                 m.analytic_account_id \
+               FROM account_move_line l \
+               JOIN account_account a ON a.id = l.account_id \
+               JOIN res_company comp ON comp.id = l.company_id \
+               LEFT JOIN account_account_code cm \
+                 ON cm.account_id = l.account_id \
+                AND cm.company_id = COALESCE(NULLIF(split_part(comp.parent_path, '/', 1), '')::int8, l.company_id) \
+               JOIN account_analytic_distribution_model m \
+                 ON COALESCE(m.active, true) = true \
+                AND (m.company_id = l.company_id \
+                     OR (comp.parent_path IS NOT NULL \
+                         AND EXISTS (SELECT 1 FROM res_company mc \
+                                     WHERE mc.id = m.company_id \
+                                       AND mc.parent_path IS NOT NULL \
+                                       AND starts_with(comp.parent_path, mc.parent_path)))) \
+                AND (m.partner_id IS NULL OR m.partner_id = l.partner_id) \
+                AND (m.product_id IS NULL OR m.product_id = l.product_id) \
+                AND (m.account_prefix IS NULL OR m.account_prefix = '' \
+                     OR starts_with(COALESCE(cm.code, ''), m.account_prefix)) \
+               WHERE l.move_id = ANY($1::int8[]) \
+                 AND l.analytic_account_id IS NULL \
+                 AND l.account_id IS NOT NULL \
+                 AND COALESCE(l.balance, 0) <> 0 \
+                 AND COALESCE(a.cost_center_policy, 'optional') <> 'forbidden' \
+               ORDER BY l.id, \
+                 (CASE WHEN m.company_id = l.company_id THEN 1 ELSE 0 END) DESC, \
+                 (CASE WHEN m.product_id IS NOT NULL THEN 4 ELSE 0 END \
+                + CASE WHEN m.partner_id IS NOT NULL THEN 2 ELSE 0 END \
+                + CASE WHEN m.account_prefix IS NOT NULL AND m.account_prefix <> '' THEN 1 ELSE 0 END) DESC, \
+                 m.sequence ASC, m.id ASC \
+             ) \
+             UPDATE account_move_line l \
+             SET analytic_account_id = matched.analytic_account_id \
+             FROM matched \
+             WHERE l.id = matched.line_id",
             &[&move_ids],
         )
         .await?;
-    if lines.is_empty() {
-        return Ok(());
-    }
-    for row in lines {
-        let line_id: i64 = row.try_get(0).map_err(db)?;
-        let company_id: i64 = row.try_get(1).map_err(db)?;
-        let partner_id: Option<i64> = row.try_get(2).map_err(db)?;
-        let product_id: Option<i64> = row.try_get(3).map_err(db)?;
-        let account_code: String = row.try_get(4).map_err(db)?;
-
-        let matched = tx
-            .query(
-                "SELECT m.analytic_account_id::int8 \
-                 FROM account_analytic_distribution_model m \
-                 WHERE m.company_id = $1 \
-                   AND COALESCE(m.active, true) = true \
-                   AND (m.partner_id IS NULL OR m.partner_id = $2) \
-                   AND (m.product_id IS NULL OR m.product_id = $3) \
-                   AND (m.account_prefix IS NULL OR m.account_prefix = '' \
-                        OR starts_with($4::text, m.account_prefix)) \
-                 ORDER BY \
-                   (CASE WHEN m.product_id IS NOT NULL THEN 4 ELSE 0 END \
-                  + CASE WHEN m.partner_id IS NOT NULL THEN 2 ELSE 0 END \
-                  + CASE WHEN m.account_prefix IS NOT NULL AND m.account_prefix <> '' THEN 1 ELSE 0 END) DESC, \
-                   m.sequence ASC, m.id ASC \
-                 LIMIT 1",
-                &[&company_id, &partner_id, &product_id, &account_code],
-            )
+    if updated > 0 {
+        tx.invalidate_model("account.move.line", Some(&["analytic_account_id"]))
             .await?;
-        if let Some(m_row) = matched.first() {
-            let cc_id: i64 = m_row.try_get(0).map_err(db)?;
-            tx.execute(
-                "UPDATE account_move_line SET analytic_account_id = $2 WHERE id = $1",
-                &[&line_id, &cc_id],
-            )
-            .await?;
-        }
     }
     Ok(())
 }
 
 /// Validates cost center policy (`mandatory` / `forbidden`), validity windows (`valid_from..valid_to`),
-/// and posting locks (`lock_primary_costs`, `lock_revenues`) for all lines of `move_ids`.
-pub async fn validate_move_cost_centers(tx: &mut Transaction, move_ids: &[i64]) -> Result<()> {
-    if move_ids.is_empty() {
+/// and posting locks (`lock_primary_costs`, `lock_revenues`) for all lines of `move_dates`
+/// (each `(move_id, resolved_accounting_date)`).
+pub async fn validate_move_cost_centers(
+    tx: &mut Transaction,
+    move_dates: &[(i64, Date)],
+) -> Result<()> {
+    if move_dates.is_empty() {
         return Ok(());
     }
+    let (move_ids, dates): (Vec<i64>, Vec<Date>) = move_dates.iter().copied().unzip();
     let rows = tx
         .query(
-            "SELECT l.id::int8, COALESCE(l.name, m.name, 'Journal Item')::text, l.date, \
+            "WITH md AS (SELECT * FROM unnest($1::int8[], $2::date[]) AS t(move_id, eff_date)) \
+             SELECT l.id::int8, COALESCE(l.name, m.name, 'Journal Item')::text, md.eff_date, \
                     COALESCE(l.balance, 0), COALESCE(a.cost_center_policy, 'optional')::text, \
-                    COALESCE(a.name->>'en_US', a.name::text, 'Account')::text, \
+                    COALESCE(a.name->>'en_US', \
+                             (SELECT v FROM jsonb_each_text(a.name) AS kv(k, v) LIMIT 1), \
+                             'Account')::text, \
                     COALESCE(a.internal_group, '')::text, \
                     l.analytic_account_id::int8, \
                     cc.name::text, cc.code::text, cc.valid_from, cc.valid_to, \
                     COALESCE(cc.lock_primary_costs, false), \
                     COALESCE(cc.lock_revenues, false), \
                     COALESCE(cc.active, true) \
-             FROM account_move_line l \
-             JOIN account_move m ON m.id = l.move_id \
+             FROM md \
+             JOIN account_move m ON m.id = md.move_id \
+             JOIN account_move_line l ON l.move_id = md.move_id \
              JOIN account_account a ON a.id = l.account_id \
              LEFT JOIN account_analytic_account cc ON cc.id = l.analytic_account_id \
-             WHERE l.move_id = ANY($1::int8[]) \
-               AND l.account_id IS NOT NULL \
+             WHERE l.account_id IS NOT NULL \
                AND COALESCE(l.balance, 0) <> 0 \
              ORDER BY l.id",
-            &[&move_ids],
+            &[&move_ids, &dates],
         )
         .await?;
 
@@ -150,7 +150,7 @@ pub async fn validate_move_cost_centers(tx: &mut Transaction, move_ids: &[i64]) 
         let _line_id: i64 = row.try_get(0).map_err(db)?;
         let label: String = row.try_get(1).map_err(db)?;
         let entry_date: Date = row.try_get(2).map_err(db)?;
-        let balance: Decimal = row.try_get(3).map_err(db)?;
+        let _balance: Decimal = row.try_get(3).map_err(db)?;
         let policy: String = row.try_get(4).map_err(db)?;
         let account_name: String = row.try_get(5).map_err(db)?;
         let internal_group: String = row.try_get(6).map_err(db)?;
@@ -164,26 +164,37 @@ pub async fn validate_move_cost_centers(tx: &mut Transaction, move_ids: &[i64]) 
         let cc_active: bool = row.try_get(14).map_err(db)?;
 
         match (policy.as_str(), cc_id) {
+            ("optional", _) => {}
             ("mandatory", None) => {
                 errors.push(format!(
                     "Account '{account_name}' on line '{label}' requires a Cost Center / Analytic Account."
                 ));
                 continue;
             }
+            ("mandatory", Some(_)) => {}
             ("forbidden", Some(_)) => {
                 errors.push(format!(
                     "Account '{account_name}' on line '{label}' does not allow a Cost Center / Analytic Account."
                 ));
                 continue;
             }
-            _ => {}
+            ("forbidden", None) => {}
+            (other, _) => {
+                return Err(Error::validation(format!(
+                    "Unknown cost_center_policy '{other}' on account '{account_name}'."
+                )));
+            }
         }
 
-        if cc_id.is_some() {
-            let cc_label = match (cc_code.as_deref(), cc_name.as_deref()) {
-                (Some(c), Some(n)) if !c.is_empty() => format!("[{c}] {n}"),
-                (_, Some(n)) => n.to_owned(),
-                _ => "Cost Center".to_owned(),
+        if let Some(cid) = cc_id {
+            let Some(name_str) = cc_name.as_deref() else {
+                return Err(Error::missing(format!(
+                    "Cost center {cid} referenced on line '{label}' does not exist."
+                )));
+            };
+            let cc_label = match cc_code.as_deref() {
+                Some(c) if !c.is_empty() => format!("[{c}] {name_str}"),
+                _ => name_str.to_owned(),
             };
             if !cc_active {
                 errors.push(format!(
@@ -195,12 +206,12 @@ pub async fn validate_move_cost_centers(tx: &mut Transaction, move_ids: &[i64]) 
                     "Cost Center {cc_label} is not valid on {entry_date} (line '{label}')."
                 ));
             }
-            if lock_primary && (internal_group == "expense" || balance > Decimal::ZERO) {
+            if lock_primary && internal_group == "expense" {
                 errors.push(format!(
                     "Cost Center {cc_label} is locked for primary cost postings (line '{label}')."
                 ));
             }
-            if lock_revenues && internal_group == "income" && balance < Decimal::ZERO {
+            if lock_revenues && internal_group == "income" {
                 errors.push(format!(
                     "Cost Center {cc_label} is locked for direct revenue postings (line '{label}')."
                 ));

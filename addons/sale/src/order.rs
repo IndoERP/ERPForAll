@@ -24,16 +24,32 @@ pub const STATES: [(&str, &str); 4] = [
 /// Fields only the operations and the status computes change: never written by a caller, also
 /// not with sudo, on create, on write or as a `default_<field>` context key; `name` comes last, a
 /// create may give it (V6, V11, V12).
-const OPERATION_FIELDS: [&str; 6] = [
+const OPERATION_FIELDS: [&str; 8] = [
     "state",
     "locked",
     "invoicing_closed",
     "invoice_status",
     "delivery_status",
+    "signed_by",
+    "signed_on",
     "name",
 ];
 /// The fields of `OPERATION_FIELDS` a create refuses.
-const CREATE_REFUSED: &[&str] = OPERATION_FIELDS.split_at(5).0;
+const CREATE_REFUSED: &[&str] = OPERATION_FIELDS.split_at(7).0;
+
+/// Returns a copy of `env` with `default_*` keys removed while preserving `tz`, `lang`,
+/// `company_id`, `allowed_company_ids`, and all other caller context entries.
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
+}
 
 fn now(_ctx: &erp_sdk::DefaultContext) -> Value {
     Value::DateTime(DateTime::now())
@@ -981,7 +997,7 @@ impl SaleOrder {
         if names.iter().any(|n| n == "validity_date") && !values.contains_key("validity_date") {
             let days = crate::settings::quotation_validity_days(tx).await?;
             if days > 0 {
-                let today = Date::today();
+                let today = this.env().context_today()?;
                 values.insert(
                     "validity_date".into(),
                     Value::Date(Date::from_days(today.days() + days)),
@@ -1140,7 +1156,14 @@ impl SaleOrder {
             }
             // the form's read-only rules are the server's rules, refused by name
             let frozen: &[&str] = if order.state == "sale" {
-                &["date_order", "validity_date", "fiscal_position_id"]
+                &[
+                    "date_order",
+                    "validity_date",
+                    "fiscal_position_id",
+                    "sale_order_template_id",
+                    "require_signature",
+                    "require_payment",
+                ]
             } else {
                 &[]
             };
@@ -1170,8 +1193,18 @@ impl SaleOrder {
             .iter()
             .any(|field| written.contains(field));
         let ids: BTreeSet<i64> = records.ids().into_iter().collect();
-        // a new pricelist prices every line again (converting currency when needed)
-        let order_lines = if written.contains("pricelist_id") {
+        // Capture prior currencies and hand-set prices before writing the new pricelist:
+        // a same-currency pricelist change preserves hand-set prices; a currency change reprices all.
+        let pricelist_change = if written.contains("pricelist_id") {
+            let prior_currencies: BTreeMap<i64, Option<RecId>> = records
+                .ids()
+                .into_iter()
+                .zip(
+                    RecordSet::<SaleOrder>::try_from(records.clone())?
+                        .mapped(tx, SaleOrder::CURRENCY_ID)
+                        .await?,
+                )
+                .collect();
             let lines = this
                 .env()
                 .records("sale.order.line")?
@@ -1184,14 +1217,38 @@ impl SaleOrder {
                     )?,
                 )
                 .await?;
-            Some(lines)
+            let manual = crate::amounts::manual_prices(tx, &lines).await?;
+            Some((prior_currencies, lines, manual))
         } else {
             None
         };
         sup.call(tx, records, (vals,)).await?;
-        if let Some(lines) = order_lines {
-            let empty_manual = BTreeSet::new();
-            crate::amounts::reprice(tx, this.env(), &lines, &empty_manual, true, false).await?;
+        if let Some((prior_currencies, lines, mut manual)) = pricelist_change {
+            let new_currencies: BTreeMap<i64, Option<RecId>> = records
+                .ids()
+                .into_iter()
+                .zip(
+                    RecordSet::<SaleOrder>::try_from(records.clone())?
+                        .mapped(tx, SaleOrder::CURRENCY_ID)
+                        .await?,
+                )
+                .collect();
+            let currency_changed: BTreeSet<i64> = prior_currencies
+                .into_iter()
+                .filter(|(oid, old_cur)| new_currencies.get(oid) != Some(old_cur))
+                .map(|(oid, _)| oid)
+                .collect();
+            if !currency_changed.is_empty() {
+                let line_orders = lines.cells(tx, "order_id").await?;
+                for (lid, order_cell) in lines.ids().into_iter().zip(line_orders) {
+                    if let Cell::Id(oid) = order_cell
+                        && currency_changed.contains(&oid)
+                    {
+                        manual.remove(&lid);
+                    }
+                }
+            }
+            crate::amounts::reprice(tx, this.env(), &lines, &manual, true, false).await?;
         }
         if recurrency {
             // a new currency rounds every line and total again
@@ -1208,10 +1265,26 @@ impl SaleOrder {
         this: &RecordSet<SaleOrder>,
         tx: &mut Transaction,
     ) -> Result<()> {
-        this.as_records().check_access(tx, Operation::Write).await?;
-        let ids: BTreeSet<i64> = this.as_records().ids().into_iter().collect();
+        let records = this.as_records();
+        records.check_access(tx, Operation::Write).await?;
+        let ids: BTreeSet<i64> = records.ids().into_iter().collect();
         if ids.is_empty() {
             return Ok(());
+        }
+        records.lock_for_update(tx, true).await?;
+        for order in headers(tx, records).await? {
+            if order.locked {
+                return Err(Error::validation(format!(
+                    "The sales order {} is locked: prices cannot be updated.",
+                    order.name
+                )));
+            }
+            if order.state != "draft" && order.state != "sent" {
+                return Err(Error::validation(format!(
+                    "The sales order {} is not a quotation: prices can only be updated on draft or sent quotations.",
+                    order.name
+                )));
+            }
         }
         let lines = this
             .env()
