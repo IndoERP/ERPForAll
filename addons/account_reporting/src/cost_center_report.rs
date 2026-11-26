@@ -3,13 +3,13 @@
 //! (`account_reporting.cost_center_report`): pure caller-scoped ORM reads showing Primary Actual,
 //! Secondary Allocations, Total Actual, Open PO Commitments, Budget Released, and Available Budget.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erp_addon_reporting::{
     definition::ReportDef,
     line::{
-        Cell as ReportCell, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind, Segment,
-        SegmentKind,
+        Cell as ReportCell, CellKind, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind,
+        Segment, SegmentKind,
     },
     options::Options,
     provider::{ProviderSpec, ReportCx, ReportProvider},
@@ -170,7 +170,7 @@ fn locate(report: &ReportDef, id: &LineId) -> Result<i64> {
         return Err(invalid("Line id does not belong to Cost Center Report."));
     }
     match id.segments() {
-        [seg]
+        [_, seg]
             if seg.kind() == &SegmentKind::Group("account_id".to_owned())
                 && seg.model() == "account.analytic.account" =>
         {
@@ -197,6 +197,11 @@ impl ReportProvider for CostCenterReport {
         _strict: bool,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            if options.order.is_some() {
+                return Err(invalid(
+                    "Cost Center Report rows are ordered by cost center code.",
+                ));
+            }
             if let Some(key) = options.provider.keys().next() {
                 return Err(invalid(format!(
                     "Cost Center Report does not accept option '{key}'."
@@ -211,10 +216,12 @@ impl ReportProvider for CostCenterReport {
                 ));
             }
             for col in &report.columns {
-                if !matches!(
-                    col.label.as_str(),
-                    "primary" | "secondary" | "actual" | "committed" | "budget" | "available"
-                ) {
+                if col.kind != CellKind::Monetary
+                    || !matches!(
+                        col.label.as_str(),
+                        "primary" | "secondary" | "actual" | "committed" | "budget" | "available"
+                    )
+                {
                     return Err(invalid(format!(
                         "Unknown Cost Center Report column '{}'.",
                         col.label
@@ -240,25 +247,6 @@ impl ReportProvider for CostCenterReport {
                 .ok_or_else(|| invalid("Cost Center Report requires a date range."))?;
             let to = options.period.to;
             let limit = cx.bounds().max_screen_lines;
-
-            let centers_rec = cx.env().records("account.analytic.account")?;
-            let found_centers = centers_rec
-                .search_with(
-                    cx.tx(),
-                    &cond(json!([["company_id", "=", company]]))?,
-                    &SearchOptions::new()
-                        .order("code, name, id")
-                        .limit(limit as u64 + 1),
-                )
-                .await?;
-            if found_centers.len() > limit {
-                return Err(invalid(format!(
-                    "Cost Center Report exceeds reporting.max_screen_lines ({limit})."
-                )));
-            }
-            let center_rows = found_centers
-                .read_rows(cx.tx(), &["id", "code", "name", "center_type"], Load::Raw)
-                .await?;
 
             // Aggregate primary vs secondary analytic items as the caller via ORM _read_group.
             let line_rec = cx.env().records("account.analytic.line")?;
@@ -289,7 +277,7 @@ impl ReportProvider for CostCenterReport {
                 )
                 .await?;
 
-            // Aggregate active budget lines & commitments by Cost Center via ORM.
+            // Aggregate active non-revenue budget lines & commitments by Cost Center via ORM.
             let budget_groups = cx
                 .env()
                 .records("account.budget.line")?
@@ -298,6 +286,8 @@ impl ReportProvider for CostCenterReport {
                     ReadGroup::new(cond(json!([
                         ["company_id", "=", company],
                         ["analytic_account_id", "!=", false],
+                        ["budget_id.state", "in", ["confirm", "validate", "done"]],
+                        ["budget_id.budget_type", "!=", "revenue"],
                         ["date_from", "<=", day(to)],
                         ["date_to", ">=", day(from)]
                     ]))?)
@@ -326,12 +316,51 @@ impl ReportProvider for CostCenterReport {
                 }
             }
 
+            // Include active cost centers AND archived centers that have activity in the period.
+            let active_ids: Vec<i64> = map.keys().copied().collect();
+            let mut ctx_all = cx.env().context().clone();
+            ctx_all.set("active_test", Value::Bool(false));
+            let env_all = cx.env().with_context_replaced(ctx_all);
+            let center_domain = if active_ids.is_empty() {
+                cond(json!([["company_id", "=", company], ["active", "=", true]]))?
+            } else {
+                cond(json!([
+                    "&",
+                    ["company_id", "=", company],
+                    "|",
+                    ["active", "=", true],
+                    ["id", "in", active_ids]
+                ]))?
+            };
+            let found_centers = env_all
+                .records("account.analytic.account")?
+                .search_with(
+                    cx.tx(),
+                    &center_domain,
+                    &SearchOptions::new()
+                        .order("code, name, id")
+                        .limit(limit as u64 + 1),
+                )
+                .await?;
+            if found_centers.len() > limit {
+                return Err(invalid(format!(
+                    "Cost Center Report exceeds reporting.max_screen_lines ({limit})."
+                )));
+            }
+            let center_rows = found_centers
+                .read_rows(cx.tx(), &["id", "code", "name", "center_type"], Load::Raw)
+                .await?;
+
             let root = LineId::root(report.id);
             let mut out = Vec::new();
             let mut grand = CenterMetrics::default();
+            let mut seen_ids = BTreeSet::new();
 
             for row in center_rows.iter().map(Value::Row) {
                 let id = int_field(&row, "id")?;
+                if !seen_ids.insert(id) {
+                    continue;
+                }
                 let code = text_field(&row, "code")?;
                 let name = text_field(&row, "name")?;
                 let label = if code.is_empty() {
@@ -340,6 +369,14 @@ impl ReportProvider for CostCenterReport {
                     format!("{code} {name}")
                 };
                 let m = map.get(&id).copied().unwrap_or_default();
+                if options.hide_zero
+                    && m.primary.is_zero()
+                    && m.secondary.is_zero()
+                    && m.committed.is_zero()
+                    && m.budget.is_zero()
+                {
+                    continue;
+                }
                 grand.primary += m.primary;
                 grand.secondary += m.secondary;
                 grand.committed += m.committed;
@@ -351,13 +388,12 @@ impl ReportProvider for CostCenterReport {
                     &id.to_string(),
                 ));
                 let mut line = Line::new(
-                    lid.clone(),
+                    lid,
                     label,
                     LineKind::Group,
                     build_cells(report, currency, scale, m, true),
                 );
                 line.unfoldable = true;
-                line.unfolded = options.unfold_all || options.unfolded.contains(&lid);
                 line.caret = vec!["open"];
                 out.push(line);
             }
@@ -382,6 +418,12 @@ impl ReportProvider for CostCenterReport {
     ) -> BoxFuture<'a, Result<Expansion>> {
         Box::pin(async move {
             let center_id = locate(report, line)?;
+            let max_page = cx.bounds().max_screen_lines as u64;
+            if page.limit == 0 || page.limit > max_page {
+                return Err(invalid(format!(
+                    "Page limit must be between 1 and {max_page}."
+                )));
+            }
             let company = options.companies[0];
             let (currency, scale) = company_currency(cx, company).await?;
             let from = options
@@ -458,7 +500,7 @@ impl ReportProvider for CostCenterReport {
 
     fn drill<'a>(
         &'a self,
-        _cx: &'a mut ReportCx<'_>,
+        cx: &'a mut ReportCx<'_>,
         report: &'a ReportDef,
         options: &'a Options,
         line: &'a LineId,
@@ -473,6 +515,26 @@ impl ReportProvider for CostCenterReport {
                 .ok_or_else(|| invalid("Cost Center Report requires a date range."))?;
             let to = options.period.to;
 
+            // Verify caller has read access to this cost center under the selected company.
+            let mut ctx_all = cx.env().context().clone();
+            ctx_all.set("active_test", Value::Bool(false));
+            let visible = cx
+                .env()
+                .with_context_replaced(ctx_all)
+                .records("account.analytic.account")?
+                .search_count(
+                    cx.tx(),
+                    &cond(json!([
+                        ["id", "=", center_id],
+                        ["company_id", "=", company]
+                    ]))?,
+                    None,
+                )
+                .await?;
+            if visible == 0 {
+                return Err(invalid("Cost Center is not accessible in this company."));
+            }
+
             match target {
                 DrillTarget::Item(item) if item == "open" => Ok(json!({
                     "type": "ir.actions.act_window",
@@ -482,22 +544,102 @@ impl ReportProvider for CostCenterReport {
                     "target": "current",
                     "views": [[false, "form"]]
                 })),
-                DrillTarget::Cell(_) => {
-                    let dom = cond(json!([
-                        ["company_id", "=", company],
-                        ["account_id", "=", center_id],
-                        ["date", ">=", day(from)],
-                        ["date", "<=", day(to)]
-                    ]))?;
-                    Ok(json!({
-                        "type": "ir.actions.act_window",
-                        "name": "Cost Center Items",
-                        "res_model": "account.analytic.line",
-                        "target": "current",
-                        "views": [[false, "list"], [false, "form"]],
-                        "domain": dom.to_json()?,
-                        "context": {}
-                    }))
+                DrillTarget::Cell(col_idx) => {
+                    let col = report
+                        .columns
+                        .get(*col_idx)
+                        .ok_or_else(|| invalid("Cost Center Report column index out of range."))?;
+                    match col.label.as_str() {
+                        "primary" => {
+                            let dom = cond(json!([
+                                ["company_id", "=", company],
+                                ["account_id", "=", center_id],
+                                ["cost_kind", "=", "primary"],
+                                ["date", ">=", day(from)],
+                                ["date", "<=", day(to)]
+                            ]))?;
+                            Ok(json!({
+                                "type": "ir.actions.act_window",
+                                "name": "Primary Cost Center Items",
+                                "res_model": "account.analytic.line",
+                                "target": "current",
+                                "views": [[false, "list"], [false, "form"]],
+                                "domain": dom.to_json()?,
+                                "context": {}
+                            }))
+                        }
+                        "secondary" => {
+                            let dom = cond(json!([
+                                ["company_id", "=", company],
+                                ["account_id", "=", center_id],
+                                ["cost_kind", "!=", "primary"],
+                                ["date", ">=", day(from)],
+                                ["date", "<=", day(to)]
+                            ]))?;
+                            Ok(json!({
+                                "type": "ir.actions.act_window",
+                                "name": "Secondary Allocation Items",
+                                "res_model": "account.analytic.line",
+                                "target": "current",
+                                "views": [[false, "list"], [false, "form"]],
+                                "domain": dom.to_json()?,
+                                "context": {}
+                            }))
+                        }
+                        "committed" => {
+                            let dom = cond(json!([
+                                ["company_id", "=", company],
+                                ["analytic_account_id", "=", center_id],
+                                ["state", "in", ["open", "partially_billed"]]
+                            ]))?;
+                            Ok(json!({
+                                "type": "ir.actions.act_window",
+                                "name": "Open Purchase Commitments",
+                                "res_model": "account.budget.commitment",
+                                "target": "current",
+                                "views": [[false, "list"], [false, "form"]],
+                                "domain": dom.to_json()?,
+                                "context": {}
+                            }))
+                        }
+                        "budget" => {
+                            let dom = cond(json!([
+                                ["company_id", "=", company],
+                                ["analytic_account_id", "=", center_id],
+                                ["budget_id.state", "in", ["confirm", "validate", "done"]],
+                                ["budget_id.budget_type", "!=", "revenue"],
+                                ["date_from", "<=", day(to)],
+                                ["date_to", ">=", day(from)]
+                            ]))?;
+                            Ok(json!({
+                                "type": "ir.actions.act_window",
+                                "name": "Cost Center Budget Lines",
+                                "res_model": "account.budget.line",
+                                "target": "current",
+                                "views": [[false, "list"], [false, "form"]],
+                                "domain": dom.to_json()?,
+                                "context": {}
+                            }))
+                        }
+                        "actual" | "available" => {
+                            let dom = cond(json!([
+                                ["company_id", "=", company],
+                                ["account_id", "=", center_id],
+                                ["date", ">=", day(from)],
+                                ["date", "<=", day(to)]
+                            ]))?;
+                            Ok(json!({
+                                "type": "ir.actions.act_window",
+                                "name": "Cost Center Items",
+                                "res_model": "account.analytic.line",
+                                "target": "current",
+                                "views": [[false, "list"], [false, "form"]],
+                                "domain": dom.to_json()?,
+                                "context": {}
+                            }))
+                        }
+                        _ => Err(invalid("Unsupported drill column on Cost Center Report.")),
+                    }
                 }
                 _ => Err(invalid("Unsupported drill target on Cost Center Report.")),
             }

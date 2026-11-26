@@ -6,19 +6,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RateBook, RoundingTable};
-use erp_sdk::Operation;
-use erp_sdk::money::RateDateRule;
+use erp_sdk::money::{Increment, RateDateRule};
 use erp_sdk::prelude::*;
+use erp_sdk::{ErrorKind, Operation};
 
-use super::{AccountConsolidationGroup, db, default_fs_code_for_account_type};
+use super::{
+    AccountConsolidationGroup, db, default_fs_code_for_account_type, ensure_group_company_access,
+    strip_default_context,
+};
 
-fn default_year_start(_ctx: &erp_sdk::DefaultContext) -> Value {
-    let (y, _, _) = Date::today().ymd();
-    Value::Date(Date::from_ymd(y, 1, 1).unwrap_or_else(Date::today))
+fn quantize_inc(value: Decimal, inc: &Increment) -> Result<Decimal> {
+    Ok(inc.quantize(value, CURRENCY_ROUNDING_MODE)?)
 }
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
+async fn resolve_default_today(tx: &mut Transaction, env: &Env) -> Result<Date> {
+    if let Some(cid) = env.company_id()? {
+        erp_addon_base::company_calendar::business_date(tx, cid).await
+    } else {
+        env.context_today()
+    }
 }
 
 /// Computes the exact Cumulative Translation Adjustment (CTA) balancing entry (in signed
@@ -35,6 +41,16 @@ pub fn compute_nci_share(subsidiary_amount: Decimal, ownership_pct: Decimal) -> 
     (subsidiary_amount * nci_pct / Decimal::from(100)).round_dp(2)
 }
 
+/// Currency-increment-aware NCI share calculation.
+pub fn compute_nci_share_inc(
+    subsidiary_amount: Decimal,
+    ownership_pct: Decimal,
+    inc: &Increment,
+) -> Result<Decimal> {
+    let nci_pct = (Decimal::from(100) - ownership_pct).max(Decimal::ZERO);
+    quantize_inc(subsidiary_amount * nci_pct / Decimal::from(100), inc)
+}
+
 /// Pairs an intercompany debit balance (`ar_or_exp > 0`) with an intercompany credit balance
 /// (`ap_or_rev < 0` expressed as positive magnitude `credit_mag > 0`), returning
 /// `(matched_eliminated, net_variance)` where `net_variance = debit_mag - credit_mag`.
@@ -42,6 +58,24 @@ pub fn pair_ic_balances(debit_mag: Decimal, credit_mag: Decimal) -> (Decimal, De
     let matched = debit_mag.min(credit_mag).max(Decimal::ZERO).round_dp(2);
     let variance = (debit_mag - credit_mag).round_dp(2);
     (matched, variance)
+}
+
+/// Currency-increment-aware IC pairing supporting signed (including contra/credit-note) net balances.
+pub fn pair_ic_balances_inc(
+    debit_net: Decimal,
+    credit_net: Decimal,
+    inc: &Increment,
+) -> Result<(Decimal, Decimal)> {
+    let matched = if debit_net > Decimal::ZERO && credit_net > Decimal::ZERO {
+        quantize_inc(debit_net.min(credit_net), inc)?
+    } else if debit_net < Decimal::ZERO && credit_net < Decimal::ZERO {
+        // Both sides hold contra/credit-note net balances -> match the shared contra magnitude.
+        quantize_inc(debit_net.max(credit_net), inc)?
+    } else {
+        Decimal::ZERO
+    };
+    let variance = quantize_inc(debit_net - credit_net, inc)?;
+    Ok((matched, variance))
 }
 
 /// `account.consolidation.run`: persisted, auditable group financial consolidation run for a
@@ -75,10 +109,10 @@ pub struct AccountConsolidationRun {
     )]
     pub currency_id: Option<RecId>,
     /// P&L period start date (inclusive).
-    #[field(date, required = true, default_fn = default_year_start, string = "Period Start")]
+    #[field(date, required = true, string = "Period Start")]
     pub date_from: Option<Date>,
     /// Balance Sheet & P&L period end date (inclusive).
-    #[field(date, required = true, default_fn = default_today, string = "Period End")]
+    #[field(date, required = true, string = "Period End")]
     pub date_to: Option<Date>,
     /// Run workflow status.
     #[field(
@@ -172,6 +206,135 @@ pub struct AccountConsolidationRun {
 
 #[methods(AccountConsolidationRun, addon = "account")]
 impl AccountConsolidationRun {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountConsolidationRun>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        let need_from = names.iter().any(|n| n == "date_from") && !values.contains_key("date_from");
+        let need_to = names.iter().any(|n| n == "date_to") && !values.contains_key("date_to");
+        if need_from || need_to {
+            let today = resolve_default_today(tx, this.env()).await?;
+            if need_from {
+                let (y, _, _) = today.ymd();
+                let start = Date::from_ymd(y, 1, 1)
+                    .ok_or_else(|| Error::invariant("Invalid year start date."))?;
+                values.insert("date_from".to_owned(), Value::Date(start));
+            }
+            if need_to {
+                values.insert("date_to".to_owned(), Value::Date(today));
+            }
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<AccountConsolidationRun>,
+        tx: &mut Transaction,
+        vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        if !this.env().su() {
+            for vals in &vals_list {
+                if let Some(Cell::Str(st)) = vals.get("state")
+                    && st.as_ref() != "draft"
+                {
+                    return Err(Error::validation(
+                        "Consolidation runs must start in Draft status.",
+                    ));
+                }
+                if let Some(Cell::Id(gid)) = vals.get("group_id") {
+                    ensure_group_company_access(tx, this.env(), *gid).await?;
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationRun>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("state") {
+                return Err(Error::validation(
+                    "Consolidation run status must be changed through Execute or Lock actions.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT id::int8, group_id::int8, state::text \
+                         FROM account_consolidation_run WHERE id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                let mut gids = BTreeSet::new();
+                for r in rows {
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let st: String = r.try_get(2).map_err(db)?;
+                    gids.insert(gid);
+                    if st == "locked" {
+                        return Err(Error::user(
+                            "A locked consolidation run cannot be modified.",
+                        ));
+                    }
+                }
+                if let Some(Cell::Id(new_gid)) = vals.get("group_id") {
+                    gids.insert(*new_gid);
+                }
+                for gid in gids {
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationRun>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT group_id::int8, state::text \
+                         FROM account_consolidation_run WHERE id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                let mut gids = BTreeSet::new();
+                for r in rows {
+                    let gid: i64 = r.try_get(0).map_err(db)?;
+                    let st: String = r.try_get(1).map_err(db)?;
+                    gids.insert(gid);
+                    if st == "locked" {
+                        return Err(Error::user("A locked consolidation run cannot be deleted."));
+                    }
+                }
+                for gid in gids {
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Executes the full 4-stage consolidation pipeline deterministically inside one transaction:
     /// - Level 00: Local balance extraction + multi-rate FX translation (Closing / Average / Historical) + exact CTA
     /// - Level 20: Automatic IC Eliminations (AR/AP, Revenue/Expense, Investment vs Share Capital + Goodwill)
@@ -185,26 +348,29 @@ impl AccountConsolidationRun {
     ) -> Result<()> {
         let run = this.ensure_one()?;
         run.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let run_id = run.as_records().ids()[0];
-        let state = run.get(tx, AccountConsolidationRun::STATE).await?;
-        if state.as_deref() == Some("locked") {
+
+        // Lock run row FOR UPDATE to serialize concurrent executions / locks.
+        let lock_rows = tx
+            .query(
+                "SELECT state::text, group_id::int8, date_from, date_to \
+                 FROM account_consolidation_run WHERE id = $1 FOR UPDATE",
+                &[&run_id],
+            )
+            .await?;
+        let Some(lock_row) = lock_rows.first() else {
+            return Err(Error::missing("Consolidation run does not exist."));
+        };
+        let state: String = lock_row.try_get(0).map_err(db)?;
+        if state == "locked" {
             return Err(Error::user(
                 "A locked consolidation run cannot be re-executed.",
             ));
         }
-        let group_id = run
-            .get(tx, AccountConsolidationRun::GROUP_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Select a Consolidation Group."))?
-            .get();
-        let date_from = run
-            .get(tx, AccountConsolidationRun::DATE_FROM)
-            .await?
-            .ok_or_else(|| Error::validation("Period Start is required."))?;
-        let date_to = run
-            .get(tx, AccountConsolidationRun::DATE_TO)
-            .await?
-            .ok_or_else(|| Error::validation("Period End is required."))?;
+        let group_id: i64 = lock_row.try_get(1).map_err(db)?;
+        let date_from: Date = lock_row.try_get(2).map_err(db)?;
+        let date_to: Date = lock_row.try_get(3).map_err(db)?;
         if date_to.days() < date_from.days() {
             return Err(Error::validation(
                 "Period End cannot be earlier than Period Start.",
@@ -216,7 +382,7 @@ impl AccountConsolidationRun {
             .query(
                 "SELECT currency_id::int8, closing_rate_type_code::text, \
                         average_rate_type_code::text, historical_rate_type_code::text, \
-                        COALESCE(fallback_to_spot, true) \
+                        COALESCE(fallback_to_spot, true), COALESCE(ic_tolerance, 0) \
                  FROM account_consolidation_group WHERE id = $1",
                 &[&group_id],
             )
@@ -229,26 +395,14 @@ impl AccountConsolidationRun {
         let average_code: String = grp_row.try_get(2).map_err(db)?;
         let historical_code: String = grp_row.try_get(3).map_err(db)?;
         let fallback_to_spot: bool = grp_row.try_get(4).map_err(db)?;
-
-        // Ensure Group FS Chart exists.
-        let grp_rec: RecordSet<AccountConsolidationGroup> = run
-            .env()
-            .records("account.consolidation.group")?
-            .browse([group_id])?
-            .try_into()?;
-        let fs_count: i64 = tx
-            .query(
-                "SELECT count(*)::int8 FROM account_consolidation_account WHERE group_id = $1",
-                &[&group_id],
-            )
-            .await?[0]
-            .try_get(0)
-            .map_err(db)?;
-        if fs_count == 0 {
-            AccountConsolidationGroup::action_bootstrap_default_chart(&grp_rec, tx).await?;
+        let ic_tolerance: Decimal = grp_row.try_get(5).map_err(db)?;
+        if ic_tolerance < Decimal::ZERO {
+            return Err(Error::validation(
+                "IC Variance Tolerance cannot be negative.",
+            ));
         }
 
-        // Load units and authorize caller access to every member company.
+        // Load units and authorize caller access to every member company first.
         struct UnitInfo {
             company_id: i64,
             company_name: String,
@@ -290,16 +444,42 @@ impl AccountConsolidationRun {
                     "You do not have access to member company {cid} in this consolidation group."
                 )));
             }
+            let method: String = urow.try_get(4).map_err(db)?;
+            if !matches!(method.as_str(), "full" | "proportional" | "equity") {
+                return Err(Error::validation(format!(
+                    "Unsupported consolidation method '{method}' for company {cid}."
+                )));
+            }
             group_company_ids.insert(cid);
             units.push(UnitInfo {
                 company_id: cid,
                 company_name: urow.try_get(1).map_err(db)?,
                 local_currency_id: urow.try_get(2).map_err(db)?,
                 is_parent: urow.try_get(3).map_err(db)?,
-                method: urow.try_get(4).map_err(db)?,
+                method,
                 ownership_pct: urow.try_get(5).map_err(db)?,
                 investment_account_id: urow.try_get(6).map_err(db)?,
             });
+        }
+
+        // Ensure Group FS Chart exists.
+        let grp_rec: RecordSet<AccountConsolidationGroup> = run
+            .env()
+            .records("account.consolidation.group")?
+            .browse([group_id])?
+            .try_into()?;
+        let fs_count: i64 = tx
+            .query(
+                "SELECT count(*)::int8 FROM account_consolidation_account WHERE group_id = $1",
+                &[&group_id],
+            )
+            .await?
+            .first()
+            .ok_or_else(|| Error::invariant("Missing count row for consolidation FS chart."))?
+            .try_get(0)
+            .map_err(db)?;
+        if fs_count == 0 {
+            AccountConsolidationGroup::action_bootstrap_default_chart(&grp_rec, tx).await?;
         }
 
         // Load Group FS items.
@@ -330,6 +510,36 @@ impl AccountConsolidationRun {
                 rate_method: r.try_get(3).map_err(db)?,
                 ic_role: r.try_get(4).map_err(db)?,
             };
+            if !matches!(
+                item.rate_method.as_str(),
+                "closing" | "average" | "historical" | "computed_cta"
+            ) {
+                return Err(Error::validation(format!(
+                    "Unsupported translation rate method '{}' on Group FS Item '{}'.",
+                    item.rate_method, item.code
+                )));
+            }
+            if !matches!(
+                item.section.as_str(),
+                "asset_current"
+                    | "asset_non_current"
+                    | "goodwill"
+                    | "liability_current"
+                    | "liability_non_current"
+                    | "equity_capital"
+                    | "equity_retained"
+                    | "equity_cta"
+                    | "equity_nci"
+                    | "income"
+                    | "cogs"
+                    | "expense"
+                    | "nci_profit"
+            ) {
+                return Err(Error::validation(format!(
+                    "Unsupported FS section '{}' on Group FS Item '{}'.",
+                    item.section, item.code
+                )));
+            }
             fs_by_code.insert(item.code.clone(), item.id);
             if item.ic_role != "none" {
                 fs_by_role.entry(item.ic_role.clone()).or_insert(item.id);
@@ -349,15 +559,17 @@ impl AccountConsolidationRun {
             .get("nci_profit")
             .copied()
             .ok_or_else(|| Error::validation("Group FS Chart requires an nci_profit item."))?;
-        let goodwill_fs_id = fs_by_section.get("goodwill").copied().unwrap_or(cta_fs_id);
+        let goodwill_fs_id = fs_by_section
+            .get("goodwill")
+            .copied()
+            .ok_or_else(|| Error::validation("Group FS Chart requires a goodwill item."))?;
         let retained_fs_id = fs_by_section
             .get("equity_retained")
             .copied()
-            .unwrap_or(cta_fs_id);
-        let ic_var_fs_id = fs_by_role
-            .get("ic_variance")
-            .copied()
-            .unwrap_or(retained_fs_id);
+            .ok_or_else(|| Error::validation("Group FS Chart requires an equity_retained item."))?;
+        let ic_var_fs_id = fs_by_role.get("ic_variance").copied().ok_or_else(|| {
+            Error::validation("Group FS Chart requires an ic_variance elimination item.")
+        })?;
         let ic_ar_fs_id = fs_by_role.get("ic_receivable").copied();
         let ic_ap_fs_id = fs_by_role.get("ic_payable").copied();
         let ic_rev_fs_id = fs_by_role.get("ic_revenue").copied();
@@ -398,6 +610,8 @@ impl AccountConsolidationRun {
         }
         let currency_vec: Vec<RecId> = all_currencies.into_iter().collect();
         let rounding_table = RoundingTable::load(run.env(), tx, &currency_vec).await?;
+        let group_cur_rec = real_id(group_currency_id)?;
+        let group_inc = rounding_table.get(group_cur_rec)?.increment();
 
         struct OutLine {
             fs_id: i64,
@@ -414,29 +628,29 @@ impl AccountConsolidationRun {
 
         // Per-unit accumulators for Stage 2 (Investment vs Equity) and Stage 4 (NCI).
         let mut unit_translated_pnl = BTreeMap::<i64, Decimal>::new(); // signed: credit negative => profit is -sum
-        let mut unit_translated_bs_equity = BTreeMap::<i64, Decimal>::new(); // signed equity + cta
+        let mut unit_equity_components = BTreeMap::<i64, BTreeMap<i64, Decimal>>::new(); // company_id -> (eq_fs_id -> signed sum)
         let mut unit_share_capital_group = BTreeMap::<i64, (i64, Decimal)>::new(); // (fs_id, credit magnitude > 0)
-        let mut parent_investment_total = Decimal::ZERO;
+        // Parent investments keyed by optional subsidiary company_id -> (inv_fs_id, amount)
+        let mut parent_inv_by_sub = BTreeMap::<i64, (i64, Decimal)>::new();
+        let mut parent_inv_untagged = Decimal::ZERO;
         let mut parent_investment_fs_id: Option<i64> = None;
         let mut parent_company_id: Option<i64> = None;
 
-        // Intercompany pair buckets keyed by (min_co, max_co, kind) -> (debit_fs_id, debit_co, debit_mag, credit_fs_id, credit_co, credit_mag)
-        let mut ic_ar_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (holder_co, tp_co) -> (fs_id, debit_mag)
-        let mut ic_ap_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (holder_co, tp_co) -> (fs_id, credit_mag)
-        let mut ic_rev_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (seller_co, buyer_co) -> (fs_id, credit_mag)
-        let mut ic_exp_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (buyer_co, seller_co) -> (fs_id, debit_mag)
+        // Intercompany pair buckets (signed net balances so credit notes / contra entries net cleanly).
+        let mut ic_ar_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (holder_co, tp_co) -> (fs_id, debit_net)
+        let mut ic_ap_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (holder_co, tp_co) -> (fs_id, credit_net)
+        let mut ic_rev_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (seller_co, buyer_co) -> (fs_id, credit_net)
+        let mut ic_exp_by_pair = BTreeMap::<(i64, i64), (i64, Decimal)>::new(); // (buyer_co, seller_co) -> (fs_id, debit_net)
 
         let rate_company_id = units
             .iter()
             .find(|u| u.is_parent)
             .map(|u| u.company_id)
             .unwrap_or(units[0].company_id);
-
-        // Helper to translate local_amount -> (group_amount, effective_rate).
-        let group_cur_rec = real_id(group_currency_id)?;
         let rate_co_rec = real_id(rate_company_id)?;
 
         // Load RateBooks once for closing, average, historical, and spot fallback.
+        // Propagate real errors loudly; only tolerate Missing rate type when fallback_to_spot is enabled.
         let spot_book = RateBook::load(
             run.env(),
             tx,
@@ -446,55 +660,79 @@ impl AccountConsolidationRun {
             &currency_vec,
         )
         .await?;
-        let closing_book = RateBook::load_typed(
-            run.env(),
-            tx,
-            rate_co_rec,
-            date_to,
-            &closing_code,
-            &currency_vec,
-        )
-        .await
-        .ok();
-        let average_book = RateBook::load_typed(
-            run.env(),
-            tx,
-            rate_co_rec,
-            date_to,
-            &average_code,
-            &currency_vec,
-        )
-        .await
-        .ok();
-        let historical_book = RateBook::load_typed(
-            run.env(),
-            tx,
-            rate_co_rec,
-            date_to,
-            &historical_code,
-            &currency_vec,
-        )
-        .await
-        .ok();
+        let load_typed_opt = |res: Result<RateBook>| -> Result<Option<RateBook>> {
+            match res {
+                Ok(book) => Ok(Some(book)),
+                Err(err) if fallback_to_spot && err.kind() == ErrorKind::Missing => Ok(None),
+                Err(err) => Err(err),
+            }
+        };
+        let closing_book = load_typed_opt(
+            RateBook::load_typed(
+                run.env(),
+                tx,
+                rate_co_rec,
+                date_to,
+                &closing_code,
+                &currency_vec,
+            )
+            .await,
+        )?;
+        let average_book = load_typed_opt(
+            RateBook::load_typed(
+                run.env(),
+                tx,
+                rate_co_rec,
+                date_to,
+                &average_code,
+                &currency_vec,
+            )
+            .await,
+        )?;
+        let historical_book = load_typed_opt(
+            RateBook::load_typed(
+                run.env(),
+                tx,
+                rate_co_rec,
+                date_to,
+                &historical_code,
+                &currency_vec,
+            )
+            .await,
+        )?;
 
         let translate_amount = |local_cur_id: i64,
                                 amount: Decimal,
                                 rate_method: &str|
          -> Result<(Decimal, Decimal)> {
             if local_cur_id == group_currency_id || amount.is_zero() {
-                return Ok((amount.round_dp(2), Decimal::ONE));
+                return Ok((quantize_inc(amount, group_inc)?, Decimal::ONE));
             }
             let from_cur = real_id(local_cur_id)?;
             let typed_book = match rate_method {
                 "closing" => closing_book.as_ref(),
                 "average" => average_book.as_ref(),
                 "historical" => historical_book.as_ref(),
-                _ => closing_book.as_ref(),
+                "computed_cta" => {
+                    return Err(Error::validation(
+                        "Cannot directly translate a local GL balance using rate method 'computed_cta'.",
+                    ));
+                }
+                other => {
+                    return Err(Error::validation(format!(
+                        "Unsupported translation rate method '{other}'."
+                    )));
+                }
             };
             let snap = if let Some(book) = typed_book {
                 match book.snapshot(from_cur, group_cur_rec) {
                     Ok(s) => s,
-                    Err(_) if fallback_to_spot => spot_book.snapshot(from_cur, group_cur_rec)?,
+                    Err(e)
+                        if fallback_to_spot
+                            && matches!(e.kind(), ErrorKind::Missing | ErrorKind::UserError) =>
+                    {
+                        spot_book.snapshot(from_cur, group_cur_rec)?
+                    }
                     Err(e) => return Err(e),
                 }
             } else if fallback_to_spot {
@@ -505,12 +743,12 @@ impl AccountConsolidationRun {
                 )));
             };
             let exact = snap.convert_exact(amount)?;
-            let converted = exact.quantize(
-                rounding_table.get(group_cur_rec)?.increment(),
-                CURRENCY_ROUNDING_MODE,
-            )?;
-            let eff_rate = (converted / amount).round_dp(6);
-            Ok((converted.round_dp(2), eff_rate))
+            let converted = exact.quantize(group_inc, CURRENCY_ROUNDING_MODE)?;
+            let rate_inc = Increment::new(Decimal::new(1, 6))?;
+            let unit_rate = snap
+                .convert_exact(Decimal::ONE)?
+                .quantize(&rate_inc, CURRENCY_ROUNDING_MODE)?;
+            Ok((converted, unit_rate))
         };
 
         // =====================================================================
@@ -529,8 +767,13 @@ impl AccountConsolidationRun {
             } else {
                 Decimal::ONE
             };
+            let local_inc = rounding_table
+                .get(real_id(unit.local_currency_id)?)?
+                .increment();
 
             // Read posted journal item balances for this unit:
+            // - Exclude journal groups (e.g. tax-only/excluded journals) via j.journal_group_id IS NULL
+            // - Use LATERAL LIMIT 1 on res_company.partner_id to prevent duplicate-row fan-out
             // - Balance sheet accounts (include_initial_balance = true): cumulative <= date_to
             // - P&L accounts (include_initial_balance = false): period [date_from, date_to]
             // - Prior-year P&L (date < date_from) rolls into Retained Earnings!
@@ -544,10 +787,15 @@ impl AccountConsolidationRun {
                             SUM(CASE WHEN NOT COALESCE(a.include_initial_balance, true) AND l.date < $2 \
                                      THEN l.balance ELSE 0 END) \
                      FROM account_move_line l \
+                     JOIN account_move m ON m.id = l.move_id \
+                     JOIN account_journal j ON j.id = m.journal_id \
                      JOIN account_account a ON a.id = l.account_id \
                      LEFT JOIN res_partner p ON p.id = l.partner_id \
-                     LEFT JOIN res_company rc ON rc.partner_id = l.partner_id \
+                     LEFT JOIN LATERAL ( \
+                         SELECT id FROM res_company WHERE partner_id = l.partner_id ORDER BY id LIMIT 1 \
+                     ) rc ON TRUE \
                      WHERE l.company_id = $1 AND l.parent_state = 'posted' \
+                       AND j.journal_group_id IS NULL \
                        AND l.date <= $3 AND a.account_type <> 'off_balance' \
                      GROUP BY l.account_id, a.account_type, a.include_initial_balance, \
                               COALESCE(l.trading_partner_company_id, p.trading_partner_company_id, rc.id)",
@@ -570,31 +818,41 @@ impl AccountConsolidationRun {
                 if main_local.is_zero() {
                     continue;
                 }
-                let scaled_local = (main_local * scale_factor).round_dp(2);
+                let scaled_local = quantize_inc(main_local * scale_factor, local_inc)?;
 
                 // Resolve Trading Partner only when it is another company inside this consolidation group.
                 let tp_co =
                     raw_tp.filter(|tp| *tp != unit.company_id && group_company_ids.contains(tp));
 
-                // Determine Group FS Item (auto-routing intercompany counterparties to IC FS items).
+                // Determine Group FS Item. Respect explicit IC/investment mappings; auto-route
+                // standard third-party AR/AP/Rev/Exp accounts when tagged with an intercompany TP.
+                let explicit_id = explicit_map.get(&(unit.company_id, acc_id)).copied();
                 let base_fs_id = if Some(acc_id) == unit.investment_account_id {
                     fs_by_role
                         .get("investment_in_sub")
                         .copied()
                         .or_else(|| fs_by_code.get("1550").copied())
+                } else if let Some(eid) = explicit_id {
+                    Some(eid)
                 } else {
-                    explicit_map
-                        .get(&(unit.company_id, acc_id))
-                        .copied()
-                        .or_else(|| {
-                            fs_by_code
-                                .get(default_fs_code_for_account_type(&atype))
-                                .copied()
-                        })
+                    let def_code = default_fs_code_for_account_type(&atype)?;
+                    fs_by_code.get(def_code).copied()
                 };
-                let mut fs_id = base_fs_id.unwrap_or(retained_fs_id);
+                let mut fs_id = base_fs_id.ok_or_else(|| {
+                    Error::validation(format!(
+                        "No Group FS Item mapping found for account {acc_id} (type '{atype}') in company '{}'.",
+                        unit.company_name
+                    ))
+                })?;
 
-                if tp_co.is_some() {
+                let explicit_has_role = explicit_id
+                    .and_then(|id| fs_by_id.get(&id))
+                    .is_some_and(|item| item.ic_role != "none");
+
+                if tp_co.is_some()
+                    && !explicit_has_role
+                    && Some(acc_id) != unit.investment_account_id
+                {
                     if atype == "asset_receivable"
                         && let Some(id) = ic_ar_fs_id
                     {
@@ -624,7 +882,7 @@ impl AccountConsolidationRun {
 
                 unit_translated_sum += grp_amt;
 
-                // Track P&L vs Equity for NCI & Investment Elimination.
+                // Track P&L vs Equity components for NCI & Investment Elimination.
                 if matches!(fs_item.section.as_str(), "income" | "cogs" | "expense") {
                     *unit_translated_pnl
                         .entry(unit.company_id)
@@ -634,8 +892,10 @@ impl AccountConsolidationRun {
                     fs_item.section.as_str(),
                     "equity_capital" | "equity_retained" | "equity_cta"
                 ) {
-                    *unit_translated_bs_equity
+                    *unit_equity_components
                         .entry(unit.company_id)
+                        .or_default()
+                        .entry(fs_id)
                         .or_insert(Decimal::ZERO) += grp_amt;
                 }
                 if fs_item.section == "equity_capital" && !unit.is_parent {
@@ -645,32 +905,39 @@ impl AccountConsolidationRun {
                     entry.1 += -grp_amt; // credit magnitude
                 }
                 if fs_item.ic_role == "investment_in_sub" && unit.is_parent {
-                    parent_investment_total += grp_amt;
                     parent_investment_fs_id = Some(fs_id);
+                    if let Some(tp) = tp_co {
+                        let e = parent_inv_by_sub
+                            .entry(tp)
+                            .or_insert((fs_id, Decimal::ZERO));
+                        e.1 += grp_amt;
+                    } else {
+                        parent_inv_untagged += grp_amt;
+                    }
                 }
 
-                // Collect Intercompany Elimination buckets.
+                // Collect Intercompany Elimination buckets (all non-zero balances including contra notes).
                 if let Some(tp) = tp_co {
                     match fs_item.ic_role.as_str() {
-                        "ic_receivable" if grp_amt > Decimal::ZERO => {
+                        "ic_receivable" if !grp_amt.is_zero() => {
                             let e = ic_ar_by_pair
                                 .entry((unit.company_id, tp))
                                 .or_insert((fs_id, Decimal::ZERO));
                             e.1 += grp_amt;
                         }
-                        "ic_payable" if grp_amt < Decimal::ZERO => {
+                        "ic_payable" if !grp_amt.is_zero() => {
                             let e = ic_ap_by_pair
                                 .entry((unit.company_id, tp))
                                 .or_insert((fs_id, Decimal::ZERO));
                             e.1 += -grp_amt;
                         }
-                        "ic_revenue" if grp_amt < Decimal::ZERO => {
+                        "ic_revenue" if !grp_amt.is_zero() => {
                             let e = ic_rev_by_pair
                                 .entry((unit.company_id, tp))
                                 .or_insert((fs_id, Decimal::ZERO));
                             e.1 += -grp_amt;
                         }
-                        "ic_expense" if grp_amt > Decimal::ZERO => {
+                        "ic_expense" if !grp_amt.is_zero() => {
                             let e = ic_exp_by_pair
                                 .entry((unit.company_id, tp))
                                 .or_insert((fs_id, Decimal::ZERO));
@@ -695,12 +962,14 @@ impl AccountConsolidationRun {
 
             // Prior-year P&L rolls into Retained Earnings at historical rate.
             if !prior_retained_local.is_zero() {
-                let scaled_prior = (prior_retained_local * scale_factor).round_dp(2);
+                let scaled_prior = quantize_inc(prior_retained_local * scale_factor, local_inc)?;
                 let (grp_amt, eff_rate) =
                     translate_amount(unit.local_currency_id, scaled_prior, "historical")?;
                 unit_translated_sum += grp_amt;
-                *unit_translated_bs_equity
+                *unit_equity_components
                     .entry(unit.company_id)
+                    .or_default()
+                    .entry(retained_fs_id)
                     .or_insert(Decimal::ZERO) += grp_amt;
                 out_lines.push(OutLine {
                     fs_id: retained_fs_id,
@@ -715,23 +984,53 @@ impl AccountConsolidationRun {
                 });
             }
 
-            // Compute exact CTA balancing plug for foreign-currency subsidiaries.
-            let cta = compute_cta_plug(unit_translated_sum);
-            if !cta.is_zero() {
-                *unit_translated_bs_equity
-                    .entry(unit.company_id)
-                    .or_insert(Decimal::ZERO) += cta;
-                out_lines.push(OutLine {
-                    fs_id: cta_fs_id,
-                    company_id: Some(unit.company_id),
-                    trading_partner_company_id: None,
-                    posting_level: "00_translated",
-                    local_currency_id: unit.local_currency_id,
-                    local_amount: Decimal::ZERO,
-                    exchange_rate: Decimal::ONE,
-                    group_amount: cta,
-                    label: format!("{} Translation Reserve (CTA)", unit.company_name),
-                });
+            // Compute exact CTA balancing plug ONLY for foreign-currency subsidiaries.
+            // Same-currency proportional JV rounding drift routes to Retained Earnings, never FX CTA.
+            let plug = quantize_inc(-unit_translated_sum, group_inc)?;
+            if !plug.is_zero() {
+                if unit.local_currency_id != group_currency_id {
+                    *unit_equity_components
+                        .entry(unit.company_id)
+                        .or_default()
+                        .entry(cta_fs_id)
+                        .or_insert(Decimal::ZERO) += plug;
+                    out_lines.push(OutLine {
+                        fs_id: cta_fs_id,
+                        company_id: Some(unit.company_id),
+                        trading_partner_company_id: None,
+                        posting_level: "00_translated",
+                        local_currency_id: unit.local_currency_id,
+                        local_amount: Decimal::ZERO,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: plug,
+                        label: format!("{} Translation Reserve (CTA)", unit.company_name),
+                    });
+                } else if unit.method == "proportional" {
+                    *unit_equity_components
+                        .entry(unit.company_id)
+                        .or_default()
+                        .entry(retained_fs_id)
+                        .or_insert(Decimal::ZERO) += plug;
+                    out_lines.push(OutLine {
+                        fs_id: retained_fs_id,
+                        company_id: Some(unit.company_id),
+                        trading_partner_company_id: None,
+                        posting_level: "00_translated",
+                        local_currency_id: unit.local_currency_id,
+                        local_amount: Decimal::ZERO,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: plug,
+                        label: format!(
+                            "{} Proportional Consolidation Rounding Adjustment",
+                            unit.company_name
+                        ),
+                    });
+                } else {
+                    return Err(Error::invariant(format!(
+                        "Same-currency unit '{}' translated trial balance is out of balance by {}.",
+                        unit.company_name, unit_translated_sum
+                    )));
+                }
             }
         }
 
@@ -747,16 +1046,21 @@ impl AccountConsolidationRun {
             ar_ap_pairs.insert((a, b));
         }
         for (creditor_co, debtor_co) in ar_ap_pairs {
-            let (ar_fs, ar_mag) = ic_ar_by_pair
+            let (ar_fs, ar_net) = ic_ar_by_pair
                 .get(&(creditor_co, debtor_co))
                 .copied()
-                .unwrap_or((ic_ar_fs_id.unwrap_or(retained_fs_id), Decimal::ZERO));
-            let (ap_fs, ap_mag) = ic_ap_by_pair
+                .unwrap_or((ic_ar_fs_id.unwrap_or(ic_var_fs_id), Decimal::ZERO));
+            let (ap_fs, ap_net) = ic_ap_by_pair
                 .get(&(debtor_co, creditor_co))
                 .copied()
-                .unwrap_or((ic_ap_fs_id.unwrap_or(retained_fs_id), Decimal::ZERO));
-            let (matched, variance) = pair_ic_balances(ar_mag, ap_mag);
-            if matched > Decimal::ZERO {
+                .unwrap_or((ic_ap_fs_id.unwrap_or(ic_var_fs_id), Decimal::ZERO));
+            let (matched, variance) = pair_ic_balances_inc(ar_net, ap_net, group_inc)?;
+            if variance.abs() > ic_tolerance {
+                return Err(Error::user(format!(
+                    "Intercompany AR/AP variance between company {creditor_co} and company {debtor_co} ({variance}) exceeds IC Variance Tolerance ({ic_tolerance})."
+                )));
+            }
+            if !matched.is_zero() {
                 // Eliminate AR (credit = -matched) & AP (debit = +matched)
                 out_lines.push(OutLine {
                     fs_id: ar_fs,
@@ -782,17 +1086,19 @@ impl AccountConsolidationRun {
                 });
             }
             if !variance.is_zero() {
-                // Eliminate remaining un-paired IC balance to explicit IC Elimination Variance
-                if variance > Decimal::ZERO {
+                // Eliminate remaining within-tolerance IC balance to explicit IC Elimination Variance
+                let ar_rem = quantize_inc(ar_net - matched, group_inc)?;
+                let ap_rem = quantize_inc(ap_net - matched, group_inc)?;
+                if !ar_rem.is_zero() {
                     out_lines.push(OutLine {
                         fs_id: ar_fs,
                         company_id: Some(creditor_co),
                         trading_partner_company_id: Some(debtor_co),
                         posting_level: "20_ic_elimination",
                         local_currency_id: group_currency_id,
-                        local_amount: -variance,
+                        local_amount: -ar_rem,
                         exchange_rate: Decimal::ONE,
-                        group_amount: -variance,
+                        group_amount: -ar_rem,
                         label: format!(
                             "IC AR Variance Clearing (Co {creditor_co} vs Co {debtor_co})"
                         ),
@@ -803,24 +1109,24 @@ impl AccountConsolidationRun {
                         trading_partner_company_id: Some(debtor_co),
                         posting_level: "20_ic_elimination",
                         local_currency_id: group_currency_id,
-                        local_amount: variance,
+                        local_amount: ar_rem,
                         exchange_rate: Decimal::ONE,
-                        group_amount: variance,
+                        group_amount: ar_rem,
                         label: format!(
                             "IC AR/AP Reconciliation Variance (Co {creditor_co} vs Co {debtor_co})"
                         ),
                     });
-                } else {
-                    let abs_v = variance.abs();
+                }
+                if !ap_rem.is_zero() {
                     out_lines.push(OutLine {
                         fs_id: ap_fs,
                         company_id: Some(debtor_co),
                         trading_partner_company_id: Some(creditor_co),
                         posting_level: "20_ic_elimination",
                         local_currency_id: group_currency_id,
-                        local_amount: abs_v,
+                        local_amount: ap_rem,
                         exchange_rate: Decimal::ONE,
-                        group_amount: abs_v,
+                        group_amount: ap_rem,
                         label: format!(
                             "IC AP Variance Clearing (Co {debtor_co} vs Co {creditor_co})"
                         ),
@@ -831,9 +1137,9 @@ impl AccountConsolidationRun {
                         trading_partner_company_id: Some(creditor_co),
                         posting_level: "20_ic_elimination",
                         local_currency_id: group_currency_id,
-                        local_amount: -abs_v,
+                        local_amount: -ap_rem,
                         exchange_rate: Decimal::ONE,
-                        group_amount: -abs_v,
+                        group_amount: -ap_rem,
                         label: format!(
                             "IC AR/AP Reconciliation Variance (Co {debtor_co} vs Co {creditor_co})"
                         ),
@@ -851,16 +1157,21 @@ impl AccountConsolidationRun {
             rev_exp_pairs.insert((seller, buyer));
         }
         for (seller_co, buyer_co) in rev_exp_pairs {
-            let (rev_fs, rev_mag) = ic_rev_by_pair
+            let (rev_fs, rev_net) = ic_rev_by_pair
                 .get(&(seller_co, buyer_co))
                 .copied()
-                .unwrap_or((ic_rev_fs_id.unwrap_or(retained_fs_id), Decimal::ZERO));
-            let (exp_fs, exp_mag) = ic_exp_by_pair
+                .unwrap_or((ic_rev_fs_id.unwrap_or(ic_var_fs_id), Decimal::ZERO));
+            let (exp_fs, exp_net) = ic_exp_by_pair
                 .get(&(buyer_co, seller_co))
                 .copied()
-                .unwrap_or((ic_exp_fs_id.unwrap_or(retained_fs_id), Decimal::ZERO));
-            let (matched, _var) = pair_ic_balances(exp_mag, rev_mag);
-            if matched > Decimal::ZERO {
+                .unwrap_or((ic_exp_fs_id.unwrap_or(ic_var_fs_id), Decimal::ZERO));
+            let (matched, variance) = pair_ic_balances_inc(exp_net, rev_net, group_inc)?;
+            if variance.abs() > ic_tolerance {
+                return Err(Error::user(format!(
+                    "Intercompany Revenue/Expense variance between seller company {seller_co} and buyer company {buyer_co} ({variance}) exceeds IC Variance Tolerance ({ic_tolerance})."
+                )));
+            }
+            if !matched.is_zero() {
                 // Eliminate IC Revenue (debit = +matched) & IC Expense (credit = -matched)
                 out_lines.push(OutLine {
                     fs_id: rev_fs,
@@ -885,78 +1196,228 @@ impl AccountConsolidationRun {
                     label: format!("IC Expense Elimination (Co {buyer_co} <- Co {seller_co})"),
                 });
             }
+            if !variance.is_zero() {
+                let exp_rem = quantize_inc(exp_net - matched, group_inc)?;
+                let rev_rem = quantize_inc(rev_net - matched, group_inc)?;
+                if !exp_rem.is_zero() {
+                    out_lines.push(OutLine {
+                        fs_id: exp_fs,
+                        company_id: Some(buyer_co),
+                        trading_partner_company_id: Some(seller_co),
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: -exp_rem,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: -exp_rem,
+                        label: format!(
+                            "IC Expense Variance Clearing (Co {buyer_co} <- Co {seller_co})"
+                        ),
+                    });
+                    out_lines.push(OutLine {
+                        fs_id: ic_var_fs_id,
+                        company_id: Some(buyer_co),
+                        trading_partner_company_id: Some(seller_co),
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: exp_rem,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: exp_rem,
+                        label: format!(
+                            "IC Rev/Exp Reconciliation Variance (Co {buyer_co} <- Co {seller_co})"
+                        ),
+                    });
+                }
+                if !rev_rem.is_zero() {
+                    out_lines.push(OutLine {
+                        fs_id: rev_fs,
+                        company_id: Some(seller_co),
+                        trading_partner_company_id: Some(buyer_co),
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: rev_rem,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: rev_rem,
+                        label: format!(
+                            "IC Revenue Variance Clearing (Co {seller_co} -> Co {buyer_co})"
+                        ),
+                    });
+                    out_lines.push(OutLine {
+                        fs_id: ic_var_fs_id,
+                        company_id: Some(seller_co),
+                        trading_partner_company_id: Some(buyer_co),
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: -rev_rem,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: -rev_rem,
+                        label: format!(
+                            "IC Rev/Exp Reconciliation Variance (Co {seller_co} -> Co {buyer_co})"
+                        ),
+                    });
+                }
+            }
         }
 
         // 2c. Parent Investment in Subsidiary vs Subsidiary Share Capital Elimination + Goodwill
-        if parent_investment_total > Decimal::ZERO
+        // Eliminate per subsidiary so Goodwill of one entity never nets against Bargain Purchase of another
+        // and Equity-method associates are never wiped out.
+        let full_subs: Vec<&UnitInfo> = units
+            .iter()
+            .filter(|u| !u.is_parent && u.method == "full")
+            .collect();
+        let mut eliminated_subs = BTreeSet::<i64>::new();
+        for unit in &full_subs {
+            let Some(&(inv_fs, sub_inv)) = parent_inv_by_sub.get(&unit.company_id) else {
+                continue;
+            };
+            if sub_inv <= Decimal::ZERO {
+                continue;
+            }
+            let Some(&(cap_fs, cap_mag)) = unit_share_capital_group.get(&unit.company_id) else {
+                continue;
+            };
+            if cap_mag <= Decimal::ZERO {
+                continue;
+            }
+            let parent_portion =
+                quantize_inc(cap_mag * unit.ownership_pct / Decimal::from(100), group_inc)?;
+            if parent_portion <= Decimal::ZERO {
+                continue;
+            }
+            eliminated_subs.insert(unit.company_id);
+            out_lines.push(OutLine {
+                fs_id: cap_fs,
+                company_id: Some(unit.company_id),
+                trading_partner_company_id: parent_company_id,
+                posting_level: "20_ic_elimination",
+                local_currency_id: group_currency_id,
+                local_amount: parent_portion,
+                exchange_rate: Decimal::ONE,
+                group_amount: parent_portion,
+                label: format!(
+                    "Subsidiary Share Capital Elimination ({}, {}%)",
+                    unit.company_name, unit.ownership_pct
+                ),
+            });
+            out_lines.push(OutLine {
+                fs_id: inv_fs,
+                company_id: parent_company_id,
+                trading_partner_company_id: Some(unit.company_id),
+                posting_level: "20_ic_elimination",
+                local_currency_id: group_currency_id,
+                local_amount: -sub_inv,
+                exchange_rate: Decimal::ONE,
+                group_amount: -sub_inv,
+                label: format!(
+                    "Investment in Subsidiary Elimination ({})",
+                    unit.company_name
+                ),
+            });
+            let goodwill = quantize_inc(sub_inv - parent_portion, group_inc)?;
+            if !goodwill.is_zero() {
+                let target_fs = if goodwill > Decimal::ZERO {
+                    goodwill_fs_id
+                } else {
+                    retained_fs_id
+                };
+                out_lines.push(OutLine {
+                    fs_id: target_fs,
+                    company_id: parent_company_id,
+                    trading_partner_company_id: Some(unit.company_id),
+                    posting_level: "20_ic_elimination",
+                    local_currency_id: group_currency_id,
+                    local_amount: goodwill,
+                    exchange_rate: Decimal::ONE,
+                    group_amount: goodwill,
+                    label: if goodwill > Decimal::ZERO {
+                        format!("Goodwill on Consolidation ({})", unit.company_name)
+                    } else {
+                        format!(
+                            "Bargain Purchase / Consolidation Reserve ({})",
+                            unit.company_name
+                        )
+                    },
+                });
+            }
+        }
+        if parent_inv_untagged > Decimal::ZERO
             && let Some(inv_fs) = parent_investment_fs_id
         {
-            let mut total_parent_share_cap = Decimal::ZERO;
-            for unit in &units {
-                if unit.is_parent || unit.method != "full" {
-                    continue;
-                }
-                if let Some(&(cap_fs, cap_mag)) = unit_share_capital_group.get(&unit.company_id)
-                    && cap_mag > Decimal::ZERO
-                {
-                    let parent_portion =
-                        (cap_mag * unit.ownership_pct / Decimal::from(100)).round_dp(2);
-                    if parent_portion > Decimal::ZERO {
-                        total_parent_share_cap += parent_portion;
-                        // Debit Subsidiary Share Capital (eliminate parent's share)
+            let remaining_subs: Vec<&UnitInfo> = full_subs
+                .iter()
+                .copied()
+                .filter(|u| {
+                    !eliminated_subs.contains(&u.company_id)
+                        && unit_share_capital_group
+                            .get(&u.company_id)
+                            .is_some_and(|(_, m)| *m > Decimal::ZERO)
+                })
+                .collect();
+            if remaining_subs.len() == 1 {
+                let unit = remaining_subs[0];
+                let (cap_fs, cap_mag) = unit_share_capital_group[&unit.company_id];
+                let parent_portion =
+                    quantize_inc(cap_mag * unit.ownership_pct / Decimal::from(100), group_inc)?;
+                if parent_portion > Decimal::ZERO {
+                    out_lines.push(OutLine {
+                        fs_id: cap_fs,
+                        company_id: Some(unit.company_id),
+                        trading_partner_company_id: parent_company_id,
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: parent_portion,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: parent_portion,
+                        label: format!(
+                            "Subsidiary Share Capital Elimination ({}, {}%)",
+                            unit.company_name, unit.ownership_pct
+                        ),
+                    });
+                    out_lines.push(OutLine {
+                        fs_id: inv_fs,
+                        company_id: parent_company_id,
+                        trading_partner_company_id: Some(unit.company_id),
+                        posting_level: "20_ic_elimination",
+                        local_currency_id: group_currency_id,
+                        local_amount: -parent_inv_untagged,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: -parent_inv_untagged,
+                        label: format!(
+                            "Investment in Subsidiary Elimination ({})",
+                            unit.company_name
+                        ),
+                    });
+                    let goodwill = quantize_inc(parent_inv_untagged - parent_portion, group_inc)?;
+                    if !goodwill.is_zero() {
+                        let target_fs = if goodwill > Decimal::ZERO {
+                            goodwill_fs_id
+                        } else {
+                            retained_fs_id
+                        };
                         out_lines.push(OutLine {
-                            fs_id: cap_fs,
-                            company_id: Some(unit.company_id),
-                            trading_partner_company_id: parent_company_id,
+                            fs_id: target_fs,
+                            company_id: parent_company_id,
+                            trading_partner_company_id: Some(unit.company_id),
                             posting_level: "20_ic_elimination",
                             local_currency_id: group_currency_id,
-                            local_amount: parent_portion,
+                            local_amount: goodwill,
                             exchange_rate: Decimal::ONE,
-                            group_amount: parent_portion,
-                            label: format!(
-                                "Subsidiary Share Capital Elimination ({}, {}%)",
-                                unit.company_name, unit.ownership_pct
-                            ),
+                            group_amount: goodwill,
+                            label: if goodwill > Decimal::ZERO {
+                                format!("Goodwill on Consolidation ({})", unit.company_name)
+                            } else {
+                                format!(
+                                    "Bargain Purchase / Consolidation Reserve ({})",
+                                    unit.company_name
+                                )
+                            },
                         });
                     }
                 }
-            }
-            if total_parent_share_cap > Decimal::ZERO {
-                // Credit Parent Investment in Subsidiary
-                out_lines.push(OutLine {
-                    fs_id: inv_fs,
-                    company_id: parent_company_id,
-                    trading_partner_company_id: None,
-                    posting_level: "20_ic_elimination",
-                    local_currency_id: group_currency_id,
-                    local_amount: -parent_investment_total,
-                    exchange_rate: Decimal::ONE,
-                    group_amount: -parent_investment_total,
-                    label: "Investment in Subsidiaries Elimination".to_owned(),
-                });
-                let goodwill = (parent_investment_total - total_parent_share_cap).round_dp(2);
-                if !goodwill.is_zero() {
-                    let target_fs = if goodwill > Decimal::ZERO {
-                        goodwill_fs_id
-                    } else {
-                        retained_fs_id
-                    };
-                    out_lines.push(OutLine {
-                        fs_id: target_fs,
-                        company_id: parent_company_id,
-                        trading_partner_company_id: None,
-                        posting_level: "20_ic_elimination",
-                        local_currency_id: group_currency_id,
-                        local_amount: goodwill,
-                        exchange_rate: Decimal::ONE,
-                        group_amount: goodwill,
-                        label: if goodwill > Decimal::ZERO {
-                            "Goodwill on Consolidation".to_owned()
-                        } else {
-                            "Bargain Purchase / Consolidation Reserve".to_owned()
-                        },
-                    });
-                }
+            } else if remaining_subs.len() > 1 {
+                return Err(Error::user(
+                    "Multiple full-consolidated subsidiaries have untagged Parent Investment balances; tag each Parent Investment journal line with the subsidiary's Trading Partner Company so Goodwill / Bargain Purchase is calculated per subsidiary.",
+                ));
             }
         }
 
@@ -977,10 +1438,30 @@ impl AccountConsolidationRun {
         for arow in adj_rows {
             let fs_id: i64 = arow.try_get(1).map_err(db)?;
             let co_id: Option<i64> = arow.try_get(2).map_err(db)?;
-            let amt: Decimal = arow.try_get(3).map_err(db)?;
+            let amt = quantize_inc(arow.try_get(3).map_err(db)?, group_inc)?;
             let lbl: String = arow.try_get(4).map_err(db)?;
             if amt.is_zero() {
                 continue;
+            }
+            let fs = fs_by_id.get(&fs_id).ok_or_else(|| {
+                Error::validation(format!(
+                    "Manual adjustment references Group FS Item {fs_id} which does not belong to this group."
+                ))
+            })?;
+            // Reflect entity-attributed top-side adjustments in the subsidiary's NCI base.
+            if let Some(cid) = co_id {
+                if matches!(fs.section.as_str(), "income" | "cogs" | "expense") {
+                    *unit_translated_pnl.entry(cid).or_insert(Decimal::ZERO) += amt;
+                } else if matches!(
+                    fs.section.as_str(),
+                    "equity_capital" | "equity_retained" | "equity_cta"
+                ) {
+                    *unit_equity_components
+                        .entry(cid)
+                        .or_default()
+                        .entry(fs_id)
+                        .or_insert(Decimal::ZERO) += amt;
+                }
             }
             out_lines.push(OutLine {
                 fs_id,
@@ -1011,12 +1492,10 @@ impl AccountConsolidationRun {
                 .copied()
                 .unwrap_or(Decimal::ZERO);
             let sub_profit = -sub_pnl_signed;
-            let nci_profit_share = compute_nci_share(sub_profit, unit.ownership_pct);
+            let nci_profit_share =
+                compute_nci_share_inc(sub_profit, unit.ownership_pct, group_inc)?;
             if !nci_profit_share.is_zero() {
                 total_nci_profit += nci_profit_share;
-                // Carve out NCI Profit: Dr NCI Share of Profit (+), Cr NCI Equity (-)
-                // (On consolidated P&L, NCI Share of Profit reduces Parent Attributable Profit;
-                //  on consolidated BS, Retained/Current Earnings is reduced by NCI profit which moves into NCI Equity!)
                 out_lines.push(OutLine {
                     fs_id: nci_pl_fs_id,
                     company_id: Some(unit.company_id),
@@ -1046,46 +1525,50 @@ impl AccountConsolidationRun {
                 total_nci_equity += nci_profit_share;
             }
 
-            // Subsidiary net equity (Share Capital + Retained Earnings + CTA)
-            let sub_eq_signed = unit_translated_bs_equity
-                .get(&unit.company_id)
-                .copied()
-                .unwrap_or(Decimal::ZERO);
-            let sub_eq_credit = -sub_eq_signed;
-            let nci_eq_share = compute_nci_share(sub_eq_credit, unit.ownership_pct);
-            if !nci_eq_share.is_zero() {
-                total_nci_equity += nci_eq_share;
-                // Reclassify NCI portion from Retained/Share Capital -> NCI Equity
-                let src_eq_fs = unit_share_capital_group
-                    .get(&unit.company_id)
-                    .map(|(fs, _)| *fs)
-                    .unwrap_or(retained_fs_id);
-                out_lines.push(OutLine {
-                    fs_id: src_eq_fs,
-                    company_id: Some(unit.company_id),
-                    trading_partner_company_id: None,
-                    posting_level: "30_nci",
-                    local_currency_id: group_currency_id,
-                    local_amount: nci_eq_share,
-                    exchange_rate: Decimal::ONE,
-                    group_amount: nci_eq_share,
-                    label: format!("NCI Equity Reclassification ({})", unit.company_name),
-                });
-                out_lines.push(OutLine {
-                    fs_id: nci_eq_fs_id,
-                    company_id: Some(unit.company_id),
-                    trading_partner_company_id: None,
-                    posting_level: "30_nci",
-                    local_currency_id: group_currency_id,
-                    local_amount: -nci_eq_share,
-                    exchange_rate: Decimal::ONE,
-                    group_amount: -nci_eq_share,
-                    label: format!(
-                        "Non-Controlling Interest in Equity ({}, {}% NCI)",
-                        unit.company_name,
-                        Decimal::from(100) - unit.ownership_pct
-                    ),
-                });
+            // Carve NCI proportionally from EACH equity component (Share Capital, Retained Earnings, CTA)
+            // so Share Capital is never over-debited for Retained Earnings or CTA reserves.
+            if let Some(comp_map) = unit_equity_components.get(&unit.company_id) {
+                for (&eq_fs_id, &eq_signed) in comp_map {
+                    let eq_credit = -eq_signed;
+                    let comp_nci = compute_nci_share_inc(eq_credit, unit.ownership_pct, group_inc)?;
+                    if comp_nci.is_zero() {
+                        continue;
+                    }
+                    total_nci_equity += comp_nci;
+                    let fs_code = fs_by_id
+                        .get(&eq_fs_id)
+                        .map(|f| f.code.as_str())
+                        .unwrap_or("");
+                    out_lines.push(OutLine {
+                        fs_id: eq_fs_id,
+                        company_id: Some(unit.company_id),
+                        trading_partner_company_id: None,
+                        posting_level: "30_nci",
+                        local_currency_id: group_currency_id,
+                        local_amount: comp_nci,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: comp_nci,
+                        label: format!(
+                            "NCI Equity Reclassification ({}, FS {fs_code})",
+                            unit.company_name
+                        ),
+                    });
+                    out_lines.push(OutLine {
+                        fs_id: nci_eq_fs_id,
+                        company_id: Some(unit.company_id),
+                        trading_partner_company_id: None,
+                        posting_level: "30_nci",
+                        local_currency_id: group_currency_id,
+                        local_amount: -comp_nci,
+                        exchange_rate: Decimal::ONE,
+                        group_amount: -comp_nci,
+                        label: format!(
+                            "Non-Controlling Interest in Equity ({}, FS {fs_code}, {}% NCI)",
+                            unit.company_name,
+                            Decimal::from(100) - unit.ownership_pct
+                        ),
+                    });
+                }
             }
         }
 
@@ -1116,13 +1599,16 @@ impl AccountConsolidationRun {
                     }
                 }
                 "income" | "cogs" | "expense" | "nci_profit" => {
-                    // Net income attributable to Parent flows into Consolidated Equity!
                     total_liab_eq_signed += ol.group_amount;
                     if fs.section != "nci_profit" {
                         total_pnl_signed += ol.group_amount;
                     }
                 }
-                _ => {}
+                other => {
+                    return Err(Error::invariant(format!(
+                        "Unsupported FS section '{other}' during consolidation total computation."
+                    )));
+                }
             }
 
             let mut v = RawVals::new();
@@ -1144,38 +1630,48 @@ impl AccountConsolidationRun {
         }
 
         if !vals_list.is_empty() {
-            let clean_env = run.env().with_context_replaced(erp_sdk::Context::default());
-            clean_env
+            let sudo_env = strip_default_context(run.env()).sudo(true);
+            sudo_env
                 .records("account.consolidation.line")?
                 .create(tx, vals_list)
                 .await?;
         }
 
-        let total_liabilities_equity = (-total_liab_eq_signed).round_dp(2);
-        let total_assets = total_assets.round_dp(2);
-        let balance_check_diff = (total_assets - total_liabilities_equity).round_dp(2);
-        let total_cta = (-total_cta_signed).round_dp(2);
-        let group_net_profit = (-total_pnl_signed).round_dp(2);
+        let total_liabilities_equity = quantize_inc(-total_liab_eq_signed, group_inc)?;
+        let total_assets = quantize_inc(total_assets, group_inc)?;
+        let balance_check_diff = quantize_inc(total_assets - total_liabilities_equity, group_inc)?;
+        let total_cta = quantize_inc(-total_cta_signed, group_inc)?;
+        let group_net_profit = quantize_inc(-total_pnl_signed, group_inc)?;
+        let total_nci_equity = quantize_inc(total_nci_equity, group_inc)?;
+        let total_nci_profit = quantize_inc(total_nci_profit, group_inc)?;
+        let uid = run.env().uid();
 
-        tx.execute(
-            "UPDATE account_consolidation_run \
-             SET state = 'executed', total_assets = $2, total_liabilities_equity = $3, \
-                 balance_check_diff = $4, total_cta = $5, total_nci_equity = $6, \
-                 total_nci_profit = $7, group_net_profit = $8, \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[
-                &run_id,
-                &total_assets,
-                &total_liabilities_equity,
-                &balance_check_diff,
-                &total_cta,
-                &total_nci_equity,
-                &total_nci_profit,
-                &group_net_profit,
-            ],
-        )
-        .await?;
+        let updated = tx
+            .execute(
+                "UPDATE account_consolidation_run \
+                 SET state = 'executed', total_assets = $2, total_liabilities_equity = $3, \
+                     balance_check_diff = $4, total_cta = $5, total_nci_equity = $6, \
+                     total_nci_profit = $7, group_net_profit = $8, \
+                     write_uid = $9, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state <> 'locked'",
+                &[
+                    &run_id,
+                    &total_assets,
+                    &total_liabilities_equity,
+                    &balance_check_diff,
+                    &total_cta,
+                    &total_nci_equity,
+                    &total_nci_profit,
+                    &group_net_profit,
+                    &uid,
+                ],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::user(
+                "Consolidation run was locked concurrently and cannot be re-executed.",
+            ));
+        }
         tx.invalidate_records(
             run.as_records(),
             Some(&[
@@ -1202,26 +1698,46 @@ impl AccountConsolidationRun {
     ) -> Result<()> {
         let run = this.ensure_one()?;
         run.as_records().check_access(tx, Operation::Write).await?;
-        let state = run.get(tx, AccountConsolidationRun::STATE).await?;
-        if state.as_deref() != Some("executed") {
+        tx.flush().await?;
+        let id = run.as_records().ids()[0];
+        let rows = tx
+            .query(
+                "SELECT group_id::int8, state::text, COALESCE(balance_check_diff, 0) \
+                 FROM account_consolidation_run WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Consolidation run does not exist."));
+        };
+        let group_id: i64 = row.try_get(0).map_err(db)?;
+        let state: String = row.try_get(1).map_err(db)?;
+        let diff: Decimal = row.try_get(2).map_err(db)?;
+        ensure_group_company_access(tx, run.env(), group_id).await?;
+        if state != "executed" {
             return Err(Error::user(
                 "Execute the consolidation run before locking it.",
             ));
         }
-        let diff = run
-            .get(tx, AccountConsolidationRun::BALANCE_CHECK_DIFF)
-            .await?;
         if !diff.is_zero() {
             return Err(Error::user(format!(
                 "Cannot lock consolidation run: Consolidated Balance Sheet is out of balance by {diff}."
             )));
         }
-        let id = run.as_records().ids()[0];
-        tx.execute(
-            "UPDATE account_consolidation_run SET state = 'locked', write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&id],
-        )
-        .await?;
+        let uid = run.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_consolidation_run \
+                 SET state = 'locked', write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'executed'",
+                &[&id, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::user(
+                "Consolidation run state changed concurrently; reload and retry.",
+            ));
+        }
         tx.invalidate_records(run.as_records(), Some(&["state"]))
             .await
     }
@@ -1258,7 +1774,7 @@ pub struct AccountConsolidationAdjustment {
     )]
     pub currency_id: Option<RecId>,
     /// Adjustment date.
-    #[field(date, required = true, default_fn = default_today, string = "Date")]
+    #[field(date, required = true, string = "Date")]
     pub date: Option<Date>,
     /// Memo / audit note.
     #[field(text, string = "Memo")]
@@ -1286,6 +1802,152 @@ pub struct AccountConsolidationAdjustment {
 
 #[methods(AccountConsolidationAdjustment, addon = "account")]
 impl AccountConsolidationAdjustment {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountConsolidationAdjustment>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = resolve_default_today(tx, this.env()).await?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<AccountConsolidationAdjustment>,
+        tx: &mut Transaction,
+        vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        if !this.env().su() {
+            let mut run_ids = BTreeSet::new();
+            for vals in &vals_list {
+                if let Some(Cell::Str(st)) = vals.get("state")
+                    && st.as_ref() != "draft"
+                {
+                    return Err(Error::validation(
+                        "Consolidation adjustments must start in Draft status.",
+                    ));
+                }
+                if let Some(Cell::Id(rid)) = vals.get("run_id") {
+                    run_ids.insert(*rid);
+                }
+            }
+            if !run_ids.is_empty() {
+                let ids: Vec<i64> = run_ids.into_iter().collect();
+                let rows = tx
+                    .query(
+                        "SELECT group_id::int8, state::text FROM account_consolidation_run WHERE id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let gid: i64 = r.try_get(0).map_err(db)?;
+                    let st: String = r.try_get(1).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if st == "locked" {
+                        return Err(Error::user(
+                            "Cannot add consolidation adjustments to a locked run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationAdjustment>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("state") {
+                return Err(Error::validation(
+                    "Consolidation adjustment status must be changed through the Post action.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT a.state::text, r.group_id::int8, r.state::text \
+                         FROM account_consolidation_adjustment a \
+                         JOIN account_consolidation_run r ON r.id = a.run_id \
+                         WHERE a.id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let ast: String = r.try_get(0).map_err(db)?;
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let rst: String = r.try_get(2).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if ast != "draft" {
+                        return Err(Error::user(
+                            "A posted consolidation adjustment cannot be modified.",
+                        ));
+                    }
+                    if rst == "locked" {
+                        return Err(Error::user(
+                            "Cannot modify adjustments belonging to a locked consolidation run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationAdjustment>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT a.state::text, r.group_id::int8, r.state::text \
+                         FROM account_consolidation_adjustment a \
+                         JOIN account_consolidation_run r ON r.id = a.run_id \
+                         WHERE a.id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let ast: String = r.try_get(0).map_err(db)?;
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let rst: String = r.try_get(2).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if ast != "draft" {
+                        return Err(Error::user(
+                            "A posted consolidation adjustment cannot be deleted.",
+                        ));
+                    }
+                    if rst == "locked" {
+                        return Err(Error::user(
+                            "Cannot delete adjustments belonging to a locked consolidation run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Validates exact debit == credit balance (`sum(amount) == 0.00`) and posts the adjustment.
     #[method]
     #[rpc(effect = write)]
@@ -1295,13 +1957,43 @@ impl AccountConsolidationAdjustment {
     ) -> Result<()> {
         let adj = this.ensure_one()?;
         adj.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let aid = adj.as_records().ids()[0];
-        let state = adj.get(tx, AccountConsolidationAdjustment::STATE).await?;
-        if state.as_deref() != Some("draft") {
+
+        // Lock adjustment and parent run FOR UPDATE.
+        let arows = tx
+            .query(
+                "SELECT a.state::text, a.run_id::int8, r.group_id::int8, r.state::text, r.currency_id::int8 \
+                 FROM account_consolidation_adjustment a \
+                 JOIN account_consolidation_run r ON r.id = a.run_id \
+                 WHERE a.id = $1 FOR UPDATE OF a, r",
+                &[&aid],
+            )
+            .await?;
+        let Some(arow) = arows.first() else {
+            return Err(Error::missing("Consolidation adjustment does not exist."));
+        };
+        let state: String = arow.try_get(0).map_err(db)?;
+        let group_id: i64 = arow.try_get(2).map_err(db)?;
+        let run_state: String = arow.try_get(3).map_err(db)?;
+        let currency_id: i64 = arow.try_get(4).map_err(db)?;
+        ensure_group_company_access(tx, adj.env(), group_id).await?;
+        if run_state == "locked" {
+            return Err(Error::user(
+                "Cannot post a consolidation adjustment on a locked run.",
+            ));
+        }
+        if state != "draft" {
             return Err(Error::user(
                 "This consolidation adjustment is already posted.",
             ));
         }
+
+        let cur_rec = RecId::from_real(currency_id)
+            .ok_or_else(|| Error::invariant("Invalid group currency id."))?;
+        let rtable = RoundingTable::load(adj.env(), tx, &[cur_rec]).await?;
+        let inc = rtable.get(cur_rec)?.increment();
+
         let rows = tx
             .query(
                 "SELECT count(*)::int8, COALESCE(SUM(amount), 0) \
@@ -1309,23 +2001,35 @@ impl AccountConsolidationAdjustment {
                 &[&aid],
             )
             .await?;
-        let count: i64 = rows[0].try_get(0).map_err(db)?;
-        let net: Decimal = rows[0].try_get(1).map_err(db)?;
+        let row = rows
+            .first()
+            .ok_or_else(|| Error::invariant("Missing aggregation row for adjustment lines."))?;
+        let count: i64 = row.try_get(0).map_err(db)?;
+        let net: Decimal = row.try_get(1).map_err(db)?;
         if count < 2 {
             return Err(Error::user(
                 "A consolidation adjustment requires at least two balancing lines.",
             ));
         }
-        if !net.round_dp(2).is_zero() {
+        if !quantize_inc(net, inc)?.is_zero() {
             return Err(Error::user(format!(
-                "Consolidation adjustment is unbalanced by {net} (debit positive, credit negative must sum to 0.00)."
+                "Consolidation adjustment is unbalanced by {net} (debit positive, credit negative must sum to 0)."
             )));
         }
-        tx.execute(
-            "UPDATE account_consolidation_adjustment SET state = 'posted', write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&aid],
-        )
-        .await?;
+        let uid = adj.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_consolidation_adjustment \
+                 SET state = 'posted', write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'draft'",
+                &[&aid, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::user(
+                "Consolidation adjustment state changed concurrently; reload and retry.",
+            ));
+        }
         tx.invalidate_records(adj.as_records(), Some(&["state"]))
             .await
     }
@@ -1384,7 +2088,151 @@ pub struct AccountConsolidationAdjustmentLine {
 }
 
 #[methods(AccountConsolidationAdjustmentLine, addon = "account")]
-impl AccountConsolidationAdjustmentLine {}
+impl AccountConsolidationAdjustmentLine {
+    #[constrains("adjustment_id", "consolidation_account_id")]
+    async fn _check_line_group(
+        this: &RecordSet<AccountConsolidationAdjustmentLine>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        tx.flush().await?;
+        let ids: Vec<i64> = this.as_records().ids().to_vec();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let bad = tx
+            .query(
+                "SELECT l.id::int8 \
+                 FROM account_consolidation_adjustment_line l \
+                 JOIN account_consolidation_adjustment a ON a.id = l.adjustment_id \
+                 JOIN account_consolidation_run r ON r.id = a.run_id \
+                 JOIN account_consolidation_account fs ON fs.id = l.consolidation_account_id \
+                 WHERE l.id = ANY($1::int8[]) AND fs.group_id <> r.group_id \
+                 LIMIT 1",
+                &[&ids],
+            )
+            .await?;
+        if !bad.is_empty() {
+            return Err(Error::validation(
+                "Adjustment line Group FS Item must belong to the run's Consolidation Group.",
+            ));
+        }
+        Ok(())
+    }
+
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<AccountConsolidationAdjustmentLine>,
+        tx: &mut Transaction,
+        vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        if !this.env().su() {
+            let mut adj_ids = BTreeSet::new();
+            for vals in &vals_list {
+                if let Some(Cell::Id(aid)) = vals.get("adjustment_id") {
+                    adj_ids.insert(*aid);
+                }
+            }
+            if !adj_ids.is_empty() {
+                let ids: Vec<i64> = adj_ids.into_iter().collect();
+                let rows = tx
+                    .query(
+                        "SELECT a.state::text, r.group_id::int8, r.state::text \
+                         FROM account_consolidation_adjustment a \
+                         JOIN account_consolidation_run r ON r.id = a.run_id \
+                         WHERE a.id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let ast: String = r.try_get(0).map_err(db)?;
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let rst: String = r.try_get(2).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if ast != "draft" || rst == "locked" {
+                        return Err(Error::user(
+                            "Cannot add lines to a posted adjustment or locked consolidation run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationAdjustmentLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT a.state::text, r.group_id::int8, r.state::text \
+                         FROM account_consolidation_adjustment_line l \
+                         JOIN account_consolidation_adjustment a ON a.id = l.adjustment_id \
+                         JOIN account_consolidation_run r ON r.id = a.run_id \
+                         WHERE l.id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let ast: String = r.try_get(0).map_err(db)?;
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let rst: String = r.try_get(2).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if ast != "draft" || rst == "locked" {
+                        return Err(Error::user(
+                            "Cannot edit lines of a posted adjustment or locked consolidation run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationAdjustmentLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT a.state::text, r.group_id::int8, r.state::text \
+                         FROM account_consolidation_adjustment_line l \
+                         JOIN account_consolidation_adjustment a ON a.id = l.adjustment_id \
+                         JOIN account_consolidation_run r ON r.id = a.run_id \
+                         WHERE l.id = ANY($1::int8[])",
+                        &[&ids],
+                    )
+                    .await?;
+                for r in rows {
+                    let ast: String = r.try_get(0).map_err(db)?;
+                    let gid: i64 = r.try_get(1).map_err(db)?;
+                    let rst: String = r.try_get(2).map_err(db)?;
+                    ensure_group_company_access(tx, this.env(), gid).await?;
+                    if ast != "draft" || rst == "locked" {
+                        return Err(Error::user(
+                            "Cannot delete lines of a posted adjustment or locked consolidation run.",
+                        ));
+                    }
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+}
 
 /// `account.consolidation.line`: one persisted line of a Consolidation Run tagged by Posting Level
 /// (`00_translated`, `10_manual_adjustment`, `20_ic_elimination`, `30_nci`).
@@ -1494,7 +2342,51 @@ pub struct AccountConsolidationLine {
 }
 
 #[methods(AccountConsolidationLine, addon = "account")]
-impl AccountConsolidationLine {}
+impl AccountConsolidationLine {
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<AccountConsolidationLine>,
+        tx: &mut Transaction,
+        vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        if !this.env().su() {
+            return Err(Error::access(
+                "Consolidation ledger lines are generated by executing a Consolidation Run and cannot be created manually.",
+            ));
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountConsolidationLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            return Err(Error::access(
+                "Consolidation ledger lines are read-only outputs of a Consolidation Run.",
+            ));
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountConsolidationLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            return Err(Error::access(
+                "Consolidation ledger lines cannot be deleted manually; re-execute or delete the draft run.",
+            ));
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+}
 
 #[cfg(test)]
 mod tests {

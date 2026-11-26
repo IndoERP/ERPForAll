@@ -5,13 +5,13 @@
 //! breaking down every Group FS Item into Translated Aggregate, IC Eliminations, Adjustments & NCI,
 //! and Consolidated Total, plus an Intercompany Reconciliation Matrix flagging unmatched pairs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erp_addon_reporting::{
     definition::ReportDef,
     line::{
-        Cell as ReportCell, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind, Segment,
-        SegmentKind,
+        Cell as ReportCell, CellKind, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind,
+        Segment, SegmentKind,
     },
     options::Options,
     provider::{ProviderSpec, ReportCx, ReportProvider},
@@ -24,8 +24,42 @@ fn invalid(msg: impl Into<String>) -> Error {
     Error::validation(msg.into())
 }
 
+fn day(date: Date) -> String {
+    let (y, m, d) = date.ymd();
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 fn cond(value: Json) -> Result<Domain> {
     Ok(Domain::from_json(&value)?)
+}
+
+fn gnum(value: Option<&GroupValue>) -> Result<Decimal> {
+    match value {
+        None | Some(GroupValue::Null | GroupValue::False) => Ok(Decimal::ZERO),
+        Some(GroupValue::Decimal(d)) => Ok(*d),
+        Some(GroupValue::Int(n)) => Ok(Decimal::from(*n)),
+        Some(other) => Err(Error::internal(format!(
+            "Consolidation Report aggregate is not exact decimal: {other:?}"
+        ))),
+    }
+}
+
+fn gid(value: Option<&GroupValue>) -> Option<i64> {
+    match value {
+        Some(GroupValue::Int(id)) if *id > 0 => Some(*id),
+        Some(other) => other.record_id().map(|id| id.get()),
+        None => None,
+    }
+}
+
+fn gtext(value: Option<&GroupValue>) -> Result<String> {
+    match value {
+        Some(GroupValue::Str(s)) => Ok(s.to_string()),
+        Some(GroupValue::False | GroupValue::Null) | None => Ok(String::new()),
+        Some(other) => Err(Error::internal(format!(
+            "Consolidation Report group key is not text: {other:?}"
+        ))),
+    }
 }
 
 fn get(row: &Value, field: &str) -> Result<Value> {
@@ -39,16 +73,6 @@ fn int_field(row: &Value, field: &str) -> Result<i64> {
         Value::Int(n) => Ok(n),
         other => Err(Error::internal(format!(
             "Consolidation Report {field} is not an integer: {other:?}"
-        ))),
-    }
-}
-
-fn opt_int_field(row: &Value, field: &str) -> Result<Option<i64>> {
-    match get(row, field)? {
-        Value::Int(n) if n > 0 => Ok(Some(n)),
-        Value::False | Value::Int(_) => Ok(None),
-        other => Err(Error::internal(format!(
-            "Consolidation Report {field} is not an optional id: {other:?}"
         ))),
     }
 }
@@ -81,12 +105,46 @@ struct ActiveRun {
     scale: u32,
 }
 
-async fn latest_consolidation_run(cx: &mut ReportCx<'_>) -> Result<Option<ActiveRun>> {
+async fn latest_consolidation_run(
+    cx: &mut ReportCx<'_>,
+    options: &Options,
+) -> Result<Option<ActiveRun>> {
+    // Scope to consolidation groups whose member units overlap the caller's selected companies
+    // and where every unit of the group is visible to the caller.
+    let unit_rec = cx.env().records("account.consolidation.unit")?;
+    let mut matching_groups = BTreeSet::<i64>::new();
+    if !options.companies.is_empty() {
+        let urows = unit_rec
+            .search_with(
+                cx.tx(),
+                &cond(json!([["company_id", "in", options.companies]]))?,
+                &SearchOptions::new().order("group_id, id"),
+            )
+            .await?
+            .read_rows(cx.tx(), &["group_id"], Load::Raw)
+            .await?;
+        for ur in urows.iter().map(Value::Row) {
+            matching_groups.insert(int_field(&ur, "group_id")?);
+        }
+        if matching_groups.is_empty() {
+            return Ok(None);
+        }
+    }
+
+    let mut domain_terms = vec![
+        json!(["state", "in", ["executed", "locked"]]),
+        json!(["date_to", "<=", day(options.period.to)]),
+    ];
+    if !matching_groups.is_empty() {
+        let gvec: Vec<i64> = matching_groups.into_iter().collect();
+        domain_terms.push(json!(["group_id", "in", gvec]));
+    }
+
     let run_rec = cx.env().records("account.consolidation.run")?;
     let found = run_rec
         .search_with(
             cx.tx(),
-            &cond(json!([["state", "in", ["executed", "locked"]]]))?,
+            &cond(Json::Array(domain_terms))?,
             &SearchOptions::new().order("date_to desc, id desc").limit(1),
         )
         .await?;
@@ -134,13 +192,22 @@ impl LevelCols {
     fn consolidated(&self) -> Decimal {
         self.translated + self.elimination + self.adj_nci
     }
-    fn add_signed(&mut self, level: &str, signed_amount: Decimal, sign: Decimal) {
+    fn is_zero(&self) -> bool {
+        self.translated.is_zero() && self.elimination.is_zero() && self.adj_nci.is_zero()
+    }
+    fn add_signed(&mut self, level: &str, signed_amount: Decimal, sign: Decimal) -> Result<()> {
         let v = signed_amount * sign;
         match level {
             "00_translated" => self.translated += v,
             "20_ic_elimination" => self.elimination += v,
-            _ => self.adj_nci += v,
+            "10_manual_adjustment" | "30_nci" => self.adj_nci += v,
+            other => {
+                return Err(Error::internal(format!(
+                    "Unsupported consolidation posting level '{other}'."
+                )));
+            }
         }
+        Ok(())
     }
     fn add(&mut self, other: LevelCols) {
         self.translated += other.translated;
@@ -173,22 +240,31 @@ fn empty_cells(report: &ReportDef) -> Vec<ReportCell> {
     vec![ReportCell::empty(); report.columns.len()]
 }
 
-async fn load_fs_and_lines(
+async fn load_fs_and_totals(
     cx: &mut ReportCx<'_>,
     run: &ActiveRun,
 ) -> Result<(
     BTreeMap<i64, (String, String, String, i32)>,
     BTreeMap<i64, LevelCols>,
-    Vec<(i64, String, String, Decimal)>,
+    LevelCols,
 )> {
+    let limit = cx.bounds().max_screen_lines;
     let fs_rec = cx.env().records("account.consolidation.account")?;
-    let fs_rows = fs_rec
+    let fs_found = fs_rec
         .search_with(
             cx.tx(),
             &cond(json!([["group_id", "=", run.group_id]]))?,
-            &SearchOptions::new().order("sequence, code, id"),
+            &SearchOptions::new()
+                .order("sequence, code, id")
+                .limit(limit as u64 + 1),
         )
-        .await?
+        .await?;
+    if fs_found.len() > limit {
+        return Err(invalid(format!(
+            "Group FS Chart exceeds reporting.max_screen_lines ({limit})."
+        )));
+    }
+    let fs_rows = fs_found
         .read_rows(
             cx.tx(),
             &["id", "code", "name", "section", "sequence"],
@@ -201,63 +277,75 @@ async fn load_fs_and_lines(
         let code = text_field(&r, "code")?;
         let name = text_field(&r, "name")?;
         let section = text_field(&r, "section")?;
-        let seq = int_field(&r, "sequence")? as i32;
+        let seq = i32::try_from(int_field(&r, "sequence")?)
+            .map_err(|_| Error::internal("Group FS Item sequence out of range."))?;
         fs_meta.insert(id, (code, name, section, seq));
     }
 
+    // Aggregate consolidation lines via ORM _read_group so large runs remain bounded in memory.
     let line_rec = cx.env().records("account.consolidation.line")?;
-    let line_rows = line_rec
-        .search_with(
+    let grouped = line_rec
+        ._read_group(
             cx.tx(),
-            &cond(json!([["run_id", "=", run.id]]))?,
-            &SearchOptions::new().order("id"),
-        )
-        .await?
-        .read_rows(
-            cx.tx(),
-            &[
-                "consolidation_account_id",
-                "posting_level",
-                "label",
-                "group_amount",
-            ],
-            Load::Raw,
+            ReadGroup::new(cond(json!([["run_id", "=", run.id]]))?)
+                .groupby(["consolidation_account_id", "posting_level"])
+                .aggregates(["group_amount:sum"]),
         )
         .await?;
 
     let mut totals = BTreeMap::<i64, LevelCols>::new();
-    let mut details = Vec::new();
-    for r in line_rows.iter().map(Value::Row) {
-        let fs_id = int_field(&r, "consolidation_account_id")?;
-        let level = text_field(&r, "posting_level")?;
-        let label = text_field(&r, "label")?;
-        let amt = dec_field(&r, "group_amount")?;
-        let section = fs_meta
-            .get(&fs_id)
-            .map(|(_, _, s, _)| s.as_str())
-            .unwrap_or("");
-        let sign = section_display_sign(section);
+    let mut current_earnings = LevelCols::default();
+    for row in grouped.rows() {
+        let fs_id = gid(row.first())
+            .ok_or_else(|| Error::internal("Consolidation line aggregate missing FS item id."))?;
+        let level = gtext(row.get(1))?;
+        let amt = gnum(row.get(2))?;
+        let (_, _, section, _) = fs_meta.get(&fs_id).ok_or_else(|| {
+            Error::internal(format!(
+                "Consolidation line references unknown Group FS Item {fs_id}."
+            ))
+        })?;
+        let sign = section_display_sign(section)?;
         totals
             .entry(fs_id)
             .or_default()
-            .add_signed(&level, amt, sign);
-        details.push((fs_id, level, label, amt));
+            .add_signed(&level, amt, sign)?;
+        if matches!(
+            section.as_str(),
+            "income" | "cogs" | "expense" | "nci_profit"
+        ) {
+            current_earnings.add_signed(&level, amt, -Decimal::ONE)?;
+        }
     }
-    Ok((fs_meta, totals, details))
+    Ok((fs_meta, totals, current_earnings))
 }
 
 /// Display sign convention: Assets/Goodwill/COGS/Expenses/NCI Profit positive for debits (+1);
 /// Liabilities/Equity/CTA/NCI Equity/Income positive for credits (-1).
-fn section_display_sign(section: &str) -> Decimal {
+fn section_display_sign(section: &str) -> Result<Decimal> {
     match section {
         "asset_current" | "asset_non_current" | "goodwill" | "cogs" | "expense" | "nci_profit" => {
-            Decimal::ONE
+            Ok(Decimal::ONE)
         }
-        _ => -Decimal::ONE,
+        "liability_current"
+        | "liability_non_current"
+        | "equity_capital"
+        | "equity_retained"
+        | "equity_cta"
+        | "equity_nci"
+        | "income" => Ok(-Decimal::ONE),
+        other => Err(Error::internal(format!(
+            "Unsupported Group FS section '{other}'."
+        ))),
     }
 }
 
 fn validate_4col_options(report: &ReportDef, options: &Options, name: &str) -> Result<()> {
+    if options.order.is_some() {
+        return Err(invalid(format!(
+            "{name} rows follow the Group FS Chart order."
+        )));
+    }
     if let Some(key) = options.provider.keys().next() {
         return Err(invalid(format!("{name} does not accept option '{key}'.")));
     }
@@ -267,10 +355,12 @@ fn validate_4col_options(report: &ReportDef, options: &Options, name: &str) -> R
         )));
     }
     for col in &report.columns {
-        if !matches!(
-            col.label.as_str(),
-            "translated" | "elimination" | "adj_nci" | "consolidated"
-        ) {
+        if col.kind != CellKind::Monetary
+            || !matches!(
+                col.label.as_str(),
+                "translated" | "elimination" | "adj_nci" | "consolidated"
+            )
+        {
             return Err(invalid(format!("Unknown {name} column '{}'.", col.label)));
         }
     }
@@ -280,14 +370,21 @@ fn validate_4col_options(report: &ReportDef, options: &Options, name: &str) -> R
 async fn expand_fs_item(
     cx: &mut ReportCx<'_>,
     report: &ReportDef,
+    options: &Options,
     line: &LineId,
     page: ExpandPage,
 ) -> Result<Expansion> {
-    let Some(run) = latest_consolidation_run(cx).await? else {
-        return Ok(Expansion::new(Vec::new()));
-    };
+    if line.report() != report.id {
+        return Err(invalid("Line id does not belong to this report."));
+    }
+    let max_page = cx.bounds().max_screen_lines as u64;
+    if page.limit == 0 || page.limit > max_page {
+        return Err(invalid(format!(
+            "Page limit must be between 1 and {max_page}."
+        )));
+    }
     let fs_id = match line.segments() {
-        [seg]
+        [_, seg]
             if seg.kind() == &SegmentKind::Group("fs_id".to_owned())
                 && seg.model() == "account.consolidation.account" =>
         {
@@ -299,20 +396,27 @@ async fn expand_fs_item(
         }
         _ => return Err(invalid("Only Group FS Item rows can be unfolded.")),
     };
+    let Some(run) = latest_consolidation_run(cx, options).await? else {
+        return Ok(Expansion::new(Vec::new()));
+    };
     let fs_rows = cx
         .env()
         .records("account.consolidation.account")?
-        .browse([fs_id])?
+        .search_with(
+            cx.tx(),
+            &cond(json!([["id", "=", fs_id], ["group_id", "=", run.group_id]]))?,
+            &SearchOptions::new().limit(1),
+        )
+        .await?
         .read_rows(cx.tx(), &["section"], Load::Raw)
         .await?;
-    let section = fs_rows
+    let fs_row = fs_rows
         .iter()
         .next()
         .map(Value::Row)
-        .map(|r| text_field(&r, "section"))
-        .transpose()?
-        .unwrap_or_default();
-    let sign = section_display_sign(&section);
+        .ok_or_else(|| invalid("Group FS Item does not belong to this consolidation run."))?;
+    let section = text_field(&fs_row, "section")?;
+    let sign = section_display_sign(&section)?;
 
     let domain = cond(json!([
         ["run_id", "=", run.id],
@@ -343,7 +447,7 @@ async fn expand_fs_item(
         let label = text_field(&r, "label")?;
         let amt = dec_field(&r, "group_amount")?;
         let mut cols = LevelCols::default();
-        cols.add_signed(&level, amt, sign);
+        cols.add_signed(&level, amt, sign)?;
         out.push(Line::new(
             line.child(Segment::group(
                 "line_id",
@@ -398,22 +502,12 @@ mod bs {
             options: &'a Options,
         ) -> BoxFuture<'a, Result<Expansion>> {
             Box::pin(async move {
-                let Some(run) = latest_consolidation_run(cx).await? else {
+                let Some(run) = latest_consolidation_run(cx, options).await? else {
                     return Ok(Expansion::new(Vec::new()));
                 };
-                let (fs_meta, totals, details) = load_fs_and_lines(cx, &run).await?;
+                let (fs_meta, totals, current_earnings) = load_fs_and_totals(cx, &run).await?;
                 let root = LineId::root(report.id);
                 let mut out = Vec::new();
-
-                // Compute Current-Year Earnings attributable to Parent (income - cogs - expense - nci_profit)
-                let mut current_earnings = LevelCols::default();
-                for (fs_id, level, _, amt) in &details {
-                    if let Some((_, _, sec, _)) = fs_meta.get(fs_id)
-                        && matches!(sec.as_str(), "income" | "cogs" | "expense" | "nci_profit")
-                    {
-                        current_earnings.add_signed(level, *amt, -Decimal::ONE);
-                    }
-                }
 
                 let groups: &[(&str, &str, &[&str])] = &[
                     (
@@ -447,10 +541,7 @@ mod bs {
                     for (&fs_id, (code, name, section, seq)) in &fs_meta {
                         if sections.contains(&section.as_str()) {
                             let cols = totals.get(&fs_id).copied().unwrap_or_default();
-                            if cols.translated.is_zero()
-                                && cols.elimination.is_zero()
-                                && cols.adj_nci.is_zero()
-                            {
+                            if options.hide_zero && cols.is_zero() {
                                 continue;
                             }
                             sec_sum.add(cols);
@@ -480,16 +571,17 @@ mod bs {
                             &fs_id.to_string(),
                         ));
                         let mut line = Line::new(
-                            lid.clone(),
+                            lid,
                             label,
                             LineKind::Group,
                             level_cells(report, run.currency_id, run.scale, cols),
                         );
                         line.unfoldable = true;
-                        line.unfolded = options.unfold_all || options.unfolded.contains(&lid);
                         out.push(line);
                     }
-                    if sec_code == "SEC_EQUITY" {
+                    if sec_code == "SEC_EQUITY"
+                        && (!options.hide_zero || !current_earnings.is_zero())
+                    {
                         out.push(Line::new(
                             root.child(Segment::line("CURR_EARNINGS")),
                             "Current-Year Earnings (Attributable to Parent)",
@@ -518,11 +610,11 @@ mod bs {
             &'a self,
             cx: &'a mut ReportCx<'_>,
             report: &'a ReportDef,
-            _options: &'a Options,
+            options: &'a Options,
             line: &'a LineId,
             page: ExpandPage,
         ) -> BoxFuture<'a, Result<Expansion>> {
-            Box::pin(async move { expand_fs_item(cx, report, line, page).await })
+            Box::pin(async move { expand_fs_item(cx, report, options, line, page).await })
         }
         fn drill<'a>(
             &'a self,
@@ -571,10 +663,10 @@ mod pl {
             options: &'a Options,
         ) -> BoxFuture<'a, Result<Expansion>> {
             Box::pin(async move {
-                let Some(run) = latest_consolidation_run(cx).await? else {
+                let Some(run) = latest_consolidation_run(cx, options).await? else {
                     return Ok(Expansion::new(Vec::new()));
                 };
-                let (fs_meta, totals, _) = load_fs_and_lines(cx, &run).await?;
+                let (fs_meta, totals, _) = load_fs_and_totals(cx, &run).await?;
                 let root = LineId::root(report.id);
                 let mut out = Vec::new();
 
@@ -595,10 +687,7 @@ mod pl {
                     for (&fs_id, (code, name, section, seq)) in &fs_meta {
                         if sections.contains(&section.as_str()) {
                             let cols = totals.get(&fs_id).copied().unwrap_or_default();
-                            if cols.translated.is_zero()
-                                && cols.elimination.is_zero()
-                                && cols.adj_nci.is_zero()
-                            {
+                            if options.hide_zero && cols.is_zero() {
                                 continue;
                             }
                             sec_sum.add(cols);
@@ -624,13 +713,12 @@ mod pl {
                             &fs_id.to_string(),
                         ));
                         let mut line = Line::new(
-                            lid.clone(),
+                            lid,
                             label,
                             LineKind::Group,
                             level_cells(report, run.currency_id, run.scale, cols),
                         );
                         line.unfoldable = true;
-                        line.unfolded = options.unfold_all || options.unfolded.contains(&lid);
                         out.push(line);
                     }
                 }
@@ -677,11 +765,11 @@ mod pl {
             &'a self,
             cx: &'a mut ReportCx<'_>,
             report: &'a ReportDef,
-            _options: &'a Options,
+            options: &'a Options,
             line: &'a LineId,
             page: ExpandPage,
         ) -> BoxFuture<'a, Result<Expansion>> {
-            Box::pin(async move { expand_fs_item(cx, report, line, page).await })
+            Box::pin(async move { expand_fs_item(cx, report, options, line, page).await })
         }
         fn drill<'a>(
             &'a self,
@@ -720,6 +808,17 @@ mod ic {
             _strict: bool,
         ) -> BoxFuture<'a, Result<()>> {
             Box::pin(async move {
+                if options.order.is_some() {
+                    return Err(invalid(
+                        "IC Reconciliation Matrix rows are ordered by pair type and entity.",
+                    ));
+                }
+                if options.unfold_all
+                    || !options.unfolded.is_empty()
+                    || !options.loaded_pages.is_empty()
+                {
+                    return Err(invalid("IC Reconciliation Matrix lines do not unfold."));
+                }
                 if let Some(key) = options.provider.keys().next() {
                     return Err(invalid(format!(
                         "IC Reconciliation Matrix does not accept option '{key}'."
@@ -731,10 +830,12 @@ mod ic {
                     ));
                 }
                 for col in &report.columns {
-                    if !matches!(
-                        col.label.as_str(),
-                        "pair_kind" | "entity_a" | "entity_b" | "variance"
-                    ) {
+                    let ok = match col.label.as_str() {
+                        "pair_kind" => col.kind == CellKind::Text,
+                        "entity_a" | "entity_b" | "variance" => col.kind == CellKind::Monetary,
+                        _ => false,
+                    };
+                    if !ok {
                         return Err(invalid(format!(
                             "Unknown IC Reconciliation column '{}'.",
                             col.label
@@ -748,12 +849,13 @@ mod ic {
             &'a self,
             cx: &'a mut ReportCx<'_>,
             report: &'a ReportDef,
-            _options: &'a Options,
+            options: &'a Options,
         ) -> BoxFuture<'a, Result<Expansion>> {
             Box::pin(async move {
-                let Some(run) = latest_consolidation_run(cx).await? else {
+                let Some(run) = latest_consolidation_run(cx, options).await? else {
                     return Ok(Expansion::new(Vec::new()));
                 };
+                let limit = cx.bounds().max_screen_lines;
                 // Load company names via ORM.
                 let unit_rec = cx.env().records("account.consolidation.unit")?;
                 let unit_rows = unit_rec
@@ -800,56 +902,64 @@ mod ic {
                 }
 
                 let line_rec = cx.env().records("account.consolidation.line")?;
-                let line_rows = line_rec
-                    .search_with(
+                let grouped = line_rec
+                    ._read_group(
                         cx.tx(),
-                        &cond(json!([
+                        ReadGroup::new(cond(json!([
                             ["run_id", "=", run.id],
                             ["posting_level", "=", "00_translated"],
                             ["trading_partner_company_id", "!=", false]
-                        ]))?,
-                        &SearchOptions::new().order("id"),
-                    )
-                    .await?
-                    .read_rows(
-                        cx.tx(),
-                        &[
+                        ]))?)
+                        .groupby([
                             "consolidation_account_id",
                             "company_id",
                             "trading_partner_company_id",
-                            "group_amount",
-                        ],
-                        Load::Raw,
+                        ])
+                        .aggregates(["group_amount:sum"]),
                     )
                     .await?;
 
-                // Pair (kind, a, b) -> (a_mag, b_mag)
-                let mut pairs = BTreeMap::<(&'static str, i64, i64), (Decimal, Decimal)>::new();
-                for r in line_rows.iter().map(Value::Row) {
-                    let fs_id = int_field(&r, "consolidation_account_id")?;
-                    let Some(co) = opt_int_field(&r, "company_id")? else {
+                // Pair (key_prefix, display_kind, a, b) -> (a_mag, b_mag)
+                let mut pairs =
+                    BTreeMap::<(&'static str, &'static str, i64, i64), (Decimal, Decimal)>::new();
+                for r in grouped.rows() {
+                    let Some(fs_id) = gid(r.first()) else {
                         continue;
                     };
-                    let Some(tp) = opt_int_field(&r, "trading_partner_company_id")? else {
+                    let Some(co) = gid(r.get(1)) else {
                         continue;
                     };
-                    let amt = dec_field(&r, "group_amount")?;
+                    let Some(tp) = gid(r.get(2)) else {
+                        continue;
+                    };
+                    let amt = gnum(r.get(3))?;
                     let role = role_by_fs.get(&fs_id).map(|s| s.as_str()).unwrap_or("none");
                     match role {
                         "ic_receivable" => {
-                            pairs.entry(("AR / AP", co, tp)).or_default().0 += amt;
+                            pairs.entry(("AR_AP", "AR / AP", co, tp)).or_default().0 += amt;
                         }
                         "ic_payable" => {
-                            pairs.entry(("AR / AP", tp, co)).or_default().1 += -amt;
+                            pairs.entry(("AR_AP", "AR / AP", tp, co)).or_default().1 += -amt;
                         }
                         "ic_revenue" => {
-                            pairs.entry(("Revenue / Cost", co, tp)).or_default().0 += -amt;
+                            pairs
+                                .entry(("REV_COST", "Revenue / Cost", co, tp))
+                                .or_default()
+                                .0 += -amt;
                         }
                         "ic_expense" => {
-                            pairs.entry(("Revenue / Cost", tp, co)).or_default().1 += amt;
+                            pairs
+                                .entry(("REV_COST", "Revenue / Cost", tp, co))
+                                .or_default()
+                                .1 += amt;
                         }
                         _ => {}
                     }
+                }
+                if pairs.len() > limit {
+                    return Err(invalid(format!(
+                        "IC Reconciliation Matrix exceeds reporting.max_screen_lines ({limit})."
+                    )));
                 }
 
                 let root = LineId::root(report.id);
@@ -858,8 +968,12 @@ mod ic {
                 let mut tot_b = Decimal::ZERO;
                 let mut tot_var = Decimal::ZERO;
 
-                for ((kind, a, b), (mag_a, mag_b)) in pairs {
-                    let variance = (mag_a - mag_b).round_dp(2);
+                for ((key_prefix, kind, a, b), (mag_a, mag_b)) in pairs {
+                    let variance = (mag_a - mag_b).round_dp(run.scale);
+                    if options.hide_zero && mag_a.is_zero() && mag_b.is_zero() && variance.is_zero()
+                    {
+                        continue;
+                    }
                     tot_a += mag_a;
                     tot_b += mag_b;
                     tot_var += variance;
@@ -898,7 +1012,7 @@ mod ic {
                         };
                         cells.push(cell);
                     }
-                    let key = format!("{}_{}_{}", kind.replace(' ', ""), a, b);
+                    let key = format!("{key_prefix}_{a}_{b}");
                     out.push(Line::new(
                         root.child(Segment::line(&key)),
                         label,
@@ -950,7 +1064,11 @@ mod ic {
             _line: &'a LineId,
             _page: ExpandPage,
         ) -> BoxFuture<'a, Result<Expansion>> {
-            Box::pin(async move { Ok(Expansion::new(Vec::new())) })
+            Box::pin(async move {
+                Err(invalid(
+                    "Intercompany Reconciliation Matrix lines do not unfold.",
+                ))
+            })
         }
         fn drill<'a>(
             &'a self,

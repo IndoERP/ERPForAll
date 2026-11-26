@@ -1445,7 +1445,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
     let rt_hist = ensure_rate_type(&mut tx, "historical", "Historical").await;
     let _rt_spot = ensure_rate_type(&mut tx, "spot", "Spot").await;
 
-    let parent_co = make_company(&mut tx, "IndoERP Holding USD", usd).await;
+    let parent_co = make_company(&mut tx, "Apex Holding USD", usd).await;
     let sub_co = make_company(&mut tx, "PT Nusantara Subsidiary IDR", idr).await;
 
     // Tag Trading Partners on both companies' partners.
@@ -1721,7 +1721,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
             &mut tx,
             vec![
                 RawVals::new()
-                    .set_cell("name", Cell::Str("IndoERP Group".into()))
+                    .set_cell("name", Cell::Str("Apex Group".into()))
                     .set_cell("code", Cell::Str("GRP-TEST".into()))
                     .set_cell("currency_id", Cell::Id(usd))
                     .set_cell("closing_rate_type_code", Cell::Str("closing".into()))
@@ -1731,6 +1731,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
                     )
                     .set_cell("historical_rate_type_code", Cell::Str("historical".into()))
                     .set_cell("fallback_to_spot", Cell::Bool(true))
+                    .set_cell("ic_tolerance", Cell::Decimal(dec("100.00")))
                     .set_commands(
                         "unit_ids",
                         vec![
