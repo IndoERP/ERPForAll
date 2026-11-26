@@ -26,9 +26,9 @@
 //! of the reservations, one engine call, the move quantity and state statements.
 //!
 //! Not here yet: moves with origin moves (chained reservation from what the origins brought,
-//! W-I2.15) keep their state; lots and serials;
-//! removal strategies other than oldest first; the negative-sibling offset of the
-//! reference; packaging rounding; the scheduler's chunked assignment and the waiting queue per key.
+//! W-I2.15) keep their state; removal strategies other than oldest first; the negative-sibling
+//! offset of the reference; packaging rounding; the scheduler's chunked assignment and the
+//! waiting queue per key.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -60,7 +60,8 @@ const READ_CANDIDATES: &str = "SELECT m.id, m.company_id, m.product_id, m.locati
                JOIN stock_move o ON o.id = r.move_orig_id \
                WHERE r.move_dest_id = m.id AND o.state NOT IN ('done', 'cancel') \
                  AND (source.id IS NULL OR r.move_orig_id <> source.id)), \
-       l.usage IN ('supplier', 'customer', 'inventory', 'production') OR NOT pt.is_storable \
+       l.usage IN ('supplier', 'customer', 'inventory', 'production') OR NOT pt.is_storable, \
+       COALESCE(pt.tracking, 'none')::text \
      FROM stock_move m \
      LEFT JOIN stock_picking ret ON ret.id=m.picking_id AND ret.company_id=m.company_id \
      LEFT JOIN stock_move source ON source.id=m.origin_returned_move_id AND source.state='done' \
@@ -74,25 +75,35 @@ const READ_CANDIDATES: &str = "SELECT m.id, m.company_id, m.product_id, m.locati
        AND m.state IN ('confirmed', 'waiting', 'partially_available') \
      ORDER BY m.priority DESC, m.date, m.id";
 
-/// The probe (1): free, lot-less stock of each `(company, product, location)` of the
-/// arrays, at the location or below it, oldest incoming date first. A plain read, no lock.
-const PROBE: &str = "SELECT g.ord, q.location_id, q.package_id, q.owner_id, \
+/// The probe (1): free stock of each `(company, product, location)` of the arrays, at the
+/// location or below it, oldest incoming date first, matching the product's tracking policy
+/// (lot-less for untracked products, lot/serial quants for tracked products). A plain read, no lock.
+const PROBE: &str = "SELECT g.ord, q.location_id, q.lot_id, q.package_id, q.owner_id, \
        q.quantity - q.reserved_quantity \
      FROM unnest($1::int8[], $2::int8[], $3::int8[]) WITH ORDINALITY \
           AS g(company_id, product_id, location_id, ord) \
      JOIN stock_location root ON root.id = g.location_id \
+     JOIN product_product pp ON pp.id = g.product_id \
+     JOIN product_template pt ON pt.id = pp.product_tmpl_id \
      JOIN stock_quant q ON q.company_id = g.company_id AND q.product_id = g.product_id \
-       AND q.lot_id IS NULL AND q.quantity > 0 AND q.quantity > q.reserved_quantity \
+       AND ((COALESCE(pt.tracking, 'none') = 'none' AND q.lot_id IS NULL) \
+            OR (COALESCE(pt.tracking, 'none') IN ('lot', 'serial') AND q.lot_id IS NOT NULL)) \
+       AND q.quantity > 0 AND q.quantity > q.reserved_quantity \
      JOIN stock_location l ON l.id = q.location_id \
        AND l.parent_path LIKE root.parent_path || '%' \
      ORDER BY g.ord, q.in_date, q.id";
 
-/// Unpicked open lines of the moves `$1` that a reservation of the same key increases
-/// : the move's unit and destination, no lot, no destination package.
-const INCREASABLE: &str = "SELECT l.id, l.move_id, l.location_id, l.package_id, l.owner_id \
-     FROM stock_move_line l JOIN stock_move m ON m.id = l.move_id \
+/// Unpicked open lines of the moves `$1` that a reservation of the same key increases:
+/// the move's unit and destination, matching lot (never merging serial-tracked lines), no
+/// pending `lot_name`, and no destination package.
+const INCREASABLE: &str = "SELECT l.id, l.move_id, l.location_id, l.lot_id, l.package_id, l.owner_id \
+     FROM stock_move_line l \
+     JOIN stock_move m ON m.id = l.move_id \
+     JOIN product_product pp ON pp.id = m.product_id \
+     JOIN product_template pt ON pt.id = pp.product_tmpl_id \
      WHERE l.move_id = ANY($1) AND l.membership = 'open' AND l.done_at IS NULL AND l.active \
-       AND NOT l.picked AND NOT l.child_mode AND l.lot_id IS NULL AND l.lot_name IS NULL \
+       AND NOT l.picked AND NOT l.child_mode AND l.lot_name IS NULL \
+       AND COALESCE(pt.tracking, 'none') <> 'serial' \
        AND l.result_package_id IS NULL AND l.uom_id = m.uom_id \
        AND l.location_dest_id = m.location_dest_id";
 
@@ -140,12 +151,14 @@ struct Candidate {
     mto: bool,
     chained: bool,
     bypass: bool,
+    tracking: String,
 }
 
 /// A free balance the probe found, shared by the moves that read it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Slot {
     location: i64,
+    lot: Option<i64>,
     package: Option<i64>,
     owner: Option<i64>,
 }
@@ -153,8 +166,8 @@ struct Slot {
 /// A free slot of one company and product.
 type SlotKey = (i64, i64, Slot);
 
-/// A line key of a reservation: move, location, package, owner.
-type LineKey = (i64, i64, Option<i64>, Option<i64>);
+/// A line key of a reservation: move, location, lot, package, owner.
+type LineKey = (i64, i64, Option<i64>, Option<i64>, Option<i64>);
 
 /// The probe's answer: the slots of each group in removal order, and the free quantity of each.
 type Probed = (Vec<Vec<SlotKey>>, HashMap<SlotKey, Decimal>);
@@ -182,6 +195,7 @@ async fn candidates(tx: &mut Transaction, moves: &[i64]) -> Result<Vec<Candidate
             mto: row.try_get(8).map_err(decode)?,
             chained: row.try_get(9).map_err(decode)?,
             bypass: row.try_get(10).map_err(decode)?,
+            tracking: row.try_get(11).map_err(decode)?,
         });
     }
     Ok(out)
@@ -209,11 +223,12 @@ async fn probe(tx: &mut Transaction, groups: &[(i64, i64, i64)]) -> Result<Probe
             .ok_or_else(|| Error::internal("The reservation probe named no group."))?;
         let slot = Slot {
             location: row.try_get(1).map_err(decode)?,
-            package: row.try_get(2).map_err(decode)?,
-            owner: row.try_get(3).map_err(decode)?,
+            lot: row.try_get(2).map_err(decode)?,
+            package: row.try_get(3).map_err(decode)?,
+            owner: row.try_get(4).map_err(decode)?,
         };
         let (company, product, _) = groups[index];
-        free.insert((company, product, slot), row.try_get(4).map_err(decode)?);
+        free.insert((company, product, slot), row.try_get(5).map_err(decode)?);
         lists[index].push((company, product, slot));
     }
     Ok((lists, free))
@@ -310,6 +325,7 @@ pub(crate) async fn assign_moves(
             .get(&unit_of(c)?)
             .ok_or_else(|| Error::internal("A unit snapshot was not captured."))?;
         let mut need = c.missing;
+        let is_serial = c.tracking == "serial";
         for slot in &lists[index] {
             if need <= Decimal::ZERO {
                 break;
@@ -318,8 +334,19 @@ pub(crate) async fn assign_moves(
             if available <= Decimal::ZERO {
                 continue;
             }
-            let (line, taken) = fit(snapshot, available.min(need))?;
+            let cap = if is_serial {
+                if available < Decimal::ONE || need < Decimal::ONE {
+                    continue;
+                }
+                Decimal::ONE
+            } else {
+                available.min(need)
+            };
+            let (line, taken) = fit(snapshot, cap)?;
             if line <= Decimal::ZERO || taken <= Decimal::ZERO {
+                continue;
+            }
+            if is_serial && taken != Decimal::ONE {
                 continue;
             }
             free.insert(*slot, available - taken);
@@ -345,23 +372,25 @@ pub(crate) async fn assign_moves(
             row.try_get(2).map_err(decode)?,
             row.try_get(3).map_err(decode)?,
             row.try_get(4).map_err(decode)?,
+            row.try_get(5).map_err(decode)?,
         );
         increasable.entry(key).or_insert(id);
     }
     let mut grow: BTreeMap<i64, Decimal> = BTreeMap::new();
     let mut create: BTreeMap<LineKey, Decimal> = BTreeMap::new();
     for (move_id, slot, quantity) in takes {
-        let (location, package, owner) = match slot {
-            Some(slot) => (slot.location, slot.package, slot.owner),
+        let (location, lot, package, owner) = match slot {
+            Some(slot) => (slot.location, slot.lot, slot.package, slot.owner),
             None => (
                 *location_of
                     .get(&move_id)
                     .ok_or_else(|| Error::internal("A reserving move was not read."))?,
                 None,
                 None,
+                None,
             ),
         };
-        let key = (move_id, location, package, owner);
+        let key = (move_id, location, lot, package, owner);
         match increasable.get(&key) {
             Some(line) => *grow.entry(*line).or_default() += quantity,
             None => *create.entry(key).or_default() += quantity,
@@ -384,11 +413,14 @@ pub(crate) async fn assign_moves(
     if !create.is_empty() {
         let vals_list: Vec<RawVals> = create
             .into_iter()
-            .map(|((move_id, location, package, owner), quantity)| {
+            .map(|((move_id, location, lot, package, owner), quantity)| {
                 let mut vals = RawVals::new()
                     .set_cell("move_id", Cell::Id(move_id))
                     .set_cell("location_id", Cell::Id(location))
                     .set_cell("quantity", Cell::Decimal(quantity));
+                if let Some(lot) = lot {
+                    vals = vals.set_cell("lot_id", Cell::Id(lot));
+                }
                 if let Some(package) = package {
                     vals = vals.set_cell("package_id", Cell::Id(package));
                 }

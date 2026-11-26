@@ -988,6 +988,177 @@ async fn concurrent_reservations_on_one_key_never_double_allocate() {
     assert_eq!(f.quant_rows(&mut tx, f.p).await, 1);
 }
 
+#[tokio::test]
+async fn lot_tracked_product_reserves_from_child_location_and_validates() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let env = f.env(&tx);
+    let tmpl = env
+        .records("product.template")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Kopi Arabika Lot"))
+                    .set_cell("is_storable", Cell::Bool(true))
+                    .set_cell("tracking", text("lot")),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let prod: i64 = tx
+        .query("SELECT id FROM product_product WHERE product_tmpl_id = $1", &[&tmpl])
+        .await
+        .unwrap()[0]
+        .get(0);
+    let shelf = create(
+        &mut tx,
+        "stock.location",
+        RawVals::new()
+            .set_cell("name", text("Rak A"))
+            .set_cell("usage", text("internal"))
+            .set_cell("location_id", Cell::Id(f.l)),
+    )
+    .await;
+    let lot = env
+        .records("stock.lot")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("LOT-KOPI-2026-01"))
+                    .set_cell("product_id", Cell::Id(prod))
+                    .set_cell("company_id", Cell::Id(f.company)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    apply_quant_changes(
+        &mut tx,
+        &[QuantChange::new(
+            QuantKey::new(f.company, prod, shelf).lot_id(Some(lot)),
+            dec("150"),
+            Decimal::ZERO,
+        )],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = f.h.begin().await.unwrap();
+    let (picking, mv) = f.delivery(&mut tx, prod, "20").await;
+    f.call(&mut tx, picking, "action_assign").await.unwrap();
+    let (qty, _, state, _) = move_row(&mut tx, mv).await;
+    assert_eq!(state, "assigned");
+    assert_eq!(qty, dec("20"));
+    let lines = tx
+        .query(
+            "SELECT location_id::int8, lot_id::int8, quantity FROM stock_move_line WHERE move_id = $1",
+            &[&mv],
+        )
+        .await
+        .unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].get::<_, i64>(0), shelf);
+    assert_eq!(lines[0].get::<_, Option<i64>>(1), Some(lot));
+    assert_eq!(lines[0].get::<_, Decimal>(2), dec("20"));
+
+    f.call(&mut tx, picking, "button_validate").await.unwrap();
+    assert_eq!(move_row(&mut tx, mv).await.2, "done");
+}
+
+#[tokio::test]
+async fn serial_tracked_product_reserves_one_line_per_serial() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let env = f.env(&tx);
+    let tmpl = env
+        .records("product.template")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Laptop Serial"))
+                    .set_cell("is_storable", Cell::Bool(true))
+                    .set_cell("tracking", text("serial")),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let prod: i64 = tx
+        .query("SELECT id FROM product_product WHERE product_tmpl_id = $1", &[&tmpl])
+        .await
+        .unwrap()[0]
+        .get(0);
+    let shelf = create(
+        &mut tx,
+        "stock.location",
+        RawVals::new()
+            .set_cell("name", text("Rak Serial"))
+            .set_cell("usage", text("internal"))
+            .set_cell("location_id", Cell::Id(f.l)),
+    )
+    .await;
+    let mut serials = Vec::new();
+    for sn in ["SN-001", "SN-002"] {
+        let lid = env
+            .records("stock.lot")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", text(sn))
+                        .set_cell("product_id", Cell::Id(prod))
+                        .set_cell("company_id", Cell::Id(f.company)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        serials.push(lid);
+        apply_quant_changes(
+            &mut tx,
+            &[QuantChange::new(
+                QuantKey::new(f.company, prod, shelf).lot_id(Some(lid)),
+                dec("1"),
+                Decimal::ZERO,
+            )],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let mut tx = f.h.begin().await.unwrap();
+    let (picking, mv) = f.delivery(&mut tx, prod, "2").await;
+    f.call(&mut tx, picking, "action_assign").await.unwrap();
+    let (qty, _, state, _) = move_row(&mut tx, mv).await;
+    assert_eq!(state, "assigned");
+    assert_eq!(qty, dec("2"));
+    let lines = tx
+        .query(
+            "SELECT lot_id::int8, quantity FROM stock_move_line WHERE move_id = $1 ORDER BY lot_id",
+            &[&mv],
+        )
+        .await
+        .unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].get::<_, Option<i64>>(0), Some(serials[0]));
+    assert_eq!(lines[0].get::<_, Decimal>(1), dec("1"));
+    assert_eq!(lines[1].get::<_, Option<i64>>(0), Some(serials[1]));
+    assert_eq!(lines[1].get::<_, Decimal>(1), dec("1"));
+
+    f.call(&mut tx, picking, "button_validate").await.unwrap();
+    assert_eq!(move_row(&mut tx, mv).await.2, "done");
+}
+
 async fn move_fields(tx: &mut Transaction, id: i64, fields: &[&str]) -> Vec<Option<i64>> {
     let mut out = Vec::new();
     for field in fields {
