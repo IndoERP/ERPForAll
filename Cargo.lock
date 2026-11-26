@@ -2041,6 +2041,7 @@ dependencies = [
  "oxc_minifier",
  "oxc_parser",
  "oxc_span",
+ "roxmltree 0.21.1",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
