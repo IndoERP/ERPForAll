@@ -856,24 +856,27 @@ async fn share_is_true_for_everyone_without_the_internal_group() {
 }
 
 #[tokio::test]
-async fn reactivating_a_user_with_two_user_types_is_refused() {
+async fn reactivating_users_reports_the_first_with_conflicting_effective_types() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let b = base(&mut tx).await;
-    let x = user(&mut tx, "x", &[b.internal]).await;
+    let staff = group(&mut tx, "Staff", &[b.internal]).await;
+    let x = user(&mut tx, "x", &[staff]).await;
+    let y = user(&mut tx, "y", &[staff]).await;
     archive(&mut tx, x).await.unwrap();
+    archive(&mut tx, y).await.unwrap();
     // the group-side check skips archived users, so this passes
-    write_members(&mut tx, b.portal, &[link_cmd(x)])
+    write_members(&mut tx, b.portal, &[link_cmd(x), link_cmd(y)])
         .await
         .unwrap();
-    let err = records(&tx, "res.users", &[x])
+    let err = records(&tx, "res.users", &[y, x])
         .write_values(&mut tx, &map(&[("active", Value::Bool(true))]))
         .await
         .unwrap_err();
     assert_error(
         &err,
         ErrorKind::Validation,
-        "User 'x' cannot be at the same time in exclusive groups 'Internal User', 'Portal'.",
+        "User 'y' cannot be at the same time in exclusive groups 'Internal User', 'Portal'.",
     );
     drop(tx);
     h.cleanup().await.unwrap();

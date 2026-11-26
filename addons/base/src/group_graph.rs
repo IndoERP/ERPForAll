@@ -637,6 +637,44 @@ pub async fn internal_group_ids(tx: &mut Transaction) -> Result<BTreeSet<i64>> {
     Ok(Graph::load(tx).await?.down([user]))
 }
 
+/// First user holding multiple exclusive types, in input order. The caller holds the user locks.
+/// Read the implication edges once alongside the requested users' memberships, then traverse
+/// the graph in memory.
+pub(crate) async fn first_user_with_conflicting_types(
+    tx: &mut Transaction,
+    user_ids: &[i64],
+    types: &[i64],
+) -> Result<Option<i64>> {
+    let rows = tx
+        .query(
+            "SELECT false, gid, hid FROM res_groups_implied_rel \
+             UNION ALL SELECT true, uid, gid FROM res_groups_users_rel WHERE uid = ANY($1)",
+            &[&user_ids],
+        )
+        .await?;
+    let mut implied = HashMap::<i64, Vec<i64>>::new();
+    let mut direct = BTreeMap::<i64, Vec<i64>>::new();
+    for row in &rows {
+        let membership: bool = column!(row, 0, "effective user groups");
+        let from: i64 = column!(row, 1, "effective user groups");
+        let to: i64 = column!(row, 2, "effective user groups");
+        if membership {
+            direct.entry(from).or_default().push(to);
+        } else {
+            implied.entry(from).or_default().push(to);
+        }
+    }
+    for id in user_ids {
+        if let Some(groups) = direct.remove(id) {
+            let all = Graph::close(&implied, groups);
+            if types.iter().filter(|t| all.contains(t)).count() > 1 {
+                return Ok(Some(*id));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Groups of `ids` by the users' direct memberships (one statement).
 ///
 /// # Errors

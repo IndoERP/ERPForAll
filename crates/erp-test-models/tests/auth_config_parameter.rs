@@ -1257,3 +1257,51 @@ async fn session_policy_mixed_create_preserves_managed_setting_audit() {
     assert_eq!(audit_count(&mut tx).await, before + 1);
     tx.rollback().await.unwrap();
 }
+
+erp_sdk::addon!(name = "test_secret_key_registry", depends = ["base"]);
+
+mod secret_key_registry {
+    use super::ADDON;
+    use erp_sdk::settings::{ParameterDecl, SettingGroupDecl};
+    use erp_test_models::base_users;
+    use erp_testkit::Harness;
+
+    const SECRET: &str = "test_secret_key_registry.credential";
+    const INVALID_GROUP: &str = "invalid test parameter group";
+
+    fn parameters() -> erp_sdk::Result<Vec<ParameterDecl>> {
+        Ok(vec![
+            ParameterDecl::string(SECRET, "Credential", "", 10)?.secret(),
+        ])
+    }
+
+    fn invalid_groups() -> erp_sdk::Result<Vec<SettingGroupDecl>> {
+        Err(erp_sdk::Error::programming(INVALID_GROUP))
+    }
+
+    erp_sdk::system_parameters!(parameters, invalid_groups);
+
+    #[test]
+    fn a_cached_key_list_preserves_registry_validation_and_linked_secrets() {
+        use erp_addon_base::ir_config_parameter::secret_keys;
+
+        let valid = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON])
+            .registry_only()
+            .unwrap();
+        let invalid = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &ADDON])
+            .registry_only()
+            .unwrap();
+
+        let expected = secret_keys(&valid).unwrap();
+        assert!(expected.iter().any(|name| name == SECRET));
+        secret_keys(&valid).unwrap().clear();
+        let check_registries = || {
+            for _ in 0..2 {
+                assert_eq!(secret_keys(&invalid).unwrap_err().message(), INVALID_GROUP);
+                assert_eq!(secret_keys(&valid).unwrap(), expected);
+            }
+        };
+        check_registries();
+        std::thread::scope(|scope| scope.spawn(check_registries).join().unwrap());
+    }
+}

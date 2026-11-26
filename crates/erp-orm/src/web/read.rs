@@ -516,6 +516,25 @@ async fn prefetch_comodels(
     model: &erp_registry::ModelSpec,
     spec: &Spec,
 ) -> Result<()> {
+    // A flight needs two relations. Leave a lone relation to its normal expansion, which
+    // performs the same authorized read. Include references and raw relations in this bound
+    // so that mixed expansions still validate and fail in their original order.
+    let multiple_relations = spec
+        .names()
+        .filter(|name| {
+            model.field(name).is_some_and(|field| {
+                field.ty.is_relational()
+                    || matches!(
+                        field.ty,
+                        FieldType::Reference { .. } | FieldType::Many2oneReference { .. }
+                    )
+            })
+        })
+        .nth(1)
+        .is_some();
+    if !multiple_relations {
+        return Ok(());
+    }
     let mut wanted: Vec<(Records, Vec<String>)> = Vec::new();
     for (name, item) in spec.iter() {
         let Some(field) = model.field(name) else {

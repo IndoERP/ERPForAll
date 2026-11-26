@@ -633,14 +633,15 @@ impl Transaction {
     /// and pending stored fields are computed for those records only; the rest stays pending for
     /// the next flush or read. A recursive field is settled whole (its levels need the whole
     /// hierarchy), as is the computed inverse of a one2many read on the way.
-    pub(crate) async fn settle_records(
+    /// Builds the scope only for a record-specific settlement.
+    async fn settle_records(
         &mut self,
         env: &Env,
         model: ModelId,
         field: FieldId,
-        ids: Vec<RecId>,
+        scope: impl FnOnce(&Self) -> Vec<RecId>,
     ) -> Result<()> {
-        let shared = Arc::clone(&self.shared);
+        let shared = &self.shared;
         let pending: usize = shared
             .graph
             .upstream((model, field))
@@ -654,6 +655,7 @@ impl Transaction {
         if pending <= self.config().recompute_batch.max(1) {
             return self.settle(env, model, field).await;
         }
+        let ids = scope(self);
         let mut visited: FxHashSet<(FieldKey, RecId)> = FxHashSet::default();
         self.settle_reaching(env, (model, field), ids, &mut visited)
             .await
@@ -773,10 +775,20 @@ impl Transaction {
             }
             let env = records.env().clone();
             let graph = shared.graph.model(model);
-            match graph.compute(field).cloned() {
+            let computed = graph.compute(field);
+            let mut scope = None;
+            if let Some(fc) = computed {
+                self.settle_records(&env, model, field, |tx| {
+                    let ids = tx.settle_scope(records);
+                    if !fc.stored {
+                        scope = Some(ids.clone());
+                    }
+                    ids
+                })
+                .await?;
+            }
+            match computed {
                 Some(fc) if fc.stored => {
-                    let scope = self.settle_scope(records);
-                    self.settle_records(&env, model, field, scope).await?;
                     self.load(records, field).await?;
                     let new_missing: Vec<RecId> =
                         dedup(
@@ -807,9 +819,6 @@ impl Transaction {
                     self.compute_group(&env, model, field, compute).await?;
                 }
                 Some(_) => {
-                    let scope = self.settle_scope(records);
-                    self.settle_records(&env, model, field, scope.clone())
-                        .await?;
                     let slot = self.slot(&env, model, field)?;
                     let missing: Vec<RecId> = dedup(
                         records
@@ -840,6 +849,7 @@ impl Transaction {
                     let mut batch = missing;
                     let limit = self.config().recompute_batch.max(1).max(batch.len());
                     let mut seen: FxHashSet<RecId> = batch.iter().copied().collect();
+                    let scope = scope.unwrap_or_else(|| self.settle_scope(records));
                     for id in &scope {
                         if batch.len() >= limit {
                             break;
@@ -2204,18 +2214,13 @@ impl Transaction {
                         .await;
                 }
             }
-            let mut seen = FxHashSet::default();
-            let ids: Vec<RecId> = ends
-                .iter()
-                .flatten()
-                .copied()
-                .filter(|id| seen.insert(*id))
-                .collect();
+            let ids = || dedup(ends.iter().flatten().copied());
             let values = if let Some(fc) = fc.filter(|fc| matches!(fc.source, Source::Chain(_))) {
                 if fc.stored {
-                    self.settle_records(env, key.0, key.1, ids).await?;
+                    self.settle_records(env, key.0, key.1, |_| ids()).await?;
                     self.cells_by_id(&env.engine_sudo(), key, ends).await?
                 } else {
+                    let ids = ids();
                     let records = Records::empty(env.clone(), key.0).browse_ids(ids.clone());
                     let cells = self.field_cells_checked(&records, key.1).await?;
                     if cells.len() != ids.len() {

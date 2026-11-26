@@ -187,6 +187,48 @@ test("a duplicate key is an error in every mode and changes nothing", async () =
   expect([...root.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["0/2:1", "1/2:2"]);
 });
 
+test("same-order list refreshes keep node identity and validate every key before changing rows", async () => {
+  const errors: unknown[] = [];
+  const items = signal([
+    { id: Number.NaN, label: "original NaN" },
+    { id: -0, label: "original zero" },
+    { id: 1, label: "original one" },
+  ]);
+  const root = await view(rowView(items), errors);
+  const lis = () => [...root.querySelectorAll("li")];
+  const original = lis();
+  const labels = () => lis().map((li) => li.textContent);
+
+  items.set([
+    { id: Number.NaN, label: "discarded NaN" },
+    { id: 0, label: "discarded zero" },
+    { id: Number.NaN, label: "duplicate NaN" },
+  ]);
+  flushSync();
+  expect(errors).toEqual([new UIError("Got duplicate key in t-foreach: NaN", "loop")]);
+  expect(labels()).toEqual(["0/3:original NaN", "1/3:original zero", "2/3:original one"]);
+
+  const failedKey = new Error("key evaluation failed");
+  items.set([
+    { id: Number.NaN, label: "discarded NaN" },
+    { id: 0, label: "discarded zero" },
+    { get id(): number { throw failedKey; }, label: "invalid one" },
+  ]);
+  flushSync();
+  expect(errors).toHaveLength(2);
+  expect(errors[1]).toBe(failedKey);
+  expect(labels()).toEqual(["0/3:original NaN", "1/3:original zero", "2/3:original one"]);
+
+  items.set([
+    { id: Number.NaN, label: "updated NaN" },
+    { id: 0, label: "updated zero" },
+    { id: 1, label: "updated one" },
+  ]);
+  flushSync();
+  expect(labels()).toEqual(["0/3:updated NaN", "1/3:updated zero", "2/3:updated one"]);
+  for (const [i, li] of lis().entries()) expect(li).toBe(original[i]);
+});
+
 /// (partial: runtime half, a non-iterable collection is OWL's error)
 test("a collection that is not iterable is OWL's error, also for null, undefined and numbers", async () => {
   for (const bad of [null, undefined, 42, true]) {

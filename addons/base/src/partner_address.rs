@@ -69,23 +69,46 @@ pub(crate) async fn cells(
     records: &Records,
     names: &[String],
 ) -> Result<Vec<RawVals>> {
+    read_address_fields(tx, records, names, true).await
+}
+
+/// Evaluate extension fields as well as stored fields when warming a batch for synchronization.
+pub(crate) async fn warm_cells(
+    tx: &mut Transaction,
+    records: &Records,
+    names: &[String],
+) -> Result<()> {
+    read_address_fields(tx, records, names, false).await?;
+    Ok(())
+}
+
+async fn read_address_fields(
+    tx: &mut Transaction,
+    records: &Records,
+    names: &[String],
+    snapshot: bool,
+) -> Result<Vec<RawVals>> {
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     records.fetch(tx, Some(&refs)).await?;
-    let mut result = vec![RawVals::new(); records.len()];
+    let mut rows = if snapshot {
+        vec![RawVals::new(); records.len()]
+    } else {
+        Vec::new()
+    };
     for name in names {
         let values = records.cells(tx, name).await?;
-        if values.len() != result.len() {
+        if values.len() != records.len() {
             return Err(Error::programming(format!(
                 "res.partner address snapshot: expected {} values for '{name}', got {}",
-                result.len(),
+                records.len(),
                 values.len()
             )));
         }
-        for (row, value) in result.iter_mut().zip(values) {
+        for (row, value) in rows.iter_mut().zip(values) {
             row.insert(name.clone().into(), value);
         }
     }
-    Ok(result)
+    Ok(rows)
 }
 
 /// PARTNER §5b keeps numeric zero empty, including extension float coordinates.
