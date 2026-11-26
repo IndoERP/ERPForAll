@@ -157,7 +157,8 @@ class Dispatcher {
   }
   private readonly key = (event: Event): void => {
     this.clear();
-    if (!(event instanceof this.doc.defaultView!.KeyboardEvent)) return;
+    const view = this.doc.defaultView;
+    if (!view || !(event instanceof view.KeyboardEvent)) return;
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || this.composing || event.getModifierState("AltGraph")) return;
     const active = this.activeScope();
     const candidates = this.candidates(event, active);
@@ -168,7 +169,7 @@ class Dispatcher {
         hint.setAttribute("aria-hidden", "true"); hint.textContent = binding.hint ?? binding.chord.slice(4); binding.target.append(hint); this.hints.push(hint);
       }
       if (this.hints.length) {
-        this.observer = new this.doc.defaultView!.MutationObserver(this.clear);
+        this.observer = new view.MutationObserver(this.clear);
         this.observer.observe(this.doc.documentElement, { subtree: true, childList: true, attributes: true });
       }
       return;

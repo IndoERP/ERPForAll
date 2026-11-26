@@ -753,11 +753,11 @@ pub(crate) async fn head_for_onchange(
         )?
     };
     let date_order = if order.is_empty() {
-        DateTime::now()
+        tx.now().unwrap_or_else(DateTime::now)
     } else {
         match order.cell(tx, "date_order").await? {
             Cell::DateTime(at) => at,
-            _ => DateTime::now(),
+            _ => tx.now().unwrap_or_else(DateTime::now),
         }
     };
     let currency = if order.is_empty() {
@@ -843,9 +843,10 @@ pub(crate) async fn preview_line_amounts(
     let quantity = number(&line.cell(tx, "product_uom_qty").await?, "product_uom_qty")?;
     let discount = number(&line.cell(tx, "discount").await?, "discount")?;
     let tax_ids = ids_of(&line.cell(tx, "tax_ids").await?);
+    let company_env = line.env().with_company(head.company)?;
     let (subtotal, tax, total) = line_amounts(
         tx,
-        line.env(),
+        &company_env,
         head.currency,
         price_unit,
         quantity,
@@ -864,8 +865,8 @@ pub(crate) async fn preview_line_amounts(
     Ok((subtotal, tax, total))
 }
 
-/// Live `onchange` for a `sale.order.line` when its product changes: proposes taxes and pricelist
-/// unit price, then updates line amounts in memory.
+/// Live `onchange` for a `sale.order.line` when its product changes: proposes taxes, product UoM
+/// and pricelist unit price, then updates line amounts in memory.
 pub(crate) async fn onchange_line_product(
     tx: &mut Transaction,
     line: &Records,
@@ -883,25 +884,26 @@ pub(crate) async fn onchange_line_product(
     let mut assign = RawVals::new();
     assign.insert_commands("tax_ids".into(), vec![Command::Set(taxes)]);
     if let Some(product) = product {
-        let unit = match id_of(&line.cell(tx, "product_uom_id").await?, "product_uom_id")? {
-            Some(u) => Some(u),
-            None => id_of(
-                &line
-                    .env()
-                    .with_company(head.company)?
-                    .records("product.product")?
-                    .browse([product])?
-                    .cell(tx, "uom_id")
-                    .await?,
-                "uom_id",
-            )?,
-        };
+        let unit = id_of(
+            &line
+                .env()
+                .with_company(head.company)?
+                .records("product.product")?
+                .browse([product])?
+                .cell(tx, "uom_id")
+                .await?,
+            "uom_id",
+        )?;
         if let Some(unit) = unit {
+            assign.insert("product_uom_id".into(), Cell::Id(unit));
             let quantity = number(&line.cell(tx, "product_uom_qty").await?, "product_uom_qty")?;
             let price = price_of(tx, line.env(), &head, product, quantity, unit).await?;
             assign.insert("price_unit".into(), Cell::Decimal(price));
             assign.insert("technical_price_unit".into(), Cell::Decimal(price));
         }
+    } else {
+        assign.insert("price_unit".into(), Cell::Decimal(Decimal::ZERO));
+        assign.insert("technical_price_unit".into(), Cell::Decimal(Decimal::ZERO));
     }
     line.write_base(tx, assign).await?;
     preview_line_amounts(tx, line, &head).await?;
@@ -992,4 +994,56 @@ pub(crate) async fn onchange_order_totals(
         )
         .await?;
     Ok(OnchangeResult::none())
+}
+
+/// Live `onchange` when pricelist, currency, fiscal position or order date changes on a draft
+/// quotation: remaps line taxes, reprices untouched lines, and refreshes order totals.
+pub(crate) async fn onchange_order_pricing(
+    tx: &mut Transaction,
+    order: &Records,
+) -> Result<OnchangeResult> {
+    let Some(head) = head_for_onchange(tx, order.env(), order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let editable = match order.cell(tx, "state").await? {
+        Cell::Str(state) => matches!(state.as_ref(), "draft" | "sent"),
+        Cell::Null | Cell::Bool(false) => true,
+        _ => false,
+    };
+    if editable {
+        let lines = order.related(tx, "order_line").await?;
+        for line in lines.iter() {
+            if matches!(line.cell(tx, "display_type").await?, Cell::Str(_)) {
+                continue;
+            }
+            let invoiced =
+                number(&line.cell(tx, "qty_invoiced").await?, "qty_invoiced")? > Decimal::ZERO;
+            let downpayment = matches!(line.cell(tx, "is_downpayment").await?, Cell::Bool(true));
+            if invoiced || downpayment {
+                continue;
+            }
+            let Some(product) = id_of(&line.cell(tx, "product_id").await?, "product_id")? else {
+                continue;
+            };
+            let mut update = RawVals::new();
+            let taxes = taxes_of(tx, order.env(), &head, Some(product)).await?;
+            update.insert_commands("tax_ids".into(), vec![Command::Set(taxes)]);
+            let price_unit = number(&line.cell(tx, "price_unit").await?, "price_unit")?;
+            let technical = number(
+                &line.cell(tx, "technical_price_unit").await?,
+                "technical_price_unit",
+            )?;
+            if price_unit == technical
+                && let Some(unit) =
+                    id_of(&line.cell(tx, "product_uom_id").await?, "product_uom_id")?
+            {
+                let quantity = number(&line.cell(tx, "product_uom_qty").await?, "product_uom_qty")?;
+                let price = price_of(tx, order.env(), &head, product, quantity, unit).await?;
+                update.insert("price_unit".into(), Cell::Decimal(price));
+                update.insert("technical_price_unit".into(), Cell::Decimal(price));
+            }
+            line.write_base(tx, update).await?;
+        }
+    }
+    onchange_order_totals(tx, order).await
 }

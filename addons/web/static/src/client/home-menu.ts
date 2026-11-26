@@ -316,7 +316,7 @@ export class HomeMenu {
   }
 
   private readonly onKeyDown = (event: Event): void => {
-    if (!this._isOpen || !(event instanceof KeyboardEvent)) return;
+    if (!this._isOpen || !(event instanceof KeyboardEvent) || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
 
     if (event.key === "Escape") {
       if (getActiveBottomSheetCount() > 0) return;
@@ -366,7 +366,8 @@ export class HomeMenu {
       !event.altKey &&
       !event.metaKey &&
       document.activeElement !== this.searchInput &&
-      !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName ?? "")
+      !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName ?? "") &&
+      !(document.activeElement instanceof HTMLElement && document.activeElement.isContentEditable)
     ) {
       this.searchInput.focus();
     }

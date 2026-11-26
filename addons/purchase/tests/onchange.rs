@@ -26,6 +26,16 @@ async fn harness() -> Harness {
         &erp_addon_purchase::ADDON,
     ])
     .require_sql_objects([&erp_addon_account::reconcile::history_guard::MANIFEST])
+    .before_schema(
+        "CREATE TABLE IF NOT EXISTS ir_model_data (\
+         id bigserial PRIMARY KEY, \
+         module text NOT NULL, \
+         name text NOT NULL, \
+         model text NOT NULL, \
+         res_id int8 NOT NULL, \
+         noupdate boolean NOT NULL DEFAULT false\
+         )",
+    )
     .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
@@ -48,6 +58,44 @@ fn obj(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
 async fn live_onchange_computes_purchase_line_and_order_totals_before_save() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
+    for (module, name, label) in [
+        ("base", "group_user", "Internal User"),
+        ("base", "group_system", "Settings"),
+        ("base", "group_erp_manager", "Access Rights"),
+        ("account", "group_account_readonly", "Accounting Readonly"),
+        ("account", "group_account_user", "Accounting User"),
+        ("account", "group_account_manager", "Accounting Manager"),
+        (
+            "account",
+            "group_cost_center_controlling",
+            "Cost Center Controlling",
+        ),
+        ("account", "group_asset_cip", "Asset & CIP"),
+        ("account", "group_budget_avc", "Budget AVC"),
+        (
+            "account",
+            "group_group_consolidation",
+            "Group Consolidation",
+        ),
+        ("purchase", "group_purchase_user", "Purchase User"),
+        ("purchase", "group_purchase_manager", "Purchase Manager"),
+    ] {
+        let gid: i64 = tx
+            .query(
+                "INSERT INTO res_groups (name) VALUES (jsonb_build_object('en_US', $1::text)) RETURNING id::int8",
+                &[&label],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        tx.execute(
+            "INSERT INTO ir_model_data (module, name, model, res_id, noupdate) \
+             VALUES ($1, $2, 'res.groups', $3, true)",
+            &[&module, &name, &gid],
+        )
+        .await
+        .unwrap();
+    }
 
     // Seed currency, company, UoM, vendor, purchase tax and product.
     let currency: i64 = match tx

@@ -243,7 +243,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   // Menu keyboard listener
   const onMenuKeydown = (event: Event): void => {
     sync();
-    if (disposed || !open || !(event instanceof KeyboardEvent)) return;
+    if (disposed || !open || !(event instanceof KeyboardEvent) || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
 
     if (event.key === "Escape") {
       event.preventDefault();
@@ -260,6 +260,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
     const items = getCandidateItems();
     if (items.length === 0) return;
 
+    const inEditable = event.target instanceof HTMLElement && Boolean(event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
     const currentIndex = items.indexOf(doc.activeElement as HTMLElement);
     let nextIndex = currentIndex;
 
@@ -269,13 +270,13 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
-    } else if (event.key === "Home") {
+    } else if (event.key === "Home" && !inEditable) {
       event.preventDefault();
       nextIndex = 0;
-    } else if (event.key === "End") {
+    } else if (event.key === "End" && !inEditable) {
       event.preventDefault();
       nextIndex = items.length - 1;
-    } else if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey && !(event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"))) {
+    } else if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey && !inEditable) {
       // Type-ahead: the next entry (after the focused one, wrapping) whose label starts with the typed letter.
       const letter = event.key.toLowerCase();
       const hit = [...items.slice(currentIndex + 1), ...items.slice(0, currentIndex + 1)]

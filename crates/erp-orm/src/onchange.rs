@@ -523,6 +523,12 @@ async fn resolve_virtual_parent(
         }
     }
     crate::database_generated::check_write_names(tx, comodel, dict.keys().map(String::as_str))?;
+    tx.check_field_names(
+        record.env(),
+        comodel.id,
+        dict.keys().map(String::as_str).filter(|k| *k != "id"),
+        crate::FieldOp::Read,
+    )?;
     let mut parent_vals = ValueMap::new();
     for (key, val) in dict {
         if key == "id" {

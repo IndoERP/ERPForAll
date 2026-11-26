@@ -1682,6 +1682,62 @@ async fn live_onchange_computes_draft_invoice_line_and_header_totals_before_save
     );
     assert_eq!(imap.get("invoice_date_due").unwrap(), Value::Date(inv_date));
 
+    // 3. Plain journal entry (`move_type == "entry"`) onchange computes `amount_total` without
+    //    crashing on the virtual generated `debit` column.
+    let entry_res = env
+        .records("account.move")
+        .unwrap()
+        .web_call(
+            &mut tx,
+            "onchange",
+            &obj(vec![
+                (
+                    "values",
+                    obj(vec![
+                        ("move_type", Value::str("entry")),
+                        ("state", Value::str("draft")),
+                        ("company_id", Value::Int(b.company)),
+                        ("currency_id", Value::Int(currency)),
+                        ("amount_total", Value::Decimal(Decimal::ZERO)),
+                        (
+                            "line_ids",
+                            Value::list([
+                                Value::list([
+                                    Value::Int(0),
+                                    Value::str("l1"),
+                                    obj(vec![
+                                        ("name", Value::str("Debit leg")),
+                                        ("account_id", Value::Int(b.expense)),
+                                        ("balance", Value::Decimal(d("150"))),
+                                        ("amount_currency", Value::Decimal(d("150"))),
+                                    ]),
+                                ]),
+                                Value::list([
+                                    Value::Int(0),
+                                    Value::str("l2"),
+                                    obj(vec![
+                                        ("name", Value::str("Credit leg")),
+                                        ("account_id", Value::Int(b.income)),
+                                        ("balance", Value::Decimal(d("-150"))),
+                                        ("amount_currency", Value::Decimal(d("-150"))),
+                                    ]),
+                                ]),
+                            ]),
+                        ),
+                    ]),
+                ),
+                ("field_names", Value::list([Value::str("line_ids")])),
+                ("fields_spec", obj(vec![("amount_total", obj(vec![]))])),
+            ]),
+        )
+        .await
+        .unwrap();
+    let eval = entry_res.dict().unwrap().get("value").unwrap();
+    assert_eq!(
+        eval.dict().unwrap().get("amount_total").unwrap(),
+        Value::Decimal(d("150"))
+    );
+
     // SYNC_OWNED_FIELDS are still refused on real persistence writes.
     let err = tx
         .savepoint(async |tx| {

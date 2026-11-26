@@ -949,18 +949,22 @@ impl SaleOrder {
 
     /// Recomputes live line amounts and order totals (`amount_untaxed`, `amount_tax`,
     /// `amount_total`) in memory before Save.
-    #[onchange(
-        "order_line",
-        "pricelist_id",
-        "currency_id",
-        "fiscal_position_id",
-        "date_order"
-    )]
+    #[onchange("order_line")]
     async fn _onchange_order_totals(
         this: &RecordSet<SaleOrder>,
         tx: &mut Transaction,
     ) -> Result<OnchangeResult> {
         crate::amounts::onchange_order_totals(tx, this.as_records()).await
+    }
+
+    /// Live `onchange` when pricelist, currency, fiscal position or order date changes on a draft
+    /// quotation: remaps line taxes, reprices untouched lines, and refreshes order totals.
+    #[onchange("pricelist_id", "currency_id", "fiscal_position_id", "date_order")]
+    async fn _onchange_order_pricing(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::amounts::onchange_order_pricing(tx, this.as_records()).await
     }
 
     /// The header fields a locked order refuses to change: customer, invoice address, delivery

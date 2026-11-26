@@ -176,12 +176,19 @@ fn is_product_line_display(cell: &Cell) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TaxBucketKey {
+    Repartition(i64, Option<i64>),
+    Tax(i64, Option<i64>),
+}
+
 /// Update `price_subtotal` and `price_total` on an in-memory `account.move.line` record.
 async fn preview_line_amounts(
     tx: &mut Transaction,
     line: &Records,
     company: i64,
     currency: i64,
+    refund: bool,
 ) -> Result<(Decimal, Decimal)> {
     if !is_product_line_display(&line.cell(tx, "display_type").await?) {
         line.write_base(
@@ -196,8 +203,9 @@ async fn preview_line_amounts(
     let company_env = line.env().with_company(company)?;
     let tax_ids = ids_of(&line.cell(tx, "tax_ids").await?);
     let tax_set: BTreeSet<i64> = tax_ids.iter().copied().collect();
-    let (defs, _) = load_taxes(tx, &company_env, &tax_set).await?;
+    let (defs, repartitions) = load_taxes(tx, &company_env, &tax_set).await?;
     let table = RoundingTable::load(&company_env, tx, &[rec(currency)?]).await?;
+    let increment = table.get(rec(currency)?)?.increment();
     let taxes: Vec<TaxDef> = tax_ids
         .iter()
         .map(|t| {
@@ -211,16 +219,31 @@ async fn preview_line_amounts(
         quantity: amount(&line.cell(tx, "quantity").await?, "quantity")?,
         discount: amount(&line.cell(tx, "discount").await?, "discount")?,
         taxes: &taxes,
-        increment: table.get(rec(currency)?)?.increment(),
+        increment,
     })?;
+    let mut effective_line_tax = Decimal::ZERO;
+    for tax in &result.taxes {
+        let own_reps = repartitions
+            .iter()
+            .filter(|r| r.tax == tax.tax_id && r.refund == refund);
+        let distributed = distribute(tax.amount, own_reps, increment)?;
+        if distributed.is_empty() {
+            effective_line_tax = add_total(effective_line_tax, tax.amount)?;
+        } else {
+            for (_, part) in distributed {
+                effective_line_tax = add_total(effective_line_tax, part)?;
+            }
+        }
+    }
+    let effective_price_total = add_total(result.total_excluded, effective_line_tax)?;
     line.write_base(
         tx,
         RawVals::new()
             .set_cell("price_subtotal", Cell::Decimal(result.total_excluded))
-            .set_cell("price_total", Cell::Decimal(result.total_included)),
+            .set_cell("price_total", Cell::Decimal(effective_price_total)),
     )
     .await?;
-    Ok((result.total_excluded, result.total_included))
+    Ok((result.total_excluded, effective_price_total))
 }
 
 #[methods(AccountMoveLine, addon = "account")]
@@ -241,8 +264,9 @@ impl AccountMoveLine {
         let Some(move_type) = head.move_type.as_ref().filter(|k| is_invoice(k)) else {
             return Ok(OnchangeResult::none());
         };
+        let refund = is_refund(move_type);
         let Some(product) = id_of(&line.cell(tx, "product_id").await?, "product_id")? else {
-            preview_line_amounts(tx, line, head.company, head.currency).await?;
+            preview_line_amounts(tx, line, head.company, head.currency, refund).await?;
             return Ok(OnchangeResult::none());
         };
         let company_env = this.env().with_company(head.company)?;
@@ -258,7 +282,10 @@ impl AccountMoveLine {
         let price_field = if sale { "lst_price" } else { "standard_price" };
         let mut price = amount(&record.cell(tx, price_field).await?, price_field)?;
         if head.currency != head.company_currency {
-            let at = head.invoice_date.or(head.date).unwrap_or_else(Date::today);
+            let at = match head.invoice_date.or(head.date) {
+                Some(d) => d,
+                None => erp_addon_base::company_calendar::business_date(tx, head.company).await?,
+            };
             price = convert(
                 &company_env,
                 tx,
@@ -310,7 +337,7 @@ impl AccountMoveLine {
             assign.insert("account_id".into(), Cell::Id(account));
         }
         line.write_base(tx, assign).await?;
-        preview_line_amounts(tx, line, head.company, head.currency).await?;
+        preview_line_amounts(tx, line, head.company, head.currency, refund).await?;
         Ok(OnchangeResult::none())
     }
 
@@ -333,29 +360,178 @@ impl AccountMoveLine {
         let Some(head) = move_head_for_onchange(tx, this.env(), &entry).await? else {
             return Ok(OnchangeResult::none());
         };
-        if !head.move_type.as_deref().is_some_and(is_invoice) {
+        let Some(move_type) = head.move_type.as_deref().filter(|k| is_invoice(k)) else {
             return Ok(OnchangeResult::none());
-        }
-        preview_line_amounts(tx, line, head.company, head.currency).await?;
+        };
+        preview_line_amounts(tx, line, head.company, head.currency, is_refund(move_type)).await?;
         Ok(OnchangeResult::none())
     }
 }
 
+async fn recompute_move_totals(
+    tx: &mut Transaction,
+    env: &Env,
+    entry: &Records,
+) -> Result<OnchangeResult> {
+    if let Cell::Str(state) = entry.cell(tx, "state").await?
+        && state.as_ref() != "draft"
+    {
+        return Ok(OnchangeResult::none());
+    }
+    let Some(head) = move_head_for_onchange(tx, env, entry).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let move_type = head.move_type.as_deref().unwrap_or("entry");
+    if move_type == "entry" {
+        let lines = entry.related(tx, "line_ids").await?;
+        let mut total = Decimal::ZERO;
+        for line in lines.iter() {
+            // Avoid virtual generated `debit` on in-memory records; derive debit side from stored
+            // `balance` and `amount_currency`.
+            let balance = amount(&line.cell(tx, "balance").await?, "balance")?;
+            let amt_curr = amount(&line.cell(tx, "amount_currency").await?, "amount_currency")?;
+            if balance > Decimal::ZERO {
+                let add = if !amt_curr.is_zero() {
+                    amt_curr
+                } else {
+                    balance
+                };
+                total = add_total(total, add)?;
+            } else if balance.is_zero() && amt_curr > Decimal::ZERO {
+                total = add_total(total, amt_curr)?;
+            }
+        }
+        entry
+            .write_base(
+                tx,
+                RawVals::new().set_cell("amount_total", Cell::Decimal(total)),
+            )
+            .await?;
+        return Ok(OnchangeResult::none());
+    }
+    if !is_invoice(move_type) {
+        return Ok(OnchangeResult::none());
+    }
+    let company_env = env.with_company(head.company)?;
+    let lines = entry.related(tx, "invoice_line_ids").await?;
+    let mut tax_ids = BTreeSet::new();
+    for line in lines.iter() {
+        if is_product_line_display(&line.cell(tx, "display_type").await?) {
+            tax_ids.extend(ids_of(&line.cell(tx, "tax_ids").await?));
+        }
+    }
+    let (taxes, repartitions) = load_taxes(tx, &company_env, &tax_ids).await?;
+    let table = RoundingTable::load(&company_env, tx, &[rec(head.currency)?]).await?;
+    let increment = table.get(rec(head.currency)?)?.increment();
+    let refund = is_refund(move_type);
+
+    let mut untaxed = Decimal::ZERO;
+    let mut by_key: BTreeMap<TaxBucketKey, Decimal> = BTreeMap::new();
+    for line in lines.iter() {
+        if !is_product_line_display(&line.cell(tx, "display_type").await?) {
+            line.write_base(
+                tx,
+                RawVals::new()
+                    .set_cell("price_subtotal", Cell::Decimal(Decimal::ZERO))
+                    .set_cell("price_total", Cell::Decimal(Decimal::ZERO)),
+            )
+            .await?;
+            continue;
+        }
+        let line_tax_ids = ids_of(&line.cell(tx, "tax_ids").await?);
+        let defs: Vec<TaxDef> = line_tax_ids
+            .iter()
+            .map(|t| {
+                taxes
+                    .get(t)
+                    .map(|(def, _)| def.clone())
+                    .ok_or_else(|| Error::invariant(format!("tax {t} was not loaded")))
+            })
+            .collect::<Result<_>>()?;
+        let result = compute::compute(&BaseLine {
+            price_unit: amount(&line.cell(tx, "price_unit").await?, "price_unit")?,
+            quantity: amount(&line.cell(tx, "quantity").await?, "quantity")?,
+            discount: amount(&line.cell(tx, "discount").await?, "discount")?,
+            taxes: &defs,
+            increment,
+        })?;
+        untaxed = add_total(untaxed, result.total_excluded)?;
+        let base_account = id_of(&line.cell(tx, "account_id").await?, "account_id")?;
+        let mut effective_line_tax = Decimal::ZERO;
+        for tax in &result.taxes {
+            let own_reps = repartitions
+                .iter()
+                .filter(|r| r.tax == tax.tax_id && r.refund == refund);
+            let distributed = distribute(tax.amount, own_reps, increment)?;
+            if distributed.is_empty() {
+                effective_line_tax = add_total(effective_line_tax, tax.amount)?;
+                let slot = by_key
+                    .entry(TaxBucketKey::Tax(tax.tax_id, base_account))
+                    .or_insert(Decimal::ZERO);
+                *slot = add_total(*slot, tax.amount)?;
+            } else {
+                for (rep, part) in distributed {
+                    effective_line_tax = add_total(effective_line_tax, part)?;
+                    let key = TaxBucketKey::Repartition(rep.id, rep.account.or(base_account));
+                    let slot = by_key.entry(key).or_insert(Decimal::ZERO);
+                    *slot = add_total(*slot, part)?;
+                }
+            }
+        }
+        let effective_price_total = add_total(result.total_excluded, effective_line_tax)?;
+        line.write_base(
+            tx,
+            RawVals::new()
+                .set_cell("price_subtotal", Cell::Decimal(result.total_excluded))
+                .set_cell("price_total", Cell::Decimal(effective_price_total)),
+        )
+        .await?;
+    }
+    let mut tax_total = Decimal::ZERO;
+    for part in by_key.values() {
+        if !part.is_zero() {
+            tax_total = add_total(tax_total, *part)?;
+        }
+    }
+    let amount_total = add_total(untaxed, tax_total)?;
+    let mut vals = RawVals::new()
+        .set_cell("amount_untaxed", Cell::Decimal(untaxed))
+        .set_cell("amount_tax", Cell::Decimal(tax_total))
+        .set_cell("amount_total", Cell::Decimal(amount_total))
+        .set_cell("amount_residual", Cell::Decimal(amount_total));
+
+    let date_ref = head.invoice_date.or(head.date);
+    let due = if let (Some(term), Some(date_ref)) = (head.term, date_ref) {
+        let terms = payterm::load_terms(tx, &company_env, &[term]).await?;
+        let term_lines = terms
+            .get(&term)
+            .ok_or_else(|| Error::invariant(format!("payment term {term} was not loaded")))?;
+        let mut max_due: Option<Date> = None;
+        for line in term_lines {
+            let d = terms_compute::due_date(line, date_ref)?;
+            max_due = Some(max_due.map_or(d, |seen| seen.max(d)));
+        }
+        max_due
+    } else {
+        match (head.due, date_ref) {
+            (Some(due), Some(start)) if due < start => Some(start),
+            (Some(due), _) => Some(due),
+            (None, start) => start,
+        }
+    };
+    if let Some(due) = due {
+        vals.insert("invoice_date_due".into(), Cell::Date(due));
+    }
+    entry.write_base(tx, vals).await?;
+    Ok(OnchangeResult::none())
+}
+
 #[methods(AccountMove, addon = "account")]
 impl AccountMove {
-    /// Live `onchange` for `account.move`: recomputes draft invoice line amounts, tax totals
-    /// (with repartition rounding), `amount_untaxed`, `amount_tax`, `amount_total`,
-    /// `amount_residual` and `invoice_date_due` (and `amount_total` on plain entries) before Save.
-    #[onchange(
-        "invoice_line_ids",
-        "line_ids",
-        "currency_id",
-        "invoice_payment_term_id",
-        "invoice_date",
-        "date",
-        "partner_id"
-    )]
-    async fn _onchange_move_totals(
+    /// Live `onchange` when `partner_id` changes on a draft invoice: proposes the partner's
+    /// company-scoped payment term and refreshes totals and due date before Save.
+    #[onchange("partner_id")]
+    async fn _onchange_partner_payment_term(
         this: &RecordSet<AccountMove>,
         tx: &mut Transaction,
     ) -> Result<OnchangeResult> {
@@ -365,161 +541,38 @@ impl AccountMove {
         {
             return Ok(OnchangeResult::none());
         }
-        let Some(head) = move_head_for_onchange(tx, this.env(), entry).await? else {
-            return Ok(OnchangeResult::none());
-        };
-        let move_type = head.move_type.as_deref().unwrap_or("entry");
-        if move_type == "entry" {
-            let lines = entry.related(tx, "line_ids").await?;
-            let mut total = Decimal::ZERO;
-            for line in lines.iter() {
-                let debit = amount(&line.cell(tx, "debit").await?, "debit")?;
-                let balance = amount(&line.cell(tx, "balance").await?, "balance")?;
-                let amt_curr = amount(&line.cell(tx, "amount_currency").await?, "amount_currency")?;
-                if balance > Decimal::ZERO {
-                    total = add_total(total, amt_curr)?;
-                } else if debit > Decimal::ZERO {
-                    total = add_total(total, debit)?;
-                }
-            }
+        if let Some(head) = move_head_for_onchange(tx, this.env(), entry).await?
+            && let Some(move_type) = head.move_type.as_deref().filter(|k| is_invoice(k))
+            && let Some(partner) = id_of(&entry.cell(tx, "partner_id").await?, "partner_id")?
+            && let Some(term) =
+                super::partner_terms(tx, this.env(), head.company, is_sale(move_type), partner)
+                    .await?
+        {
             entry
                 .write_base(
                     tx,
-                    RawVals::new().set_cell("amount_total", Cell::Decimal(total)),
+                    RawVals::new().set_cell("invoice_payment_term_id", Cell::Id(term)),
                 )
                 .await?;
-            return Ok(OnchangeResult::none());
         }
-        if !is_invoice(move_type) {
-            return Ok(OnchangeResult::none());
-        }
-        let company_env = this.env().with_company(head.company)?;
-        let lines = entry.related(tx, "invoice_line_ids").await?;
-        let mut tax_ids = BTreeSet::new();
-        for line in lines.iter() {
-            if is_product_line_display(&line.cell(tx, "display_type").await?) {
-                tax_ids.extend(ids_of(&line.cell(tx, "tax_ids").await?));
-            }
-        }
-        let (taxes, repartitions) = load_taxes(tx, &company_env, &tax_ids).await?;
-        let currencies: Vec<RecId> = if head.currency == head.company_currency {
-            vec![rec(head.currency)?]
-        } else {
-            vec![rec(head.currency)?, rec(head.company_currency)?]
-        };
-        let table = RoundingTable::load(&company_env, tx, &currencies).await?;
-        let increment = table.get(rec(head.currency)?)?.increment();
-        let company_increment = table.get(rec(head.company_currency)?)?.increment();
-        let refund = is_refund(move_type);
+        recompute_move_totals(tx, this.env(), entry).await
+    }
 
-        let mut untaxed = Decimal::ZERO;
-        let mut by_key: BTreeMap<(i64, i64), Decimal> = BTreeMap::new();
-        for line in lines.iter() {
-            if !is_product_line_display(&line.cell(tx, "display_type").await?) {
-                line.write_base(
-                    tx,
-                    RawVals::new()
-                        .set_cell("price_subtotal", Cell::Decimal(Decimal::ZERO))
-                        .set_cell("price_total", Cell::Decimal(Decimal::ZERO)),
-                )
-                .await?;
-                continue;
-            }
-            let line_tax_ids = ids_of(&line.cell(tx, "tax_ids").await?);
-            let defs: Vec<TaxDef> = line_tax_ids
-                .iter()
-                .map(|t| {
-                    taxes
-                        .get(t)
-                        .map(|(def, _)| def.clone())
-                        .ok_or_else(|| Error::invariant(format!("tax {t} was not loaded")))
-                })
-                .collect::<Result<_>>()?;
-            let result = compute::compute(&BaseLine {
-                price_unit: amount(&line.cell(tx, "price_unit").await?, "price_unit")?,
-                quantity: amount(&line.cell(tx, "quantity").await?, "quantity")?,
-                discount: amount(&line.cell(tx, "discount").await?, "discount")?,
-                taxes: &defs,
-                increment,
-            })?;
-            untaxed = add_total(untaxed, result.total_excluded)?;
-            line.write_base(
-                tx,
-                RawVals::new()
-                    .set_cell("price_subtotal", Cell::Decimal(result.total_excluded))
-                    .set_cell("price_total", Cell::Decimal(result.total_included)),
-            )
-            .await?;
-            let base_account =
-                id_of(&line.cell(tx, "account_id").await?, "account_id")?.unwrap_or(0);
-            for tax in &result.taxes {
-                let own_reps = repartitions
-                    .iter()
-                    .filter(|r| r.tax == tax.tax_id && r.refund == refund);
-                let distributed = distribute(tax.amount, own_reps, increment)?;
-                if distributed.is_empty() {
-                    let slot = by_key
-                        .entry((tax.tax_id, base_account))
-                        .or_insert(Decimal::ZERO);
-                    *slot = add_total(*slot, tax.amount)?;
-                } else {
-                    for (rep, part) in distributed {
-                        let key = (rep.id, rep.account.unwrap_or(base_account));
-                        let slot = by_key.entry(key).or_insert(Decimal::ZERO);
-                        *slot = add_total(*slot, part)?;
-                    }
-                }
-            }
-        }
-        let mut tax_total = Decimal::ZERO;
-        for part in by_key.values() {
-            if !part.is_zero() {
-                tax_total = add_total(tax_total, *part)?;
-            }
-        }
-        let amount_total = add_total(untaxed, tax_total)?;
-        let mut vals = RawVals::new()
-            .set_cell("amount_untaxed", Cell::Decimal(untaxed))
-            .set_cell("amount_tax", Cell::Decimal(tax_total))
-            .set_cell("amount_total", Cell::Decimal(amount_total))
-            .set_cell("amount_residual", Cell::Decimal(amount_total));
-
-        let date_ref = head.invoice_date.or(head.date);
-        let due = if let (Some(term), Some(date_ref)) = (head.term, date_ref) {
-            let terms = payterm::load_terms(tx, &company_env, &[term]).await?;
-            let digits = payterm::percent_digits(tx, &company_env).await?;
-            let term_lines = terms
-                .get(&term)
-                .ok_or_else(|| Error::invariant(format!("payment term {term} was not loaded")))?;
-            terms_compute::check_percent_lines(term_lines, digits)?;
-            let sign = if amount_total < Decimal::ZERO {
-                -Decimal::ONE
-            } else {
-                Decimal::ONE
-            };
-            terms_compute::instalments(
-                term_lines,
-                date_ref,
-                amount_total,
-                amount_total,
-                sign,
-                company_increment,
-                increment,
-            )?
-            .into_iter()
-            .map(|inst| inst.date)
-            .max()
-        } else {
-            match (head.due, date_ref) {
-                (Some(due), Some(start)) if due < start => Some(start),
-                (Some(due), _) => Some(due),
-                (None, start) => start,
-            }
-        };
-        if let Some(due) = due {
-            vals.insert("invoice_date_due".into(), Cell::Date(due));
-        }
-        entry.write_base(tx, vals).await?;
-        Ok(OnchangeResult::none())
+    /// Live `onchange` for `account.move`: recomputes draft invoice line amounts, tax totals
+    /// (with repartition rounding), `amount_untaxed`, `amount_tax`, `amount_total`,
+    /// `amount_residual` and `invoice_date_due` (and `amount_total` on plain entries) before Save.
+    #[onchange(
+        "invoice_line_ids",
+        "line_ids",
+        "currency_id",
+        "invoice_payment_term_id",
+        "invoice_date",
+        "date"
+    )]
+    async fn _onchange_move_totals(
+        this: &RecordSet<AccountMove>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        recompute_move_totals(tx, this.env(), this.as_records()).await
     }
 }

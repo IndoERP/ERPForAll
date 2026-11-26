@@ -4634,14 +4634,20 @@ export class HumanApp {
       if (!context.page) throw new ClientError("validation", "There is no record in that direction.");
       offset = Math.max(0, total - context.limit);
       ({ ids, total } = await context.page(offset));
+      if (offset + ids.length < total) {
+        offset = Math.max(0, total - context.limit);
+        ({ ids, total } = await context.page(offset));
+      }
       reloaded = true;
     }
     // A reloaded page may already hold the saved record wherever the list's order puts it: it goes last all the same.
     ids = ids.filter(id => id !== saved);
     const target = ids[ids.length - 1];
     if (target === undefined) throw new ClientError("validation", "There is no record in that direction.");
-    const next = saved === undefined ? { ...context, ids, offset, total }
-      : { ...context, ids: [...ids, saved], offset, total: reloaded ? total : total + 1 };
+    const nextIds = saved === undefined ? ids : [...ids, saved];
+    const baseTotal = reloaded ? total : total + (saved === undefined ? 0 : 1);
+    const nextTotal = Math.max(baseTotal, offset + nextIds.length);
+    const next = { ...context, ids: nextIds, offset, total: nextTotal };
     await this.moveInList(route, target, context, next);
   }
 

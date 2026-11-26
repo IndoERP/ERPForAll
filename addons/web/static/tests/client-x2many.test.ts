@@ -796,3 +796,63 @@ test("inline product pick runs line onchange to auto-fill required fields before
   expect(change.mock.calls[0]?.[0]).toMatchObject([{ author_id: { id: 5 }, title: "Auto-filled Title", publication_year: 2026 }]);
   dispose(); messages.dispose();
 });
+
+test("line dialog recovers after a failed onchange and preserves newer local edits", async () => {
+  let failOnce = true;
+  let resolveSlow!: (v: unknown) => void;
+  const qty = field("product_uom_qty", "float", { label: "Quantity" });
+  const subtotal = field("price_subtotal", "float", { label: "Subtotal", readonly: true });
+  const lineForm: View = {
+    type: "form", mode: "record", fields: [title, qty, subtotal],
+    nodes: [{ kind: "root", children: [{ kind: "sheet", children: [
+      { kind: "field", field: title, label: "Title", widget: "char" },
+      { kind: "field", field: qty, label: "Quantity", widget: "float" },
+      { kind: "field", field: subtotal, label: "Subtotal", widget: "float" }
+    ] }] }]
+  };
+  const owner = field("order_line", "one2many", {
+    label: "Order Lines", relation: "sale.order.line", relationField: null,
+    subview: { model: "sale.order.line", list: [title, qty, subtotal], form: lineForm, fields: new Map([[title.name, title], [qty.name, qty], [subtotal.name, subtotal]]) }
+  });
+  const rpc = new RpcClient(async (path, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    let data: unknown = {};
+    if (path.endsWith("/default_get")) data = { product_uom_qty: 1 };
+    else if (path.endsWith("/onchange")) {
+      const names = body["field_names"] as string[];
+      if (names.length === 0) data = { value: { product_uom_qty: 1, price_subtotal: 0 } };
+      else if (failOnce) { failOnce = false; throw new Error("temporary network error"); }
+      else if (names.includes("product_uom_qty")) {
+        data = await new Promise(resolve => { resolveSlow = resolve; });
+      } else data = { value: {} };
+    }
+    return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+  });
+  const localRun = (job: () => Promise<void>): void => { jobs.push(job().catch(error => { reports.push(error); })); };
+  const change = vi.fn(), messages = new MessageServices(document.body, error => { reports.push(error); });
+  const handle = fieldWidgets.get("one2many").render({
+    field: owner, model: "sale.order", fields: [owner],
+    values: { order_line: [] }, value: [], change, rpc, context: {}, messages, run: localRun,
+    report: error => { reports.push(error); }
+  });
+  document.body.append(handle.node);
+  handle.node.querySelector<HTMLButtonElement>(".x2many-add")!.click();
+  await Promise.all(jobs);
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
+  // 1. Trigger failing onchange — must clear pendingChange so Save & Close does not wedge.
+  const qtyInput = dialog.querySelector<HTMLInputElement>('input[name="product_uom_qty"]')!;
+  qtyInput.value = "2"; qtyInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(reports.length).toBeGreaterThan(0));
+  reports.length = 0;
+  // 2. Trigger slow onchange for qty, then immediately edit title locally before slow onchange resolves.
+  const qtyInput2 = dialog.querySelector<HTMLInputElement>('input[name="product_uom_qty"]')!;
+  qtyInput2.value = "3"; qtyInput2.dispatchEvent(new Event("change"));
+  const titleInput = dialog.querySelector<HTMLInputElement>('input[name="title"]')!;
+  titleInput.value = "User Custom Title"; titleInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(resolveSlow).toBeDefined());
+  resolveSlow({ value: { title: "Stale Server Title", price_subtotal: 300 } });
+  [...dialog.querySelectorAll("button")].find(b => b.textContent === "Save & Close")!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalledOnce());
+  expect(change.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ title: "User Custom Title", product_uom_qty: 3, price_subtotal: 300 })]);
+  handle.dispose(); messages.dispose();
+});

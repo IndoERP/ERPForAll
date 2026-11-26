@@ -173,7 +173,7 @@ pub(crate) async fn fill_create_taxes(
 
 /// The payment terms a partner has for `company`: the customer terms of a customer document, the
 /// vendor terms of a vendor bill.
-async fn partner_terms(
+pub(super) async fn partner_terms(
     tx: &mut Transaction,
     env: &Env,
     company: i64,

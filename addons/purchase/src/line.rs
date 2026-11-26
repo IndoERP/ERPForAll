@@ -1735,11 +1735,11 @@ async fn head_for_onchange(
         id_of(Some(&order.cell(tx, "partner_id").await?), "partner_id")?
     };
     let date_order = if order.is_empty() {
-        DateTime::now()
+        tx.now().unwrap_or_else(DateTime::now)
     } else {
         match order.cell(tx, "date_order").await? {
             Cell::DateTime(at) => at,
-            _ => DateTime::now(),
+            _ => tx.now().unwrap_or_else(DateTime::now),
         }
     };
     let currency = if order.is_empty() {
@@ -1842,6 +1842,13 @@ async fn onchange_line_product(tx: &mut Transaction, line: &Records) -> Result<O
         return Ok(OnchangeResult::none());
     };
     let Some(product) = id_of(Some(&line.cell(tx, "product_id").await?), "product_id")? else {
+        let mut clear = RawVals::new()
+            .set_cell("price_unit", Cell::Decimal(Decimal::ZERO))
+            .set_cell("technical_price_unit", Cell::Decimal(Decimal::ZERO))
+            .set_cell("discount", Cell::Decimal(Decimal::ZERO))
+            .set_cell("selected_seller_id", Cell::Null);
+        clear.insert_commands("tax_ids".into(), vec![Command::Set(Vec::new())]);
+        line.write_base(tx, clear).await?;
         preview_line_amounts(tx, line, &head).await?;
         return Ok(OnchangeResult::none());
     };
@@ -1860,12 +1867,14 @@ async fn onchange_line_product(tx: &mut Transaction, line: &Records) -> Result<O
     let quantity = amount(&line.cell(tx, "product_qty").await?, "product_qty")?;
     let (price, discount, row, delay) =
         price_of_head(tx, line.env(), &head, product, quantity, unit).await?;
+    let lead_days = crate::settings::days_to_purchase(tx, head.company).await?;
+    let total_delay = delay.saturating_add(i64::from(lead_days));
     assign.insert("price_unit".into(), Cell::Decimal(price));
     assign.insert("technical_price_unit".into(), Cell::Decimal(price));
     assign.insert("discount".into(), Cell::Decimal(discount));
     assign.insert(
         "date_planned".into(),
-        Cell::DateTime(planned_at(head.date_order, delay)?),
+        Cell::DateTime(planned_at(head.date_order, total_delay)?),
     );
     assign.insert(
         "selected_seller_id".into(),
@@ -1966,4 +1975,56 @@ pub(crate) async fn onchange_order_totals(
         )
         .await?;
     Ok(OnchangeResult::none())
+}
+
+/// Live `onchange` when vendor, currency or order deadline changes on a draft RFQ: reprices lines
+/// whose price has not been edited by hand and refreshes order totals before Save.
+pub(crate) async fn onchange_order_pricing(
+    tx: &mut Transaction,
+    order: &Records,
+) -> Result<OnchangeResult> {
+    let Some(head) = head_for_onchange(tx, order.env(), order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let editable = match order.cell(tx, "state").await? {
+        Cell::Str(state) => matches!(state.as_ref(), "draft" | "sent"),
+        Cell::Null | Cell::Bool(false) => true,
+        _ => false,
+    };
+    if editable {
+        let lead_days = crate::settings::days_to_purchase(tx, head.company).await?;
+        let lines = order.related(tx, "order_line").await?;
+        for line in lines.iter() {
+            let price_unit = amount(&line.cell(tx, "price_unit").await?, "price_unit")?;
+            let technical = amount(
+                &line.cell(tx, "technical_price_unit").await?,
+                "technical_price_unit",
+            )?;
+            if price_unit == technical
+                && let (Some(product), Some(unit)) = (
+                    id_of(Some(&line.cell(tx, "product_id").await?), "product_id")?,
+                    id_of(Some(&line.cell(tx, "uom_id").await?), "uom_id")?,
+                )
+            {
+                let quantity = amount(&line.cell(tx, "product_qty").await?, "product_qty")?;
+                let (price, discount, row, delay) =
+                    price_of_head(tx, order.env(), &head, product, quantity, unit).await?;
+                let total_delay = delay.saturating_add(i64::from(lead_days));
+                line.write_base(
+                    tx,
+                    RawVals::new()
+                        .set_cell("price_unit", Cell::Decimal(price))
+                        .set_cell("technical_price_unit", Cell::Decimal(price))
+                        .set_cell("discount", Cell::Decimal(discount))
+                        .set_cell("selected_seller_id", row.map_or(Cell::Null, Cell::Id))
+                        .set_cell(
+                            "date_planned",
+                            Cell::DateTime(planned_at(head.date_order, total_delay)?),
+                        ),
+                )
+                .await?;
+            }
+        }
+    }
+    onchange_order_totals(tx, order).await
 }

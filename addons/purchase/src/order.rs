@@ -322,12 +322,22 @@ impl PurchaseOrder {
     /// Live `onchange` for `purchase.order`: recomputes in-memory line subtotals, order totals
     /// (`amount_untaxed`, `amount_tax`, `amount_total`, `amount_total_cc`) and earliest
     /// `date_planned` before Save.
-    #[onchange("order_line", "partner_id", "currency_id", "date_order")]
+    #[onchange("order_line")]
     async fn _onchange_order_totals(
         this: &RecordSet<PurchaseOrder>,
         tx: &mut Transaction,
     ) -> Result<OnchangeResult> {
         crate::line::onchange_order_totals(tx, this.as_records()).await
+    }
+
+    /// Live `onchange` when vendor, currency or order deadline changes on a draft RFQ: reprices
+    /// lines whose unit price has not been edited by hand and refreshes order totals before Save.
+    #[onchange("partner_id", "currency_id", "date_order")]
+    async fn _onchange_order_pricing(
+        this: &RecordSet<PurchaseOrder>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::line::onchange_order_pricing(tx, this.as_records()).await
     }
 
     /// The values a new order form starts with: the active company, its currency, the user as
