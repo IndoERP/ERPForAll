@@ -2,12 +2,14 @@
 //! Quotation Templates (`sale.order.template`, `sale.order.template.line`,
 //! `sale.order.template.option`) and Optional Products on Sales Orders (`sale.order.option`).
 
+use std::collections::BTreeSet;
+
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
 
 use crate::discount::default_unit_uom_id;
-use crate::order::SaleOrder;
+use crate::order::{SaleOrder, strip_default_context};
 
 /// Pure exact-decimal line pricing helper for optional products added to an order.
 pub fn compute_option_subtotal(
@@ -135,7 +137,12 @@ pub struct SaleOrderTemplateLine {
     )]
     pub display_type: Option<Arc<str>>,
     /// Product to add (empty for section/note lines).
-    #[field(many2one, comodel = "product.product", string = "Product")]
+    #[field(
+        many2one,
+        comodel = "product.product",
+        check_company = true,
+        string = "Product"
+    )]
     pub product_id: Option<RecId>,
     /// Line description (defaults to product display name if left empty).
     #[field(char, string = "Description")]
@@ -166,13 +173,31 @@ impl SaleOrderTemplateLine {
                     Some(Cell::Str(s)) => s.trim().is_empty(),
                     _ => false,
                 };
-                if needs_name && let Ok(Cell::Str(pname)) = prod.cell(tx, "display_name").await {
-                    vals.insert("name".into(), Cell::Str(pname));
+                if needs_name {
+                    match prod.cell(tx, "display_name").await? {
+                        Cell::Str(pname) => {
+                            vals.insert("name".into(), Cell::Str(pname));
+                        }
+                        Cell::Null => {}
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.display_name returned {other:?}"
+                            )));
+                        }
+                    }
                 }
-                if !vals.contains("product_uom_id")
-                    && let Ok(Cell::Id(uid)) = prod.cell(tx, "uom_id").await
-                {
-                    vals.insert("product_uom_id".into(), Cell::Id(uid));
+                if !vals.contains("product_uom_id") {
+                    match prod.cell(tx, "uom_id").await? {
+                        Cell::Id(uid) => {
+                            vals.insert("product_uom_id".into(), Cell::Id(uid));
+                        }
+                        Cell::Null => {}
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.uom_id returned {other:?}"
+                            )));
+                        }
+                    }
                 }
             }
             let empty_name = match vals.get("name") {
@@ -222,6 +247,7 @@ pub struct SaleOrderTemplateOption {
         many2one,
         comodel = "product.product",
         required = true,
+        check_company = true,
         string = "Product"
     )]
     pub product_id: Option<RecId>,
@@ -254,13 +280,31 @@ impl SaleOrderTemplateOption {
                     Some(Cell::Str(s)) => s.trim().is_empty(),
                     _ => false,
                 };
-                if needs_name && let Ok(Cell::Str(pname)) = prod.cell(tx, "display_name").await {
-                    vals.insert("name".into(), Cell::Str(pname));
+                if needs_name {
+                    match prod.cell(tx, "display_name").await? {
+                        Cell::Str(pname) => {
+                            vals.insert("name".into(), Cell::Str(pname));
+                        }
+                        Cell::Null => {}
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.display_name returned {other:?}"
+                            )));
+                        }
+                    }
                 }
-                if !vals.contains("uom_id")
-                    && let Ok(Cell::Id(uid)) = prod.cell(tx, "uom_id").await
-                {
-                    vals.insert("uom_id".into(), Cell::Id(uid));
+                if !vals.contains("uom_id") {
+                    match prod.cell(tx, "uom_id").await? {
+                        Cell::Id(uid) => {
+                            vals.insert("uom_id".into(), Cell::Id(uid));
+                        }
+                        Cell::Null => {}
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.uom_id returned {other:?}"
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -296,6 +340,16 @@ pub struct SaleOrderOption {
         string = "Company"
     )]
     pub company_id: Option<RecId>,
+    /// Order salesperson, used for personal access rules.
+    #[field(
+        many2one,
+        comodel = "res.users",
+        related = "order_id.user_id",
+        store = true,
+        index = true,
+        string = "Salesperson"
+    )]
+    pub salesman_id: Option<RecId>,
     /// Order currency.
     #[field(
         many2one,
@@ -310,6 +364,7 @@ pub struct SaleOrderOption {
         many2one,
         comodel = "product.product",
         required = true,
+        check_company = true,
         string = "Product"
     )]
     pub product_id: Option<RecId>,
@@ -349,6 +404,18 @@ impl SaleOrderOption {
         sup: Super,
     ) -> Result<Records> {
         let env = this.env().clone();
+        let order_ids: BTreeSet<i64> = vals_list
+            .iter()
+            .filter_map(|v| match v.get("order_id") {
+                Some(Cell::Id(id)) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let order_heads = if order_ids.is_empty() {
+            std::collections::BTreeMap::new()
+        } else {
+            crate::amounts::heads(tx, &env, &order_ids).await?
+        };
         for vals in &mut vals_list {
             if let Some(Cell::Id(pid)) = vals.get("product_id").cloned() {
                 let prod = env.records("product.product")?.browse([pid])?;
@@ -357,21 +424,63 @@ impl SaleOrderOption {
                     Some(Cell::Str(s)) => s.trim().is_empty(),
                     _ => false,
                 };
-                if needs_name && let Ok(Cell::Str(pname)) = prod.cell(tx, "display_name").await {
-                    vals.insert("name".into(), Cell::Str(pname));
+                if needs_name {
+                    match prod.cell(tx, "display_name").await? {
+                        Cell::Str(pname) => {
+                            vals.insert("name".into(), Cell::Str(pname));
+                        }
+                        Cell::Null => {}
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.display_name returned {other:?}"
+                            )));
+                        }
+                    }
                 }
-                if !vals.contains("uom_id")
-                    && let Ok(Cell::Id(uid)) = prod.cell(tx, "uom_id").await
-                {
-                    vals.insert("uom_id".into(), Cell::Id(uid));
-                }
-                let price_zero = match vals.get("price_unit") {
-                    None | Some(Cell::Null) => true,
-                    Some(Cell::Decimal(d)) => d.is_zero(),
-                    _ => false,
+                let chosen_uom = if let Some(Cell::Id(uid)) = vals.get("uom_id") {
+                    Some(*uid)
+                } else {
+                    match prod.cell(tx, "uom_id").await? {
+                        Cell::Id(uid) => {
+                            vals.insert("uom_id".into(), Cell::Id(uid));
+                            Some(uid)
+                        }
+                        Cell::Null => None,
+                        other => {
+                            return Err(Error::programming(format!(
+                                "product.product.uom_id returned {other:?}"
+                            )));
+                        }
+                    }
                 };
-                if price_zero && let Ok(Cell::Decimal(lp)) = prod.cell(tx, "lst_price").await {
-                    vals.insert("price_unit".into(), Cell::Decimal(lp));
+                let price_missing = matches!(vals.get("price_unit"), None | Some(Cell::Null));
+                if price_missing {
+                    let qty = match vals.get("quantity") {
+                        Some(Cell::Decimal(d)) => *d,
+                        None | Some(Cell::Null) => Decimal::ONE,
+                        other => {
+                            return Err(Error::validation(format!(
+                                "quantity must be a decimal, got {other:?}."
+                            )));
+                        }
+                    };
+                    let priced = if let (Some(Cell::Id(oid)), Some(uid)) =
+                        (vals.get("order_id"), chosen_uom)
+                        && let Some(head) = order_heads.get(oid)
+                    {
+                        crate::amounts::price_of(tx, &env, head, pid, qty, uid).await?
+                    } else {
+                        match prod.cell(tx, "lst_price").await? {
+                            Cell::Decimal(lp) => lp,
+                            Cell::Null => Decimal::ZERO,
+                            other => {
+                                return Err(Error::programming(format!(
+                                    "product.product.lst_price returned {other:?}"
+                                )));
+                            }
+                        }
+                    };
+                    vals.insert("price_unit".into(), Cell::Decimal(priced));
                 }
             }
         }
@@ -387,49 +496,70 @@ impl SaleOrderOption {
     ) -> Result<Value> {
         let opt = this.ensure_one()?;
         opt.as_records().check_access(tx, Operation::Write).await?;
-        let opt_id = opt.as_records().ids()[0];
-        let order_id = opt
-            .get(tx, SaleOrderOption::ORDER_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Option has no sales order."))?
-            .get();
-        let product_id = opt
-            .get(tx, SaleOrderOption::PRODUCT_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Option has no product."))?
-            .get();
-        let name = opt.get(tx, SaleOrderOption::NAME).await?;
-        let qty = opt.get(tx, SaleOrderOption::QUANTITY).await?;
-        let uom_id = match opt.get(tx, SaleOrderOption::UOM_ID).await? {
-            Some(u) => u.get(),
-            None => default_unit_uom_id(tx).await?,
-        };
-        let price = opt.get(tx, SaleOrderOption::PRICE_UNIT).await?;
-        let discount = opt.get(tx, SaleOrderOption::DISCOUNT).await?;
+        let env = strip_default_context(opt.env());
 
-        let env = opt.env().with_context_replaced(erp_sdk::Context::default());
-        let mut lvals = RawVals::new();
-        lvals.insert("order_id".into(), Cell::Id(order_id));
-        lvals.insert("product_id".into(), Cell::Id(product_id));
-        if let Some(n) = name {
-            lvals.insert("name".into(), Cell::Str(n));
-        }
-        lvals.insert("product_uom_qty".into(), Cell::Decimal(qty));
-        lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
-        lvals.insert("price_unit".into(), Cell::Decimal(price));
-        lvals.insert("discount".into(), Cell::Decimal(discount));
-        env.records("sale.order.line")?
-            .create(tx, vec![lvals])
-            .await?;
+        tx.savepoint(async |tx| {
+            tx.flush().await?;
+            opt.as_records().lock_for_update(tx, true).await?;
+            if opt.get(tx, SaleOrderOption::IS_PRESENT).await? {
+                return Err(Error::user(
+                    "This optional product has already been added to the order.",
+                ));
+            }
+            let order_id = opt
+                .get(tx, SaleOrderOption::ORDER_ID)
+                .await?
+                .ok_or_else(|| Error::validation("Option has no sales order."))?
+                .get();
+            let order_rec = env.records("sale.order")?.browse([order_id])?;
+            order_rec.check_access(tx, Operation::Write).await?;
+            order_rec.lock_for_update(tx, true).await?;
+            let state = order_rec.cell(tx, "state").await?;
+            if !matches!(state, Cell::Str(ref s) if matches!(s.as_ref(), "draft" | "sent")) {
+                return Err(Error::user(
+                    "Optional products can only be added to draft or sent quotations.",
+                ));
+            }
+            if order_rec.cell(tx, "locked").await? == Cell::Bool(true) {
+                return Err(Error::user(
+                    "This sales order is locked and cannot accept optional products.",
+                ));
+            }
 
-        tx.execute(
-            "UPDATE sale_order_option SET is_present = true, \
-             write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-            &[&opt_id],
-        )
+            let product_id = opt
+                .get(tx, SaleOrderOption::PRODUCT_ID)
+                .await?
+                .ok_or_else(|| Error::validation("Option has no product."))?
+                .get();
+            let name = opt.get(tx, SaleOrderOption::NAME).await?;
+            let qty = opt.get(tx, SaleOrderOption::QUANTITY).await?;
+            let uom_id = match opt.get(tx, SaleOrderOption::UOM_ID).await? {
+                Some(u) => u.get(),
+                None => default_unit_uom_id(tx).await?,
+            };
+            let price = opt.get(tx, SaleOrderOption::PRICE_UNIT).await?;
+            let discount = opt.get(tx, SaleOrderOption::DISCOUNT).await?;
+
+            let mut lvals = RawVals::new();
+            lvals.insert("order_id".into(), Cell::Id(order_id));
+            lvals.insert("product_id".into(), Cell::Id(product_id));
+            if let Some(n) = name {
+                lvals.insert("name".into(), Cell::Str(n));
+            }
+            lvals.insert("product_uom_qty".into(), Cell::Decimal(qty));
+            lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
+            lvals.insert("price_unit".into(), Cell::Decimal(price));
+            lvals.insert("discount".into(), Cell::Decimal(discount));
+            env.records("sale.order.line")?
+                .create(tx, vec![lvals])
+                .await?;
+
+            opt.as_records()
+                .write_base(tx, RawVals::new().set_cell("is_present", Cell::Bool(true)))
+                .await
+        })
         .await?;
-        tx.invalidate_records(opt.as_records(), Some(&["is_present"]))
-            .await?;
+
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",
@@ -457,146 +587,167 @@ impl SaleOrder {
             .check_access(tx, Operation::Write)
             .await?;
         let oid = order.as_records().ids()[0];
-        let state = order.get(tx, SaleOrder::STATE).await?;
-        if !matches!(state.as_deref(), Some("draft" | "sent")) {
-            return Err(Error::user(
-                "Quotation templates can only be applied to draft or sent quotations.",
-            ));
-        }
-        let tpl_id = order
-            .get(tx, SaleOrder::SALE_ORDER_TEMPLATE_ID)
-            .await?
-            .ok_or_else(|| Error::user("Select a Quotation Template first."))?
-            .get();
+        let env = strip_default_context(order.env());
 
-        let env = order
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
-        let trows = tx
-            .query(
-                "SELECT COALESCE(number_of_days, 30), COALESCE(require_signature, true), \
-                        COALESCE(require_payment, false), note::text \
-                 FROM sale_order_template WHERE id = $1",
-                &[&tpl_id],
-            )
-            .await?;
-        let Some(trow) = trows.first() else {
-            return Err(Error::missing("Quotation template not found."));
-        };
-        let days: i32 = trow.try_get(0).map_err(db)?;
-        let req_sig: bool = trow.try_get(1).map_err(db)?;
-        let req_pay: bool = trow.try_get(2).map_err(db)?;
-        let note: Option<String> = trow.try_get(3).map_err(db)?;
+        let (added_lines, added_opts) = tx
+            .savepoint(async |tx| {
+                tx.flush().await?;
+                order.as_records().lock_for_update(tx, true).await?;
 
-        let mut uvals = RawVals::new();
-        if days > 0 {
-            let today = Date::today();
-            uvals.insert(
-                "validity_date".into(),
-                Cell::Date(Date::from_days(today.days() + days)),
-            );
-        }
-        uvals.insert("require_signature".into(), Cell::Bool(req_sig));
-        uvals.insert("require_payment".into(), Cell::Bool(req_pay));
-        if let Some(n) = note
-            && !n.trim().is_empty()
-        {
-            uvals.insert("note".into(), Cell::Str(n.into()));
-        }
-        env.records("sale.order")?
-            .browse([oid])?
-            .write(tx, uvals)
-            .await?;
-
-        let fallback_uom = default_unit_uom_id(tx).await?;
-        let lrows = tx
-            .query(
-                "SELECT sequence, display_type::text, product_id::int8, name::text, \
-                        COALESCE(product_uom_qty, 1), product_uom_id::int8 \
-                 FROM sale_order_template_line WHERE template_id = $1 ORDER BY sequence, id",
-                &[&tpl_id],
-            )
-            .await?;
-        let mut new_lines = Vec::with_capacity(lrows.len());
-        for lrow in lrows {
-            let seq: i32 = lrow.try_get(0).map_err(db)?;
-            let dtype: Option<String> = lrow.try_get(1).map_err(db)?;
-            let pid: Option<i64> = lrow.try_get(2).map_err(db)?;
-            let lname: String = lrow.try_get(3).map_err(db)?;
-            let qty: Decimal = lrow.try_get(4).map_err(db)?;
-            let uom: Option<i64> = lrow.try_get(5).map_err(db)?;
-
-            let mut v = RawVals::new();
-            v.insert("order_id".into(), Cell::Id(oid));
-            v.insert("sequence".into(), Cell::Int(seq));
-            v.insert("name".into(), Cell::Str(lname.into()));
-            if let Some(dt) = dtype {
-                v.insert("display_type".into(), Cell::Str(dt.into()));
-            } else {
-                if let Some(p) = pid {
-                    v.insert("product_id".into(), Cell::Id(p));
+                let state = order.get(tx, SaleOrder::STATE).await?;
+                if !matches!(state.as_deref(), Some("draft" | "sent")) {
+                    return Err(Error::user(
+                        "Quotation templates can only be applied to draft or sent quotations.",
+                    ));
                 }
-                v.insert("product_uom_qty".into(), Cell::Decimal(qty));
-                let chosen_uom = match uom {
-                    Some(u) => u,
-                    None => {
-                        if let Some(p) = pid {
-                            match env
-                                .records("product.product")?
-                                .browse([p])?
-                                .cell(tx, "uom_id")
-                                .await
-                            {
-                                Ok(Cell::Id(u)) => u,
-                                _ => fallback_uom,
-                            }
-                        } else {
-                            fallback_uom
-                        }
-                    }
-                };
-                v.insert("product_uom_id".into(), Cell::Id(chosen_uom));
-            }
-            new_lines.push(v);
-        }
-        let added_lines = new_lines.len();
-        if !new_lines.is_empty() {
-            env.records("sale.order.line")?
-                .create(tx, new_lines)
-                .await?;
-        }
+                if order.get(tx, SaleOrder::LOCKED).await? {
+                    return Err(Error::user(
+                        "This sales order is locked and cannot apply a quotation template.",
+                    ));
+                }
+                let tpl_id = order
+                    .get(tx, SaleOrder::SALE_ORDER_TEMPLATE_ID)
+                    .await?
+                    .ok_or_else(|| Error::user("Select a Quotation Template first."))?
+                    .get();
 
-        let orows = tx
-            .query(
-                "SELECT product_id::int8, name::text, COALESCE(quantity, 1), uom_id::int8 \
-                 FROM sale_order_template_option WHERE template_id = $1 ORDER BY id",
-                &[&tpl_id],
-            )
+                // Enforce template read ACL and company scope.
+                let tpl_rec = env.records("sale.order.template")?.browse([tpl_id])?;
+                tpl_rec.check_access(tx, Operation::Read).await?;
+
+                let trows = tx
+                    .query(
+                        "SELECT COALESCE(number_of_days, 30), COALESCE(require_signature, true), \
+                                COALESCE(require_payment, false), note::text \
+                         FROM sale_order_template WHERE id = $1",
+                        &[&tpl_id],
+                    )
+                    .await?;
+                let Some(trow) = trows.first() else {
+                    return Err(Error::missing("Quotation template not found."));
+                };
+                let days: i32 = trow.try_get(0).map_err(db)?;
+                let req_sig: bool = trow.try_get(1).map_err(db)?;
+                let req_pay: bool = trow.try_get(2).map_err(db)?;
+                let note: Option<String> = trow.try_get(3).map_err(db)?;
+
+                let mut uvals = RawVals::new();
+                if days > 0 {
+                    let today = env.context_today()?;
+                    uvals.insert(
+                        "validity_date".into(),
+                        Cell::Date(Date::from_days(today.days() + days)),
+                    );
+                }
+                uvals.insert("require_signature".into(), Cell::Bool(req_sig));
+                uvals.insert("require_payment".into(), Cell::Bool(req_pay));
+                if let Some(n) = note
+                    && !n.trim().is_empty()
+                {
+                    uvals.insert("note".into(), Cell::Str(n.into()));
+                }
+                env.records("sale.order")?
+                    .browse([oid])?
+                    .write(tx, uvals)
+                    .await?;
+
+                let fallback_uom = default_unit_uom_id(tx).await?;
+                let lrows = tx
+                    .query(
+                        "SELECT sequence, display_type::text, product_id::int8, name::text, \
+                                COALESCE(product_uom_qty, 1), product_uom_id::int8 \
+                         FROM sale_order_template_line WHERE template_id = $1 ORDER BY sequence, id",
+                        &[&tpl_id],
+                    )
+                    .await?;
+                let mut new_lines = Vec::with_capacity(lrows.len());
+                for lrow in lrows {
+                    let seq: i32 = lrow.try_get(0).map_err(db)?;
+                    let dtype: Option<String> = lrow.try_get(1).map_err(db)?;
+                    let pid: Option<i64> = lrow.try_get(2).map_err(db)?;
+                    let lname: String = lrow.try_get(3).map_err(db)?;
+                    let qty: Decimal = lrow.try_get(4).map_err(db)?;
+                    let uom: Option<i64> = lrow.try_get(5).map_err(db)?;
+
+                    let mut v = RawVals::new();
+                    v.insert("order_id".into(), Cell::Id(oid));
+                    v.insert("sequence".into(), Cell::Int(seq));
+                    v.insert("name".into(), Cell::Str(lname.into()));
+                    if let Some(dt) = dtype {
+                        v.insert("display_type".into(), Cell::Str(dt.into()));
+                    } else {
+                        if let Some(p) = pid {
+                            v.insert("product_id".into(), Cell::Id(p));
+                        }
+                        v.insert("product_uom_qty".into(), Cell::Decimal(qty));
+                        let chosen_uom = match uom {
+                            Some(u) => u,
+                            None => {
+                                if let Some(p) = pid {
+                                    match env
+                                        .records("product.product")?
+                                        .browse([p])?
+                                        .cell(tx, "uom_id")
+                                        .await?
+                                    {
+                                        Cell::Id(u) => u,
+                                        Cell::Null => fallback_uom,
+                                        other => {
+                                            return Err(Error::programming(format!(
+                                                "product.product.uom_id returned {other:?}"
+                                            )));
+                                        }
+                                    }
+                                } else {
+                                    fallback_uom
+                                }
+                            }
+                        };
+                        v.insert("product_uom_id".into(), Cell::Id(chosen_uom));
+                    }
+                    new_lines.push(v);
+                }
+                let added_lines = new_lines.len();
+                if !new_lines.is_empty() {
+                    env.records("sale.order.line")?
+                        .create(tx, new_lines)
+                        .await?;
+                }
+
+                let orows = tx
+                    .query(
+                        "SELECT product_id::int8, name::text, COALESCE(quantity, 1), uom_id::int8 \
+                         FROM sale_order_template_option WHERE template_id = $1 ORDER BY id",
+                        &[&tpl_id],
+                    )
+                    .await?;
+                let mut new_opts = Vec::with_capacity(orows.len());
+                for orow in orows {
+                    let pid: i64 = orow.try_get(0).map_err(db)?;
+                    let oname: Option<String> = orow.try_get(1).map_err(db)?;
+                    let qty: Decimal = orow.try_get(2).map_err(db)?;
+                    let uom: Option<i64> = orow.try_get(3).map_err(db)?;
+                    let mut v = RawVals::new();
+                    v.insert("order_id".into(), Cell::Id(oid));
+                    v.insert("product_id".into(), Cell::Id(pid));
+                    if let Some(n) = oname {
+                        v.insert("name".into(), Cell::Str(n.into()));
+                    }
+                    v.insert("quantity".into(), Cell::Decimal(qty));
+                    if let Some(u) = uom {
+                        v.insert("uom_id".into(), Cell::Id(u));
+                    }
+                    new_opts.push(v);
+                }
+                let added_opts = new_opts.len();
+                if !new_opts.is_empty() {
+                    env.records("sale.order.option")?
+                        .create(tx, new_opts)
+                        .await?;
+                }
+                Ok((added_lines, added_opts))
+            })
             .await?;
-        let mut new_opts = Vec::with_capacity(orows.len());
-        for orow in orows {
-            let pid: i64 = orow.try_get(0).map_err(db)?;
-            let oname: Option<String> = orow.try_get(1).map_err(db)?;
-            let qty: Decimal = orow.try_get(2).map_err(db)?;
-            let uom: Option<i64> = orow.try_get(3).map_err(db)?;
-            let mut v = RawVals::new();
-            v.insert("order_id".into(), Cell::Id(oid));
-            v.insert("product_id".into(), Cell::Id(pid));
-            if let Some(n) = oname {
-                v.insert("name".into(), Cell::Str(n.into()));
-            }
-            v.insert("quantity".into(), Cell::Decimal(qty));
-            if let Some(u) = uom {
-                v.insert("uom_id".into(), Cell::Id(u));
-            }
-            new_opts.push(v);
-        }
-        let added_opts = new_opts.len();
-        if !new_opts.is_empty() {
-            env.records("sale.order.option")?
-                .create(tx, new_opts)
-                .await?;
-        }
 
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
@@ -621,27 +772,45 @@ impl SaleOrder {
             .check_access(tx, Operation::Write)
             .await?;
         let oid = order.as_records().ids()[0];
-        let rows = tx
-            .query(
-                "SELECT id::int8 FROM sale_order_option \
-                 WHERE order_id = $1 AND NOT COALESCE(is_present, false) ORDER BY id",
-                &[&oid],
-            )
+        let count = tx
+            .savepoint(async |tx| {
+                tx.flush().await?;
+                order.as_records().lock_for_update(tx, true).await?;
+                let state = order.get(tx, SaleOrder::STATE).await?;
+                if !matches!(state.as_deref(), Some("draft" | "sent")) {
+                    return Err(Error::user(
+                        "Optional products can only be added to draft or sent quotations.",
+                    ));
+                }
+                if order.get(tx, SaleOrder::LOCKED).await? {
+                    return Err(Error::user(
+                        "This sales order is locked and cannot accept optional products.",
+                    ));
+                }
+                let rows = tx
+                    .query(
+                        "SELECT id::int8 FROM sale_order_option \
+                         WHERE order_id = $1 AND NOT COALESCE(is_present, false) ORDER BY id",
+                        &[&oid],
+                    )
+                    .await?;
+                if rows.is_empty() {
+                    return Err(Error::user(
+                        "There are no pending optional products left to add.",
+                    ));
+                }
+                let ids: Vec<i64> = rows
+                    .iter()
+                    .map(|r| r.try_get::<_, i64>(0).map_err(db))
+                    .collect::<Result<_>>()?;
+                let opts = order.env().records("sale.order.option")?.browse(ids)?;
+                let count = opts.len();
+                for opt in opts.iter() {
+                    let _: Value = opt.call(tx, "button_add_to_order", ()).await?;
+                }
+                Ok(count)
+            })
             .await?;
-        if rows.is_empty() {
-            return Err(Error::user(
-                "There are no pending optional products left to add.",
-            ));
-        }
-        let ids: Vec<i64> = rows
-            .iter()
-            .map(|r| r.try_get::<_, i64>(0).map_err(db))
-            .collect::<Result<_>>()?;
-        let opts = order.env().records("sale.order.option")?.browse(ids)?;
-        let count = opts.len();
-        for opt in opts.iter() {
-            let _: Value = opt.call(tx, "button_add_to_order", ()).await?;
-        }
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",

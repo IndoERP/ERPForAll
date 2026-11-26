@@ -24,16 +24,32 @@ pub const STATES: [(&str, &str); 4] = [
 /// Fields only the operations and the status computes change: never written by a caller, also
 /// not with sudo, on create, on write or as a `default_<field>` context key; `name` comes last, a
 /// create may give it (V6, V11, V12).
-const OPERATION_FIELDS: [&str; 6] = [
+const OPERATION_FIELDS: [&str; 8] = [
     "state",
     "locked",
     "invoicing_closed",
     "invoice_status",
     "delivery_status",
+    "signed_by",
+    "signed_on",
     "name",
 ];
 /// The fields of `OPERATION_FIELDS` a create refuses.
-const CREATE_REFUSED: &[&str] = OPERATION_FIELDS.split_at(5).0;
+const CREATE_REFUSED: &[&str] = OPERATION_FIELDS.split_at(7).0;
+
+/// Returns a copy of `env` with `default_*` keys removed while preserving `tz`, `lang`,
+/// `company_id`, `allowed_company_ids`, and all other caller context entries.
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
+}
 
 fn now(_ctx: &erp_sdk::DefaultContext) -> Value {
     Value::DateTime(DateTime::now())
@@ -1124,7 +1140,14 @@ impl SaleOrder {
             }
             // the form's read-only rules are the server's rules, refused by name
             let frozen: &[&str] = if order.state == "sale" {
-                &["date_order", "validity_date", "fiscal_position_id"]
+                &[
+                    "date_order",
+                    "validity_date",
+                    "fiscal_position_id",
+                    "sale_order_template_id",
+                    "require_signature",
+                    "require_payment",
+                ]
             } else {
                 &[]
             };
