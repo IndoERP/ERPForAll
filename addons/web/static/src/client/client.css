@@ -5385,11 +5385,26 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 @media (max-width: 768px) { .stored-map { grid-template-columns: 1fr; } }
 .technical-attachment-download { display: block; width: fit-content; margin-top: .5rem; font-size: .875rem; }
 
-/* QA Layout & Controls Polish (QA-UI-05, QA-UI-06, QA-UI-08, QA-WEB-01) */
+/* QA Layout & Controls Polish (QA-UI-01..08, QA-PUR-02, QA-WEB-01) */
+select.styled-select { appearance: none; -webkit-appearance: none; -moz-appearance: none; }
+select.styled-select::picker-icon { display: none; }
+@media (min-width: 901px) {
+  .control-panel-form:has(> .form-record-smart) { grid-template-columns: auto minmax(120px, 1fr) minmax(0, auto) auto; }
+}
 .record-form .many2one-readonly { min-width: 0; max-width: 100%; }
 .record-form .many2one-readonly > .related-record-link { max-width: 100%; overflow-wrap: anywhere; }
+:not(.wizard-dialog) > .content-sheet > .record-form .field-label .many2many-tags .tag-list { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.record-form .many2many-tags .relation-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.x2many-dialog .record-form:not(.settings-form) .many2one-control > .many2one-input,
+.wizard-dialog .record-form:not(.settings-form) .many2one-control > .many2one-input { padding-inline-start: 4px; text-overflow: ellipsis; }
+.record-form-viewport > .form-record-header,
+.record-form-viewport > .form-record-header .form-header-actions button,
+.record-form-viewport > .form-record-header .form-statusbar button { scroll-margin-top: calc(var(--app-bar-height) + var(--control-panel-height, 56px) + 12px); }
 .hr-widget, .hr-resume-card, .hr-resume-title { min-width: 0; overflow-wrap: anywhere; }
 .activity-menu-systray .activity-menu-dropdown.open { display: block; z-index: 120; }
+@media (max-width: 1366px) {
+  .list-table { --list-cell-x: 8px; }
+}
 @media (min-width: 769px) {
   .settings-sidebar {
     position: sticky;

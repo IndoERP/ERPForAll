@@ -271,6 +271,7 @@ fn contacts_install_creates_every_record_by_xml_id() {
                 "contacts.action_contact_tags_form",
                 "contacts.action_contact_tags_list",
                 "contacts.action_contacts_form",
+                "contacts.action_contacts_kanban",
                 "contacts.action_contacts_list",
             ]
         );
@@ -290,6 +291,7 @@ fn contacts_install_creates_every_record_by_xml_id() {
         let base_views = xml_ids(&orm, "base", "ir.ui.view").await;
         for id in [
             "base.partner_list",
+            "base.partner_kanban",
             "base.partner_form",
             "base.partner_search",
             "base.partner_category_list",
@@ -326,7 +328,7 @@ fn contacts_menu_resolves_to_a_list_and_form_action() {
                    AND m.parent_id IS NULL AND m.web_icon = 'lucide:contact'"
             )
             .await,
-            ["res.partner|list,form|contacts.action_contacts|group_user"]
+            ["res.partner|list,kanban,form|contacts.action_contacts|group_user"]
         );
         // The Contact Tags entry sits under Configuration (administrators) and opens the tag action.
         assert_eq!(
@@ -347,7 +349,7 @@ fn contacts_menu_resolves_to_a_list_and_form_action() {
             .await,
             ["res.partner.category|menu_contacts_config|group_system"]
         );
-        // The action's per-type views, in order: list then form.
+        // The action's per-type views, in order: list, kanban, then form.
         assert_eq!(
             strings(
                 &orm,
@@ -358,7 +360,7 @@ fn contacts_menu_resolves_to_a_list_and_form_action() {
                  WHERE da.module = 'contacts' AND da.name = 'action_contacts' ORDER BY v.sequence"
             )
             .await,
-            ["list:partner_list", "form:partner_form"]
+            ["list:partner_list", "kanban:partner_kanban", "form:partner_form"]
         );
     });
 }
@@ -368,9 +370,9 @@ fn contacts_menu_resolves_to_a_list_and_form_action() {
 fn partner_views_validate_and_serve_the_documented_fields() {
     big_stack(async {
         let (_db, orm) = with_contacts(false).await;
-        let served = get_views(&orm, "res.partner", &["list", "form", "search"]).await;
+        let served = get_views(&orm, "res.partner", &["list", "kanban", "form", "search"]).await;
         let views = served["views"].as_array().unwrap();
-        assert_eq!(views.len(), 3, "{served}");
+        assert_eq!(views.len(), 4, "{served}");
         assert_eq!(
             field_names(&views[0]),
             [
@@ -382,7 +384,14 @@ fn partner_views_validate_and_serve_the_documented_fields() {
                 "category_id"
             ]
         );
-        let form = field_names(&views[1]);
+        let kanban = field_names(&views[1]);
+        for field in ["complete_name", "email", "phone", "city", "category_id"] {
+            assert!(
+                kanban.contains(&field.to_owned()),
+                "partner kanban missing {field}: {kanban:?}"
+            );
+        }
+        let form = field_names(&views[2]);
         for field in [
             "name",
             "is_company",
@@ -613,6 +622,7 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
 
         let view_xml_ids: &[&str] = &[
             "partner_list",
+            "partner_kanban",
             "partner_form",
             "partner_search",
             "partner_category_list",
@@ -709,6 +719,7 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
         let base_views = xml_ids(&upgraded.orm, "base", "ir.ui.view").await;
         for id in [
             "base.partner_list",
+            "base.partner_kanban",
             "base.partner_form",
             "base.partner_search",
             "base.partner_category_list",
@@ -734,8 +745,13 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
         }
 
         // 4. Verify views can be served
-        let served = get_views(&upgraded.orm, "res.partner", &["list", "form", "search"]).await;
-        assert_eq!(served["views"].as_array().unwrap().len(), 3);
+        let served = get_views(
+            &upgraded.orm,
+            "res.partner",
+            &["list", "kanban", "form", "search"],
+        )
+        .await;
+        assert_eq!(served["views"].as_array().unwrap().len(), 4);
     });
 }
 
@@ -784,14 +800,18 @@ fn mail_install_on_contacts_serves_chatter_on_partner_form() {
         assert_eq!(chatter["reload_on_activity"], false);
         assert_eq!(chatter["reload_on_follower"], false);
         assert_eq!(chatter["open_attachments"], false);
-        assert_eq!(chatter["has_activities"], false);
+        assert_eq!(chatter["has_activities"], true);
 
-        // Confirm res.partner records inherit mail.thread
+        // Confirm res.partner records inherit mail.thread and mail.activity.mixin
         let mut tx = orm_after.begin(SUPERUSER_ID).await.unwrap();
         let partner_records = tx.env().records("res.partner").unwrap();
         assert!(
             partner_records.spec().inherits("mail.thread"),
             "res.partner must inherit mail.thread after mail install"
+        );
+        assert!(
+            partner_records.spec().inherits("mail.activity.mixin"),
+            "res.partner must inherit mail.activity.mixin after mail install"
         );
         tx.rollback().await.unwrap();
     });

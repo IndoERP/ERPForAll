@@ -335,6 +335,15 @@ The total with taxes and
           <field name="sales_order_count" widget="statinfo" string="Sales"/>
         </button>
       </xpath>
+      <xpath expr="//notebook" position="inside">
+        <page name="sales" string="Sales">
+          <group>
+            <group name="invoicing" string="Invoicing">
+              <field name="invoice_policy"/>
+            </group>
+          </group>
+        </page>
+      </xpath>
     </field>
   </record>
 </erp>

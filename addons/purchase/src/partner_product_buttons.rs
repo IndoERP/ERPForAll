@@ -23,9 +23,27 @@ const PRODUCT_PURCHASES: &str = "SELECT DISTINCT p.product_tmpl_id::int8, l.orde
     JOIN purchase_order o ON o.id = l.order_id \
     WHERE p.product_tmpl_id = ANY($1) AND o.state = 'purchase'";
 
-/// `res.partner` with its readable purchase order count.
+/// `res.partner` with its readable purchase order count and vendor filter links.
 #[extend(ResPartner, addon = "purchase")]
 pub struct PartnerPurchaseOrders {
+    /// Purchase orders placed with this vendor (used for vendor filtering).
+    #[field(
+        one2many,
+        comodel = "purchase.order",
+        inverse_name = "partner_id",
+        groups = "purchase.group_purchase_user",
+        string = "Purchase Orders"
+    )]
+    pub purchase_order_ids: Vec<RecId>,
+    /// Vendor pricelist entries for this partner (used for vendor filtering).
+    #[field(
+        one2many,
+        comodel = "product.supplierinfo",
+        inverse_name = "partner_id",
+        groups = "purchase.group_purchase_user",
+        string = "Vendor Pricelists"
+    )]
+    pub supplierinfo_ids: Vec<RecId>,
     /// Readable confirmed purchase orders placed with this vendor.
     #[field(
         integer,

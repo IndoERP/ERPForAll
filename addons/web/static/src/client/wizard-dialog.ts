@@ -78,7 +78,7 @@ export class WizardDialog {
       changeValues: (changes, focus) => this.runCommit(async () => {
         if (this.surface.needsCommit()) await this.surface.commit();
         env.state.changeMany(changes); await env.state.onchange(Object.keys(changes));
-        if (!this.dead) { this.surface.render(focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
+        if (!this.dead) { this.surface.render(this.surface.focus() || focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
       }),
       stage: (name, value) => {
         if (this.dead || this.uncertain || this.saveUncertain) throw new ClientError("validation", "The wizard cannot be edited during this operation.");
@@ -87,7 +87,7 @@ export class WizardDialog {
       commit: async (name, focus) => {
         if (this.dead || this.uncertain || this.saveUncertain) throw new ClientError("validation", "The wizard cannot commit this draft.");
         await env.state.onchange(name);
-        if (!this.dead) { this.surface.render(focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
+        if (!this.dead) { this.surface.render(this.surface.focus() || focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
       },
       change: (name, value, focus) => {
         // A password form has no server onchange (item 7). Its field commit stages the value at once:
@@ -104,7 +104,7 @@ export class WizardDialog {
           if (this.surface.needsCommit()) await this.surface.commit();
           env.state.change(name, value);
           await env.state.onchange(name);
-          if (!this.dead) { this.surface.render(focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
+          if (!this.dead) { this.surface.render(this.surface.focus() || focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
         });
       },
       button: (node, parent) => this.renderButton(node, parent),

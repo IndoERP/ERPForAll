@@ -12,13 +12,17 @@
           <field name="purchase_order_count" widget="statinfo" string="Purchases"/>
         </button>
       </xpath>
-      <xpath expr="//page[@name='general_information']" position="inside">
-        <group name="purchase_bill_control" string="Vendor bills">
-          <field name="purchase_method" widget="radio"/>
-        </group>
-        <group name="purchase_warnings" string="Notice on purchase orders" groups="purchase.group_warning_purchase">
-          <field name="purchase_line_warn_msg" placeholder="e.g. Verify specification before ordering."/>
-        </group>
+      <xpath expr="//notebook" position="inside">
+        <page name="purchase" string="Purchase">
+          <group>
+            <group name="purchase_bill_control" string="Vendor bills">
+              <field name="purchase_method" widget="radio"/>
+            </group>
+            <group name="purchase_warnings" string="Notice on purchase orders" groups="purchase.group_warning_purchase">
+              <field name="purchase_line_warn_msg" placeholder="e.g. Verify specification before ordering."/>
+            </group>
+          </group>
+        </page>
       </xpath>
     </field>
   </record>

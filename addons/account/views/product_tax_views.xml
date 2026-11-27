@@ -6,11 +6,17 @@
     <field name="model">product.template</field>
     <field name="inherit_id" ref="product.product_template_form_view"/>
     <field name="arch" type="xml">
-      <xpath expr="//field[@name='list_price']" position="after">
-        <field name="taxes_id" widget="many2many_tags"/>
-      </xpath>
-      <xpath expr="//field[@name='standard_price']" position="after">
-        <field name="supplier_taxes_id" widget="many2many_tags"/>
+      <xpath expr="//notebook" position="inside">
+        <page name="accounting" string="Accounting">
+          <group>
+            <group name="receivables" string="Sales Taxes">
+              <field name="taxes_id" widget="many2many_tags"/>
+            </group>
+            <group name="payables" string="Purchase Taxes">
+              <field name="supplier_taxes_id" widget="many2many_tags"/>
+            </group>
+          </group>
+        </page>
       </xpath>
     </field>
   </record>

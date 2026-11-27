@@ -124,7 +124,7 @@ export class RecordForm {
     env.form.noValidate = true;
     if ((env.titleHost || env.asideHost) && !env.form.id) env.form.id = `record-form-${++nextRecordForm}`;
   }
-  private hosts(): HTMLElement[] { return [this.env.form, this.env.headerHost, this.env.smartHost, this.env.headerActionsHost, this.env.titleHost, this.env.notebookTabsHost, this.env.asideHost].filter((host): host is HTMLElement => host !== undefined); }
+  private hosts(): HTMLElement[] { return [this.env.form, this.env.headerHost, this.env.smartHost, this.env.headerActionsHost, this.env.titleHost, this.env.notebookTabsHost, this.env.asideHost, this.env.footerHost].filter((host): host is HTMLElement => host !== undefined); }
   focus(): string | undefined { return this.hosts().map(host => formFocus(host)).find(key => key !== undefined); }
   controls(): (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement)[] {
     // Draft engines own their internal input/history policy through setDisabled, not native snapshots.
@@ -299,7 +299,12 @@ export class RecordForm {
     this.chatterSeen = false;
     const declaredTitle = (nodes: readonly Node[]): boolean => nodes.some(node => node.kind === "title" || (node.kind === "root" || node.kind === "sheet") && declaredTitle(node.children));
     // Legacy fallback remains only for views that have not declared a standard XML title region.
-    const title = declaredTitle(view.nodes) ? undefined : view.fields.find(f => f.name === "name" && f.kind === "char") ?? view.fields.find(f => f.kind === "char");
+    // Wizard dialogs and transient note/reason/memo forms never promote an arbitrary char field into a label-less heading.
+    const nonTitleChar = new Set(["note", "reason", "communication", "memo", "payment_ref", "ref", "description"]);
+    const title = declaredTitle(view.nodes)
+      ? undefined
+      : view.fields.find(f => f.name === "name" && f.kind === "char")
+        ?? (this.env.footerHost ? undefined : view.fields.find(f => f.kind === "char" && !nonTitleChar.has(f.name)));
     let titleRendered = false;
     let pendingTips: { anchor: HTMLElement; text: string }[] = [];
     this.layout = renderFormLayout(form, nodes, (node, parent) => {

@@ -748,3 +748,186 @@ async fn restrict_margin_columns(
     .await?;
     Ok(())
 }
+
+/// Add the `Margin %` column and formulas to `Sales by Product` on upgraded databases (where
+/// `sale_report_data.xml` is `noupdate="1"`), enforce its salesman group, and reconcile any stale
+/// stored line/order margins using currency precision.
+#[erp_sdk::migration(addon = "sale", version = "1.11", stage = post)]
+async fn align_sales_by_product_margin(
+    tx: &mut Transaction,
+    _from: &erp_sdk::migrations::SemverVersion,
+) -> Result<()> {
+    tx.flush().await?;
+    let report_rows = tx
+        .query(
+            "SELECT r.id::int8 \
+             FROM ir_model_data d \
+             JOIN reporting_report r ON r.id = d.res_id \
+             WHERE d.module = 'sale' AND d.model = 'reporting.report' AND d.name = 'report_sales_by_product'",
+            &[],
+        )
+        .await?;
+    if let Some(row) = report_rows.first() {
+        let report_id: i64 = row
+            .try_get(0)
+            .map_err(|e| Error::db("Could not read Sales by Product report id.").with_source(e))?;
+        let col_xmlid_exists = tx
+            .query(
+                "SELECT 1 FROM ir_model_data \
+                 WHERE module = 'sale' AND model = 'reporting.report.column' AND name = 'sale_prod_col_margin_pct'",
+                &[],
+            )
+            .await?;
+        let col_label_exists = tx
+            .query(
+                "SELECT id::int8 FROM reporting_report_column WHERE report_id = $1 AND label = 'margin_pct'",
+                &[&report_id],
+            )
+            .await?;
+        if col_xmlid_exists.is_empty() && col_label_exists.is_empty() {
+            let inserted = tx
+                .query(
+                    "INSERT INTO reporting_report_column \
+                     (report_id, sequence, name, label, kind, scale, sortable, blank_if_zero, rollup, groups) \
+                     VALUES ($1, 40, jsonb_build_object('en_US', 'Margin %'), 'margin_pct', 'percent', 2, true, false, 'sum', 'sales_team.group_sale_salesman') \
+                     RETURNING id::int8",
+                    &[&report_id],
+                )
+                .await?;
+            if let Some(col_row) = inserted.first() {
+                let col_id: i64 = col_row
+                    .try_get(0)
+                    .map_err(|e| Error::db("Could not read inserted column id.").with_source(e))?;
+                tx.execute(
+                    "INSERT INTO ir_model_data (module, name, model, res_id, noupdate) \
+                     VALUES ('sale', 'sale_prod_col_margin_pct', 'reporting.report.column', $1, true) \
+                     ON CONFLICT (module, name) DO NOTHING",
+                    &[&col_id],
+                )
+                .await?;
+            }
+        }
+        tx.execute(
+            "UPDATE reporting_report_column c SET groups = 'sales_team.group_sale_salesman' \
+             FROM ir_model_data d \
+             WHERE d.module = 'sale' AND d.model = 'reporting.report.column' AND d.res_id = c.id \
+               AND d.name = 'sale_prod_col_margin_pct'",
+            &[],
+        )
+        .await?;
+
+        for (line_xmlid, expr_xmlid) in [
+            ("sale_prod_line_confirmed", "sale_prod_conf_mar_pct"),
+            ("sale_prod_line_quotations", "sale_prod_quot_mar_pct"),
+        ] {
+            let line_rows = tx
+                .query(
+                    "SELECT l.id::int8 \
+                     FROM ir_model_data d \
+                     JOIN reporting_report_line l ON l.id = d.res_id \
+                     WHERE d.module = 'sale' AND d.model = 'reporting.report.line' AND d.name = $1",
+                    &[&line_xmlid],
+                )
+                .await?;
+            if let Some(lrow) = line_rows.first() {
+                let line_id: i64 = lrow.try_get(0).map_err(|e| {
+                    Error::db("Could not read Sales by Product line id.").with_source(e)
+                })?;
+                let expr_xmlid_exists = tx
+                    .query(
+                        "SELECT 1 FROM ir_model_data \
+                         WHERE module = 'sale' AND model = 'reporting.report.expression' AND name = $1",
+                        &[&expr_xmlid],
+                    )
+                    .await?;
+                let expr_label_exists = tx
+                    .query(
+                        "SELECT id::int8 FROM reporting_report_expression WHERE line_id = $1 AND label = 'margin_pct'",
+                        &[&line_id],
+                    )
+                    .await?;
+                let prereq_count: i64 = tx
+                    .query(
+                        "SELECT COUNT(DISTINCT label)::int8 FROM reporting_report_expression \
+                         WHERE line_id = $1 AND label IN ('margin', 'untaxed')",
+                        &[&line_id],
+                    )
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::db("Could not count prerequisite expressions."))?
+                    .try_get(0)
+                    .map_err(|e| {
+                        Error::db("Could not decode prerequisite count.").with_source(e)
+                    })?;
+                if expr_xmlid_exists.is_empty() && expr_label_exists.is_empty() && prereq_count == 2
+                {
+                    let inserted = tx
+                        .query(
+                            "INSERT INTO reporting_report_expression \
+                             (line_id, label, engine, formula, date_scope, zero_division) \
+                             VALUES ($1, 'margin_pct', 'formula', 'margin * 100 / untaxed', 'strict_range', 'empty') \
+                             RETURNING id::int8",
+                            &[&line_id],
+                        )
+                        .await?;
+                    if let Some(erow) = inserted.first() {
+                        let expr_id: i64 = erow.try_get(0).map_err(|e| {
+                            Error::db("Could not read inserted expression id.").with_source(e)
+                        })?;
+                        tx.execute(
+                            "INSERT INTO ir_model_data (module, name, model, res_id, noupdate) \
+                             VALUES ('sale', $1, 'reporting.report.expression', $2, true) \
+                             ON CONFLICT (module, name) DO NOTHING",
+                            &[&expr_xmlid, &expr_id],
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+    }
+
+    // Reconcile stored line and order margins to match `margin.rs` (including orders with zero
+    // accountable lines and order currency decimal places).
+    tx.execute(
+        "UPDATE sale_order_line \
+         SET margin = CASE \
+             WHEN display_type IS NOT NULL OR COALESCE(is_downpayment, false) THEN 0 \
+             ELSE ROUND(COALESCE(price_subtotal, 0) - COALESCE(purchase_price, 0) * COALESCE(product_uom_qty, 0), 2) \
+         END",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE sale_order_line \
+         SET margin_percent = CASE \
+             WHEN display_type IS NOT NULL OR COALESCE(is_downpayment, false) OR COALESCE(price_subtotal, 0) <= 0 THEN 0 \
+             ELSE ROUND((COALESCE(margin, 0) * 100) / price_subtotal, 2) \
+         END",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE sale_order o \
+         SET margin = ROUND(COALESCE(s.raw_margin, 0), COALESCE(c.decimal_places, 2)), \
+             margin_percent = CASE \
+                 WHEN COALESCE(o.amount_untaxed, 0) <= 0 THEN 0 \
+                 ELSE ROUND((ROUND(COALESCE(s.raw_margin, 0), COALESCE(c.decimal_places, 2)) * 100) / o.amount_untaxed, 2) \
+             END \
+         FROM sale_order o2 \
+         LEFT JOIN res_currency c ON c.id = o2.currency_id \
+         LEFT JOIN ( \
+             SELECT order_id, \
+                    COALESCE(SUM(COALESCE(price_subtotal, 0) - COALESCE(purchase_price, 0) * COALESCE(product_uom_qty, 0)), 0) AS raw_margin \
+             FROM sale_order_line \
+             WHERE display_type IS NULL AND NOT COALESCE(is_downpayment, false) \
+             GROUP BY order_id \
+         ) s ON s.order_id = o2.id \
+         WHERE o.id = o2.id",
+        &[],
+    )
+    .await?;
+
+    tx.invalidate_all().await?;
+    Ok(())
+}

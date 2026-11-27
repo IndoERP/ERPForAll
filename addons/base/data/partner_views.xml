@@ -21,6 +21,28 @@ Contact views (partner part).
     </field>
   </record>
 
+  <record id="partner_kanban" model="ir.ui.view">
+    <field name="name">res.partner.kanban</field>
+    <field name="model">res.partner</field>
+    <field name="arch" type="xml">
+      <kanban string="Contacts">
+        <templates>
+          <t t-name="card">
+            <main>
+              <field name="complete_name"/>
+              <field name="email" widget="email"/>
+              <field name="phone" widget="phone"/>
+              <field name="city"/>
+            </main>
+            <footer>
+              <field name="category_id" widget="many2many_tags"/>
+            </footer>
+          </t>
+        </templates>
+      </kanban>
+    </field>
+  </record>
+
   <record id="partner_form" model="ir.ui.view">
     <field name="name">res.partner.form</field>
     <field name="model">res.partner</field>

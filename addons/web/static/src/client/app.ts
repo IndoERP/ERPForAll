@@ -5837,13 +5837,21 @@ export class HumanApp {
           if (surface!.needsCommit()) await surface!.commit();
           if (this.lifetime.signal.aborted || changeGeneration !== this.generation) return;
           state.changeMany(changes); updateStatus(); this.busy = true; surface!.setDisabled(true);
-          for (const input of surface!.controls()) if (!(input instanceof HTMLButtonElement)) input.disabled = true;
+          const locked: (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)[] = [];
+          for (const input of surface!.controls()) if (!(input instanceof HTMLButtonElement) && !input.disabled) { input.disabled = true; locked.push(input); }
+          let warning: typeof state.warningDetails;
           try {
             await state.onchange(Object.keys(changes));
-            this.messages.warning(state.warningDetails);
+            warning = state.warningDetails;
             changeOk = true;
           }
-          finally { this.busy = false; surface!.setDisabled(false); if (!this.expired) render(focus); }
+          finally {
+            this.busy = false;
+            for (const input of locked) input.disabled = false;
+            surface!.setDisabled(false);
+            if (!this.expired) render(surface!.focus() || focus);
+          }
+          if (!this.expired && warning) this.messages.warning(warning);
         })();
         scalarChange = work;
         return work.finally(() => {
@@ -5863,8 +5871,10 @@ export class HumanApp {
       },
       commit: async (name, focus) => {
         if (this.uncertainMethod || this.expired) throw new ClientError("ambiguous", uncertainMethodMessage);
-        try { await state.onchange(name); this.messages.warning(state.warningDetails); }
-        finally { if (!this.expired) render(focus); }
+        let warning: typeof state.warningDetails;
+        try { await state.onchange(name); warning = state.warningDetails; }
+        finally { if (!this.expired) render(surface!.focus() || focus); }
+        if (!this.expired && warning) this.messages.warning(warning);
       },
       change: (name, value, focus) => this.run(() => {
         const changeGeneration = this.generation;
@@ -5874,16 +5884,20 @@ export class HumanApp {
           if (surface!.needsCommit()) await surface!.commit();
           if (this.lifetime.signal.aborted || changeGeneration !== this.generation) return;
           state.change(name, value); updateStatus(); this.busy = true; surface!.setDisabled(true);
-          for (const input of surface!.controls()) if (!(input instanceof HTMLButtonElement)) input.disabled = true;
+          const locked: (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)[] = [];
+          for (const input of surface!.controls()) if (!(input instanceof HTMLButtonElement) && !input.disabled) { input.disabled = true; locked.push(input); }
+          let warning: typeof state.warningDetails;
           try {
             await state.onchange(name);
-            this.messages.warning(state.warningDetails);
+            warning = state.warningDetails;
             changeOk = true;
           }
           finally {
             this.busy = false;
-            if (!this.lifetime.signal.aborted) { surface!.setDisabled(false); render(focus); }
+            for (const input of locked) input.disabled = false;
+            if (!this.lifetime.signal.aborted) { surface!.setDisabled(false); render(surface!.focus() || focus); }
           }
+          if (!this.lifetime.signal.aborted && !this.expired && warning) this.messages.warning(warning);
         })();
         scalarChange = work;
         return work.finally(() => {

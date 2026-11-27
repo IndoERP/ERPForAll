@@ -81,12 +81,26 @@
     <field name="search_view_id" ref="view_product_supplierinfo_search_purchase"/>
   </record>
 
+  <record id="view_res_partner_filter_purchase" model="ir.ui.view">
+    <field name="name">res.partner.search.purchase.vendors</field>
+    <field name="model">res.partner</field>
+    <field name="inherit_id" ref="base.partner_search"/>
+    <field name="arch" type="xml">
+      <xpath expr="//filter[@name='companies']" position="before">
+        <filter name="vendors" string="Vendors" groups="purchase.group_purchase_user"
+                domain="['|', ('purchase_order_ids.state', '!=', 'cancel'), ('supplierinfo_ids', '!=', False)]"/>
+        <separator groups="purchase.group_purchase_user"/>
+      </xpath>
+    </field>
+  </record>
+
   <record id="action_purchase_vendors" model="ir.actions.act_window">
     <field name="name">Vendors</field>
     <field name="res_model">res.partner</field>
     <field name="view_mode">list,form</field>
     <field name="view_id" ref="base.partner_list"/>
     <field name="search_view_id" ref="base.partner_search"/>
+    <field name="context">{'search_default_vendors': 1}</field>
   </record>
 
   <record id="view_purchase_requisition_line_list" model="ir.ui.view">

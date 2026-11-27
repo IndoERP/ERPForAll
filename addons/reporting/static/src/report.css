@@ -4,9 +4,9 @@
 .report-screen [hidden] { display: none; }
 .report-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .report-toolbar { padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
-.report-sheet { box-sizing: border-box; width: min(100% - 48px, var(--report-sheet-width, 1152px)); margin: 24px auto 0; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.report-sheet { box-sizing: border-box; width: min(100% - 32px, var(--report-sheet-width, 1320px)); margin: 16px auto 0; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
 .report-screen[data-single-column="true"] { --report-sheet-width: 840px; }
-.report-scope { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding: 20px 24px 16px; }
+.report-scope { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding: 16px 16px 12px; }
 .report-scope:empty { display: none; }
 .report-company { font-size: 18px; line-height: 1.4; font-weight: 600; }
 .report-scope-period { color: var(--label); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -26,12 +26,12 @@
 .report-check { flex-direction: row; align-items: center; gap: 8px; }
 .report-custom { display: flex; flex-direction: column; gap: 8px; }
 .report-search input { min-height: 32px; min-width: 200px; padding: 4px 12px; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--input-line); border-radius: var(--radius-control); }
-.report-status { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 32px; padding: 4px 24px; font-size: 12px; color: var(--muted); }
+.report-status { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 32px; padding: 4px 16px; font-size: 12px; color: var(--muted); }
 .report-error { color: var(--danger); font-size: 13px; }
-.report-scroll { overflow: auto; max-height: calc(100vh - var(--app-bar-height) - var(--control-panel-height, 48px) - 216px); margin-inline: 24px; background: var(--surface); transition: opacity var(--motion-fast) ease-out; }
+.report-scroll { overflow: auto; max-height: calc(100vh - var(--app-bar-height) - var(--control-panel-height, 48px) - 216px); margin-inline: 16px; background: var(--surface); transition: opacity var(--motion-fast) ease-out; }
 .report-scroll[data-dim="true"] { opacity: .55; pointer-events: none; }
 .report-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-.report-table th, .report-table td { box-sizing: border-box; padding: 4px 12px; height: 32px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.report-table th, .report-table td { box-sizing: border-box; padding: 4px 10px; height: 32px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
 .report-table th { text-align: start; }
 .report-table thead th { position: sticky; top: 0; z-index: 2; height: 32px; background: var(--surface-subtle); color: var(--muted); font-size: 12px; font-weight: 600; }
 .report-table thead tr[data-names] th { top: 32px; }
@@ -40,9 +40,9 @@
 .report-table .report-col { text-align: end; }
 /* A line's name reads as data, not as a table head: the global `th` rule is for column heads. */
 .report-table tbody th { font-size: inherit; color: inherit; }
-.report-name, .report-name-head, .report-corner { position: sticky; inset-inline-start: 0; z-index: 1; min-width: 240px; }
+.report-name, .report-name-head, .report-corner { position: sticky; inset-inline-start: 0; z-index: 1; min-width: 196px; }
 .report-table thead .report-name-head, .report-table thead .report-corner { z-index: 3; }
-.report-table .report-name { padding-inline-start: calc(12px + var(--level, 0) * 20px); font-weight: inherit; }
+.report-table .report-name { padding-inline-start: calc(10px + var(--level, 0) * 20px); font-weight: inherit; }
 .report-name-inner { display: flex; align-items: center; gap: 4px; }
 .report-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .report-toggle, .report-caret { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-height: 0; padding: 0; background: transparent; border: 0; border-radius: var(--radius-control); color: var(--muted); }

@@ -6,10 +6,11 @@ use erp_addon_base::ResPartner;
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 
+use crate::activity_mixin::MailActivityMixin;
 use crate::mail_thread::MailThread;
 
-/// `res.partner` with the thread mixin's messages, followers and follower partners.
-#[extend(ResPartner, addon = "mail", inherit = [MailThread])]
+/// `res.partner` with the thread and activity mixins' messages, followers, and scheduled activities.
+#[extend(ResPartner, addon = "mail", inherit = [MailThread, MailActivityMixin])]
 pub struct PartnerThread {}
 
 #[methods(ResPartner, addon = "mail")]
