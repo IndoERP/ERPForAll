@@ -144,7 +144,21 @@ async fn invoke(
                     .to_value(),
             )
         }
-        (Mode::Floor, Operation::Templates) => Ok(Value::list([])),
+        (Mode::Floor, Operation::Templates) => {
+            static FORMATS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+                Value::list(
+                    [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv")]
+                        .into_iter()
+                        .map(|(label, format)| {
+                            Value::Map(std::sync::Arc::new(ValueMap::from([
+                                ("format".into(), Value::str(format)),
+                                ("label".into(), Value::str(label)),
+                            ])))
+                        }),
+                )
+            });
+            Ok(FORMATS.clone())
+        }
         (Mode::Orm, Operation::Templates) => {
             Err(invalid("no direct ORM get_import_templates API exists"))
         }
@@ -346,8 +360,12 @@ async fn run(input: &Input, h: &Harness) -> Result<()> {
             }
         }
         Operation::Templates => {
-            if json != serde_json::json!([]) {
-                return Err(invalid("templates result is not empty"));
+            if json
+                != serde_json::json!([{"format":"xlsx","label":"Excel (.xlsx)"},{"format":"csv","label":"CSV (.csv)"}])
+            {
+                return Err(invalid(
+                    "templates result differs from the supported downloads",
+                ));
             }
         }
     }

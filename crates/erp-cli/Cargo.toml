@@ -70,6 +70,8 @@ erp-wasm-host.workspace = true
 erp-sql.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+csv.workspace = true
+bytes.workspace = true
 tracing.workspace = true
 erp-data = { workspace = true }
 erp-fields = { workspace = true }

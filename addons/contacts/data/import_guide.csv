@@ -1,0 +1,10 @@
+field,example
+name,Harbor Paper Company
+email,office@example.org
+phone,+62 21 555 0100
+street,12 Harbor Street
+city,Jakarta
+zip,10110
+is_company,true
+id,__import__.harbor_paper
+parent_id/id,__import__.harbor_paper

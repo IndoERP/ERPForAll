@@ -46,7 +46,7 @@ use erp_fields::json;
 
 pub use binding::{
     CarriedContext, MAX_CONTEXT_KEY_BYTES, MAX_CONTEXT_KEYS, SERVER_ONLY_CONTEXT_KEYS,
-    SERVER_ONLY_CONTEXT_PREFIX,
+    SERVER_ONLY_CONTEXT_PREFIX, browser_context,
 };
 pub use config::{RpcConfig, RpcConfigBuilder, RpcLimits};
 pub use error::{IdempotencyRefusal, InfraError, ProtocolError, RpcFailure};

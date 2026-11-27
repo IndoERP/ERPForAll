@@ -240,3 +240,45 @@ test("only field names are taken from an error context, each once and at most 64
   expect(refusedFields({ fields: "name" })).toEqual([]);
   expect(refusedFields({ fields: Array.from({ length: 80 }, (_, i) => `f${i}`) })).toHaveLength(64);
 });
+
+test("File import posts the original file with isolated browser options and only commits invalidate model data", async () => {
+  const fetcher = vi.fn(async (_path: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { headers: { "Content-Type": "application/json" } }));
+  const written = vi.fn();
+  const client = new RpcClient(fetcher, () => {}, undefined, written);
+  const file = new File(["Name\r\nExample"], "notes.csv", { type: "text/csv" });
+  const options = { model: "test.note", format: "csv", context: {}, fields: ["name"] };
+  for (const action of ["preview", "test", "import"] as const) await client.postImport(action, file, options, "test-csrf");
+  expect(fetcher.mock.calls.map(([path]) => path)).toEqual(["/erp/impex/preview", "/erp/impex/test", "/erp/impex/import"]);
+  for (const [, init] of fetcher.mock.calls) {
+    expect(init?.credentials).toBe("same-origin");
+    const headers = new Headers(init?.headers);
+    expect(headers.has("content-type")).toBe(false); // fetch adds the boundary for FormData.
+    expect(headers.get("x-csrf-token")).toBe("test-csrf");
+    const body = init?.body as FormData;
+    expect(body.get("file")).toBe(file);
+    expect(JSON.parse(body.get("options") as string)).toEqual(options);
+  }
+  expect(written).toHaveBeenCalledExactlyOnceWith("test.note");
+});
+
+test("The export route posts JSON and preserves the filename of the returned file", async () => {
+  const fetcher = vi.fn(async (_path: RequestInfo | URL, _init?: RequestInit) => new Response("Name\r\nExample", {
+    headers: { "Content-Type": "text/csv;charset=utf-8", "Content-Disposition": 'attachment; filename="notes.csv"' },
+  }));
+  const client = new RpcClient(fetcher, () => {});
+  const options = { model: "test.note", format: "csv", ids: [5] };
+  const file = await client.postImpexFile("export", options, "text/csv", "test-csrf");
+  const [path, init] = fetcher.mock.calls[0]!;
+  expect(path).toBe("/erp/impex/export");
+  expect(new Headers(init?.headers).get("x-csrf-token")).toBe("test-csrf");
+  expect(JSON.parse(init!.body as string)).toEqual(options);
+  expect(file.fileName).toBe("notes.csv");
+  expect(await file.blob.text()).toBe("Name\r\nExample");
+});
+
+test("An upload refusal shows the server's plain-text request limit", async () => {
+  const message = "The import request exceeds its size limit.";
+  const client = new RpcClient(async () => new Response(message, { status: 413 }), () => {});
+  await expect(client.postImport("preview", new File([], "notes.csv"), { model: "test.note" }, "test-csrf"))
+    .rejects.toMatchObject({ kind: "validation", status: 413, message });
+});

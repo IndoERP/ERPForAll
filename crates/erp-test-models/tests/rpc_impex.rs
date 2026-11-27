@@ -247,8 +247,72 @@ async fn test_rpc_get_import_templates() {
         alice(),
     )
     .await;
-    assert_eq!(ok(&r), json!([]));
+    assert_eq!(
+        ok(&r),
+        json!([
+            {"format":"xlsx","label":"Excel (.xlsx)"},{"format":"csv","label":"CSV (.csv)"}
+        ])
+    );
+    let metadata = call(
+        &h,
+        "/json/2/export.string.required/erp_impex_fields",
+        r#"{"operation":"import"}"#,
+        alice(),
+    )
+    .await;
+    let columns = ok(&metadata);
+    let columns = columns.as_array().unwrap();
+    assert!(
+        columns
+            .iter()
+            .any(|f| f["name"] == "value" && f["required"] == true)
+    );
+    assert!(!columns.iter().any(|f| f["name"] == "write_uid"));
 
+    let relations = call(
+        &h,
+        "/json/2/export.many2one/erp_impex_fields",
+        r#"{"operation":"import"}"#,
+        alice(),
+    )
+    .await;
+    assert!(
+        ok(&relations)
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "value/id")
+    );
+    let refused = call(
+        &h,
+        "/json/2/export.integer/erp_impex_fields",
+        r#"{"operation":"export"}"#,
+        user(BOB),
+    )
+    .await;
+    assert_eq!(refused.status(), 403);
+    // Older CSV files may supply a field on a child line directly in the header.
+    let mut tx = h.harness().begin().await.unwrap();
+    let parent = tx.env().records("export.one2many").unwrap();
+    let fields = erp_data::impex::import_fields(&parent, &mut tx)
+        .await
+        .unwrap();
+    assert!(fields.iter().any(|field| field.name == "value"));
+    erp_data::impex::validate_import_columns(&parent, &mut tx, &["value/str"])
+        .await
+        .unwrap();
+    let credential_model = tx.env().records("test_rpc.effects").unwrap();
+    let export = erp_data::impex::export_fields(&credential_model, &mut tx)
+        .await
+        .unwrap();
+    assert!(export.iter().any(|f| f.name == "name"));
+    assert!(!export.iter().any(|f| f.name == "token"));
+    assert!(
+        erp_data::impex::validate_import_columns(&credential_model, &mut tx, &["token"])
+            .await
+            .is_err()
+    );
+    tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }
 

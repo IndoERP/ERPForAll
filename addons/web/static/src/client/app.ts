@@ -4297,10 +4297,11 @@ export class HumanApp {
     const dataMenu = listDataMenu({
       rpc: this.rpc, model: description.model, context, dialogs: this.messages.dialogs,
       canImport: canCreate && view.canEdit !== false && !isFalsy(context["edit"]),
-      fields: view.fields.filter(field => !field.invisible && field.name !== "id" && !["one2many", "many2many", "binary", "json"].includes(field.kind)).map(field => ({ name: field.name, label: field.label })),
-      exportIds: async () => {
-        if (selectedIds.size) return Array.from(selectedIds);
-        const base = searchModel.getDomain();
+      csrf: text(object(this.headerBootstrap["csrf"])["logout"], "session token"),
+      visibleFields: () => choices.visible().filter(field => field.name !== "id").map(field => field.name),
+      selectedIds: () => Array.from(selectedIds),
+      filteredIds: async () => {
+        const base = listDomain();
         const found = await this.rpc.call(description.model, "search", { domain: tabs ? tabs.rowDomain(base) : base, limit: MAX_EXPORT_RECORDS + 1, order, context });
         if (!Array.isArray(found) || found.some(id => !Number.isSafeInteger(id))) throw new ClientError("server", "The server did not answer the search with record ids.");
         if (found.length > MAX_EXPORT_RECORDS) throw new ClientError("validation", `More than ${MAX_EXPORT_RECORDS} records match. Narrow the search or select the records to export.`);

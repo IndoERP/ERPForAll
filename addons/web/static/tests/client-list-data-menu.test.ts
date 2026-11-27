@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { DialogService } from "../src/client/dialog-service.js";
 import { saveFile } from "../src/client/file-save.js";
-import { csvDecode, csvEncode, decodeImpexRights, importColumns, listDataMenu, type ListDataMenuOptions } from "../src/client/list-data-menu.js";
+import { decodeImpexRights, listDataMenu, type ListDataMenuOptions } from "../src/client/list-data-menu.js";
+import { matchImportFields } from "../src/client/import-dialog.js";
 import type { RpcClient } from "../src/client/transport.js";
 
 vi.mock("../src/client/file-save.js", () => ({ saveFile: vi.fn() }));
@@ -13,21 +14,38 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value(this: HTMLDialogElement) { this.open = false; } });
   dialogs = new DialogService(() => {});
 });
-afterEach(() => { dialogs.dispose(); vi.restoreAllMocks(); document.body.replaceChildren(); });
+afterEach(() => { dialogs.dispose(); vi.clearAllMocks(); vi.restoreAllMocks(); document.body.replaceChildren(); });
 
 interface Call { model: string; method: string; args: Record<string, unknown>; options: unknown }
-function fakeRpc(answer: (call: Call) => unknown): { rpc: RpcClient; calls: Call[] } {
-  const calls: Call[] = [];
-  const rpc = { call: vi.fn(async (model: string, method: string, args: Record<string, unknown>, options?: unknown) => { const call = { model, method, args, options }; calls.push(call); return answer(call); }) };
-  return { rpc: rpc as unknown as RpcClient, calls };
+interface FileCall { action: string; file?: File; document: Record<string, unknown>; csrf: string; type?: string }
+function fakeRpc(answer: (call: Call) => unknown, upload?: (call: FileCall) => unknown): { rpc: RpcClient; calls: Call[]; fileCalls: FileCall[] } {
+  const calls: Call[] = [], fileCalls: FileCall[] = [];
+  const rpc = {
+    call: vi.fn(async (model: string, method: string, args: Record<string, unknown>, options?: unknown) => {
+      const call = { model, method, args, options }; calls.push(call); return answer(call);
+    }),
+    postImport: vi.fn(async (action: string, file: File, document: Record<string, unknown>, csrf: string) => {
+      const call = { action, file, document, csrf }; fileCalls.push(call); return upload?.(call);
+    }),
+    postImpexFile: vi.fn(async (action: string, document: Record<string, unknown>, type: string, csrf: string) => {
+      const call = { action, document, csrf, type }; fileCalls.push(call);
+      return { blob: new Blob([], { type }), fileName: `notes.${document["format"]}` };
+    }),
+  };
+  return { rpc: rpc as unknown as RpcClient, calls, fileCalls };
 }
 
-const fields = [{ name: "name", label: "Name" }, { name: "partner_id", label: "Customer" }];
+const fields = [
+  { name: "name", label: "Name", required: true },
+  { name: "partner_id", label: "Customer", required: false },
+  { name: "partner_id/id", label: "Customer / External ID", required: false },
+];
 
 function menu(rpc: RpcClient, extra: Partial<ListDataMenuOptions> = {}): { node: HTMLElement; dispose(): void; options: ListDataMenuOptions } {
   const options: ListDataMenuOptions = {
-    rpc, model: "test.note", context: { lang: "en_US" }, dialogs, canImport: true, fields,
-    exportIds: vi.fn(async () => [5, 6]), imported: vi.fn(async () => {}), notice: vi.fn(), report: vi.fn(), ...extra,
+    rpc, model: "test.note", context: { lang: "en_US" }, csrf: "test-token", dialogs, canImport: true,
+    visibleFields: () => [], selectedIds: () => [5], filteredIds: vi.fn(async () => [5, 6]),
+    imported: vi.fn(async () => {}), notice: vi.fn(), report: vi.fn(), ...extra,
   };
   const built = listDataMenu(options);
   document.body.append(built.node);
@@ -37,26 +55,11 @@ function menu(rpc: RpcClient, extra: Partial<ListDataMenuOptions> = {}): { node:
 const open = (node: HTMLElement): void => node.querySelector<HTMLButtonElement>(".list-data-toggle-btn")!.click();
 const entries = (node: HTMLElement): string[] => [...node.querySelectorAll(".list-data-menu button")].map(item => item.textContent ?? "");
 
-test("CSV encoding quotes what needs quoting and guards formula-like text", () => {
-  expect(csvEncode([["Name", "Note"], ["A, B", "say \"hi\""], ["=SUM(A1)", -5], [false, true], ["line\nbreak", null]]))
-    .toBe("Name,Note\r\n\"A, B\",\"say \"\"hi\"\"\"\r\n'=SUM(A1),-5\r\n,true\r\n\"line\nbreak\",\r\n");
-  expect(() => csvEncode([[{}]])).toThrow("neither text, a number nor a truth value");
-});
-
-test("CSV decoding reads quoted cells and line breaks, drops a byte order mark and blank lines, and refuses broken quotes", () => {
-  expect(csvDecode("\ufeffName,Note\r\n\"A, B\",\"two\nlines \"\"q\"\"\"\n\nC,\r\n")).toEqual([["Name", "Note"], ["A, B", "two\nlines \"q\""], ["C", ""]]);
-  expect(csvDecode("a,b")).toEqual([["a", "b"]]);
-  expect(() => csvDecode("a,\"b\n")).toThrow("Line 1 of the file opens a quote that is never closed.");
-  expect(() => csvDecode("a,\"b\"c\n")).toThrow("Line 1 of the file has text after a closing quote.");
-  expect(() => csvDecode("a,b\"c\n")).toThrow("Line 1 of the file has a quote inside an unquoted value.");
-});
-
-test("import columns accept field names, paths and labels, and refuse unknown or repeated columns by name", () => {
-  expect(importColumns([" Name ", "customer"], fields)).toEqual(["name", "partner_id"]);
-  expect(importColumns(["name", "partner_id/id"], fields)).toEqual(["name", "partner_id/id"]);
-  expect(() => importColumns(["Name", "Colour", ""], fields)).toThrow("These columns are not fields of this list: Colour, (empty).");
-  expect(() => importColumns(["Name", "name"], fields)).toThrow("The column name appears twice.");
-  expect(() => importColumns([""], fields)).toThrow("The first line of the file must name the columns.");
+test("import guesses unique labels and technical names, reserving exact names first", () => {
+  const repeatedLabels = [...fields, { name: "customer_reference", label: "Customer", required: false }];
+  expect(matchImportFields([" Name ", "Customer", "partner_id/id"], fields)).toEqual(["name", "partner_id", "partner_id/id"]);
+  expect(matchImportFields(["Name", "name", "Customer", "partner_id", "?", ""], repeatedLabels)).toEqual([null, "name", null, "partner_id", null, null]);
+  expect(matchImportFields(["name", "name"], fields)).toEqual(["name", null]);
 });
 
 test("the rights answer is decoded strictly", () => {
@@ -101,78 +104,226 @@ test("a failed rights read is reported and read again at the next opening", asyn
   expect(calls).toHaveLength(2);
 });
 
-test("Export writes the chosen columns of the records as CSV with their labels", async () => {
-  const save = vi.mocked(saveFile);
-  const { rpc, calls } = fakeRpc(({ method }) => method === "erp_impex_rights" ? { export: true, import: false } : { datas: [["First", "Alice"], ["=2+2", false]] });
-  const { node, options } = menu(rpc);
+async function openEntry(node: HTMLElement, mode: "import" | "export"): Promise<HTMLDialogElement> {
   open(node);
-  await vi.waitFor(() => expect(entries(node)).toEqual(["Export"]));
-  node.querySelector<HTMLButtonElement>(".list-export-btn")!.click();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog[open]")!;
-  for (const box of dialog.querySelectorAll<HTMLInputElement>("input[type='checkbox']")) box.click();
+  const selector = `.list-${mode}-btn`;
+  await vi.waitFor(() => expect(node.querySelector(selector)).not.toBeNull());
+  node.querySelector<HTMLButtonElement>(selector)!.click();
+  return document.querySelector<HTMLDialogElement>("dialog[open]")!;
+}
+
+test("Export searches technical names and writes the reordered fields in XLSX for the current selection", async () => {
+  const { rpc, fileCalls, calls } = fakeRpc(({ method }) => method === "erp_impex_rights" ? { export: true, import: false } : fields.slice(0, 2));
+  const { node, options } = menu(rpc);
+  const dialog = await openEntry(node, "export");
+  await vi.waitFor(() => expect(dialog.querySelector("[data-field='name']")).not.toBeNull());
+  const search = dialog.querySelector<HTMLInputElement>("input[type=search]")!;
+  search.value = "PARTNER_ID";
+  search.dispatchEvent(new Event("input"));
+  expect(dialog.querySelector("[data-field='name']")).toBeNull();
+  dialog.querySelector<HTMLButtonElement>("[data-field='partner_id']")!.click();
+  search.value = ""; search.dispatchEvent(new Event("input"));
+  dialog.querySelector<HTMLButtonElement>("[data-field='name']")!.click();
+  dialog.querySelector<HTMLButtonElement>("[aria-label='Move Name up']")!.click();
   dialog.querySelector<HTMLButtonElement>("[data-export]")!.click();
-  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-  expect(calls[1]).toEqual({ model: "test.note", method: "export_data", args: { ids: [5, 6], fields_to_export: ["name", "partner_id"], context: { lang: "en_US", import_compat: false } }, options: { write: true } });
-  const [blob, name] = save.mock.calls[0]!;
-  expect(name).toBe("test.note.csv");
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // a byte order mark, so spreadsheets read UTF-8
-  expect(new TextDecoder().decode(bytes)).toBe("Name,Customer\r\nFirst,Alice\r\n'=2+2,\r\n");
-  expect(options.notice).toHaveBeenCalledWith("2 records exported.");
+  await vi.waitFor(() => expect(saveFile).toHaveBeenCalledTimes(1));
+  expect(calls[1]).toMatchObject({ method: "erp_impex_fields", args: { operation: "export" } });
+  expect(fileCalls[0]).toEqual({
+    action: "export", document: { model: "test.note", ids: [5], format: "xlsx", context: { lang: "en_US" },
+      fields: [{ name: "name", label: "Name" }, { name: "partner_id", label: "Customer" }] },
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csrf: "test-token",
+  });
+  expect(vi.mocked(saveFile).mock.calls[0]?.[1]).toBe("notes.xlsx");
+  expect(options.filteredIds).not.toHaveBeenCalled();
+  expect(options.notice).toHaveBeenCalledWith("1 record exported.");
 });
 
-function chooseFile(dialog: HTMLDialogElement, text: string): void {
-  const input = dialog.querySelector<HTMLInputElement>("input[type='file']")!;
-  Object.defineProperty(input, "files", { configurable: true, value: [new File([text], "notes.csv", { type: "text/csv" })] });
-}
-
-async function startImport(answer: unknown): Promise<{ dialog: HTMLDialogElement; calls: Call[]; options: ListDataMenuOptions }> {
-  const { rpc, calls } = fakeRpc(({ method }) => method === "erp_impex_rights" ? { export: false, import: true } : answer);
+test("Export can explicitly choose filtered records and CSV even when records are selected", async () => {
+  const { rpc, fileCalls } = fakeRpc(({ method }) => method === "erp_impex_rights" ? { export: true, import: false } : fields.slice(0, 2));
   const { node, options } = menu(rpc);
-  open(node);
-  await vi.waitFor(() => expect(entries(node)).toEqual(["Import records"]));
-  node.querySelector<HTMLButtonElement>(".list-import-btn")!.click();
-  return { dialog: document.querySelector<HTMLDialogElement>("dialog[open]")!, calls, options };
+  const dialog = await openEntry(node, "export");
+  await vi.waitFor(() => expect(dialog.querySelector("[data-field='name']")).not.toBeNull());
+  dialog.querySelector<HTMLInputElement>("[value='filtered']")!.click();
+  dialog.querySelector("select")!.value = "csv";
+  dialog.querySelector<HTMLButtonElement>("[data-field='name']")!.click();
+  dialog.querySelector<HTMLButtonElement>("[data-export]")!.click();
+  await vi.waitFor(() => expect(saveFile).toHaveBeenCalledTimes(1));
+  expect(options.filteredIds).toHaveBeenCalledTimes(1);
+  expect(fileCalls[0]).toMatchObject({ action: "export", document: { ids: [5, 6], format: "csv" }, type: "text/csv" });
+});
+
+const preview = { header: ["Name", "Customer"], rows: [["First", "Alice"]], row_count: 1, sheet: null, sheets: [] };
+const testSuccess = { count: 1, messages: [], nextrow: 0 };
+const importSuccess = { ids: [7], messages: [], nextrow: 0 };
+const testButton = (dialog: HTMLDialogElement): HTMLButtonElement => dialog.querySelector<HTMLButtonElement>("[data-test-import]")!;
+const importButton = (dialog: HTMLDialogElement): HTMLButtonElement => dialog.querySelector<HTMLButtonElement>("[data-import]")!;
+const mappings = (dialog: HTMLDialogElement): HTMLSelectElement[] => [...dialog.querySelectorAll<HTMLSelectElement>(".impex-preview-table select")];
+const change = (input: HTMLInputElement | HTMLSelectElement, value: string): void => {
+  input.value = value; input.dispatchEvent(new Event("change"));
+};
+
+function chooseFile(dialog: HTMLDialogElement, name: string): File {
+  const input = dialog.querySelector<HTMLInputElement>("input[type='file']")!;
+  const file = new File(["content"], name);
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  input.dispatchEvent(new Event("change"));
+  return file;
 }
 
-test("Import sends the file's rows to load with the mapped columns and reloads the list", async () => {
-  const { dialog, calls, options } = await startImport({ ids: [7, 8], messages: [], nextrow: 0 });
-  chooseFile(dialog, "Name,Customer\r\nFirst,Alice\r\nSecond,\r\n");
-  dialog.querySelector<HTMLButtonElement>("[data-import]")!.click();
-  await vi.waitFor(() => expect(options.imported).toHaveBeenCalledWith(2));
-  expect(calls[1]).toEqual({ model: "test.note", method: "load", args: { fields: ["name", "partner_id"], data: [["First", "Alice"], ["Second", ""]], context: { lang: "en_US" } }, options: { write: true } });
-  expect(options.notice).toHaveBeenCalledWith("2 records imported.");
+async function startImport(upload = ({ action }: FileCall): unknown => {
+  if (action === "preview") return preview;
+  return action === "test" ? testSuccess : importSuccess;
+}) {
+  const { rpc, fileCalls } = fakeRpc(({ method }) => {
+    if (method === "erp_impex_rights") return { export: false, import: true };
+    if (method === "erp_impex_fields") return fields;
+    return [{ format: "xlsx", label: "Excel (.xlsx)" }, { format: "csv", label: "CSV (.csv)" }];
+  }, upload);
+  const { node, options } = menu(rpc, { visibleFields: () => ["name", "unknown", "name"] });
+  const dialog = await openEntry(node, "import");
+  await vi.waitFor(() => expect(dialog.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(false));
+  return { dialog, fileCalls, options };
+}
+
+test("Import downloads both templates and sends only visible, importable template fields", async () => {
+  const { dialog, fileCalls } = await startImport();
+  const buttons = [...dialog.querySelectorAll<HTMLButtonElement>(".impex-template-actions button")];
+  expect(buttons.map(button => button.textContent)).toEqual(["Download Excel (.xlsx) template", "Download CSV (.csv) template"]);
+  for (const [index, button] of buttons.entries()) {
+    button.click();
+    await vi.waitFor(() => expect(saveFile).toHaveBeenCalledTimes(index + 1));
+  }
+  expect(fileCalls.map(call => call.action)).toEqual(["template", "template"]);
+  expect(fileCalls.map(call => call.document["format"])).toEqual(["xlsx", "csv"]);
+  expect(fileCalls[0]!.document["fields"]).toEqual([{ name: "name", label: "Name" }]);
+});
+
+test("Import previews, tests without a write, then imports the new mapping and reloads the list", async () => {
+  const { dialog, fileCalls, options } = await startImport(({ action }) => action === "preview"
+    ? { ...preview, header: [...preview.header, "Unmapped"], rows: [["First", "Alice", "X"]] }
+    : action === "test" ? testSuccess : importSuccess);
+  expect(importButton(dialog).disabled).toBe(true);
+  const file = chooseFile(dialog, "notes.csv");
+  await vi.waitFor(() => expect(mappings(dialog)).toHaveLength(3));
+  expect(dialog.querySelector<HTMLInputElement>("input[type='file']")!.hidden).toBe(true);
+  expect(dialog.querySelector(".impex-file-picker [role='status']")?.textContent).toBe("notes.csv");
+  expect(dialog.querySelector(".impex-preview")?.textContent).toContain("First");
+  expect(mappings(dialog).slice(0, 2).map(select => select.value)).toEqual(["name", "partner_id"]);
+  expect(mappings(dialog)[1]!.querySelector<HTMLOptionElement>("option[value='name']")!.disabled).toBe(true);
+  expect(importButton(dialog).disabled).toBe(true);
+  change(mappings(dialog)[2]!, "");
+  expect(importButton(dialog).disabled).toBe(false);
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+  expect(dialog.querySelector(".message-dialog-footer .import-dialog-status")?.textContent).toBe("Test passed for 1 record. No records were imported.");
+  expect(fileCalls.map(call => call.action)).toEqual(["preview", "test"]);
+  expect(options.imported).not.toHaveBeenCalled();
+
+  change(mappings(dialog)[1]!, "partner_id/id");
+  expect(dialog.querySelector(".import-dialog-status")?.textContent).toBe("");
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+  importButton(dialog).click();
+  await vi.waitFor(() => expect(options.imported).toHaveBeenCalledWith(1));
+  expect(fileCalls.map(call => call.action)).toEqual(["preview", "test", "test", "import"]);
+  expect(fileCalls[3]).toMatchObject({
+    file, document: { model: "test.note", format: "csv", fields: ["name", "partner_id/id", null], separator: "," },
+  });
+  expect(options.notice).toHaveBeenCalledWith("1 record imported.");
   expect(dialog.open).toBe(false);
 });
 
-test("Import shows the server's messages with their file lines and imports nothing", async () => {
-  const { dialog, options } = await startImport({ ids: false, messages: [{ type: "error", rows: { from: 1, to: 1 }, message: "Missing required value for the field 'Name'" }], nextrow: 0 });
-  chooseFile(dialog, "Name\r\nFirst\r\n\"\"\r\n");
-  dialog.querySelector<HTMLButtonElement>("[data-import]")!.click();
-  await vi.waitFor(() => expect(dialog.querySelector(".import-dialog-status")!.textContent).toContain("Line 3: Missing required value for the field 'Name'"));
-  expect(dialog.querySelector(".import-dialog-status")!.textContent).toContain("Nothing was imported.");
+test("Import uses the chosen Excel worksheet and discards the prior test on worksheet change", async () => {
+  const { dialog, fileCalls } = await startImport(({ action, document }) => {
+    if (action === "test") return testSuccess;
+    return { ...preview, sheet: document["sheet"] ?? "Data", sheets: ["Data", "Archive"] };
+  });
+  const file = new File(["content"], "notes.XLSX");
+  const drop = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [file] } });
+  dialog.querySelector(".impex-upload")!.dispatchEvent(drop);
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  expect(dialog.querySelector(".impex-file-picker [role='status']")?.textContent).toBe("notes.XLSX");
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+  expect(fileCalls[1]).toMatchObject({ action: "test", document: { format: "xlsx", sheet: "Data" } });
+  const worksheet = [...dialog.querySelectorAll<HTMLSelectElement>(".impex-file-settings select")][1]!;
+  change(worksheet, "Archive");
+  expect(importButton(dialog).disabled).toBe(true);
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  expect(dialog.querySelector(".import-dialog-status")?.textContent).toBe("");
+  expect(fileCalls[2]).toMatchObject({ action: "preview", document: { format: "xlsx", sheet: "Archive" } });
+});
+
+test("A refused test renders the row and field message", async () => {
+  const { dialog, options } = await startImport(({ action }) => action === "preview" ? preview : {
+    count: false, messages: [{ type: "error", rows: { from: 1, to: 1 }, file_rows: { from: 5, to: 7 }, field: "name", field_name: "Name", message: "A value is required." }, { type: "warning", rows: { from: 0, to: 0 }, message: "Check this value." }],
+  });
+  chooseFile(dialog, "notes.csv");
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(dialog.querySelector(".impex-messages")!.textContent).toContain("Rows 5–7 · Name · A value is required."));
+  expect(dialog.querySelector(".impex-messages")!.textContent).toContain("Row 2 · Check this value.");
+  expect(dialog.querySelector(".message-dialog-footer [role='alert']")!.textContent).toContain("No records were imported.");
   expect(options.imported).not.toHaveBeenCalled();
-  expect(dialog.open).toBe(true);
 });
 
-test("Import refuses a file with an unknown column or a short row before calling the server", async () => {
-  const { dialog, calls, options } = await startImport({ ids: [], messages: [], nextrow: 0 });
-  chooseFile(dialog, "Name,Colour\r\nFirst,Red\r\n");
-  dialog.querySelector<HTMLButtonElement>("[data-import]")!.click();
-  await vi.waitFor(() => expect(dialog.querySelector(".import-dialog-status")!.textContent).toBe("These columns are not fields of this list: Colour."));
-  chooseFile(dialog, "Name,Customer\r\nFirst\r\n");
-  dialog.querySelector<HTMLButtonElement>("[data-import]")!.click();
-  await vi.waitFor(() => expect(dialog.querySelector(".import-dialog-status")!.textContent).toBe("Line 2 has 1 values; the first line names 2 columns."));
-  expect(calls.map(call => call.method)).toEqual(["erp_impex_rights"]);
-  expect(options.report).not.toHaveBeenCalled();
-});
-
-test("Import reports post-close reload errors instead of writing them into a closed dialog", async () => {
-  const { dialog, options } = await startImport({ ids: [1], messages: [], nextrow: 0 });
+test("Re-selecting the file clears the previous test, and import can run directly", async () => {
+  const { dialog, options } = await startImport();
   const reloadFailure = new Error("Reload failed");
   vi.mocked(options.imported).mockRejectedValueOnce(reloadFailure);
-  chooseFile(dialog, "Name\r\nFirst\r\n");
-  dialog.querySelector<HTMLButtonElement>("[data-import]")!.click();
+  chooseFile(dialog, "notes.csv");
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+  chooseFile(dialog, "updated-notes.csv");
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  expect(dialog.querySelector(".import-dialog-status")?.textContent).toBe("");
+  importButton(dialog).click();
   await vi.waitFor(() => expect(options.report).toHaveBeenCalledExactlyOnceWith(reloadFailure));
   expect(dialog.open).toBe(false);
+});
+
+test("Export starts with current visible columns in list order, intersected with the authorized fields", async () => {
+  const { rpc } = fakeRpc(({ method }) => method === "erp_impex_rights" ? { export: true, import: false } : fields.slice(0, 2));
+  const { node } = menu(rpc, { visibleFields: () => ["partner_id", "hidden_field", "name", "partner_id"] });
+  const dialog = await openEntry(node, "export");
+  const selected = () => [...dialog.querySelectorAll<HTMLButtonElement>("[data-remove]")].map(button => button.dataset["remove"]);
+  await vi.waitFor(() => expect(selected()).toEqual(["partner_id", "name"]));
+  dialog.querySelector<HTMLButtonElement>("[data-remove='name']")!.click();
+  expect(selected()).toEqual(["partner_id"]);
+  expect(dialog.querySelector("[data-field='name']")).not.toBeNull();
+});
+
+test("An unusable first worksheet keeps the other worksheets available for preview", async () => {
+  const { dialog, fileCalls } = await startImport(({ action, document }) => {
+    if (action !== "preview") return testSuccess;
+    const sheets = ["Notes", "Data"];
+    if (document["sheet"] === "Data") return { ...preview, sheet: "Data", sheets };
+    return { header: [], rows: [], row_count: 0, sheet: "Notes", sheets, sheet_error: "The Notes sheet contains no column names." };
+  });
+  chooseFile(dialog, "notes.xlsx");
+  await vi.waitFor(() => expect(dialog.querySelector("[role='alert']")?.textContent).toContain("The Notes sheet contains no column names."));
+  const worksheet = [...dialog.querySelectorAll<HTMLSelectElement>(".impex-file-settings select")][1]!;
+  expect(worksheet.value).toBe("Notes");
+  expect(testButton(dialog).disabled).toBe(true);
+  change(worksheet, "Data");
+  await vi.waitFor(() => expect(testButton(dialog).disabled).toBe(false));
+  expect(fileCalls[1]).toMatchObject({ action: "preview", document: { sheet: "Data" } });
+});
+
+test("A wide preview pages through columns without discarding earlier mappings", async () => {
+  const header = ["Name", "Customer", ...Array.from({ length: 12 }, (_, index) => `Extra ${index + 1}`)];
+  const { dialog, fileCalls } = await startImport(({ action }) => action === "preview"
+    ? { ...preview, header, rows: [header.map(name => `Sample for ${name}`)] }
+    : testSuccess);
+  chooseFile(dialog, "wide.csv");
+  await vi.waitFor(() => expect(mappings(dialog)).toHaveLength(12));
+  for (const select of mappings(dialog).slice(2)) change(select, "");
+  dialog.querySelector<HTMLButtonElement>(".impex-preview-navigation button:last-child")!.click();
+  expect(mappings(dialog)).toHaveLength(2);
+  expect(testButton(dialog).disabled).toBe(true);
+  for (const select of mappings(dialog)) change(select, "");
+  testButton(dialog).click();
+  await vi.waitFor(() => expect(fileCalls[1]?.document["fields"]).toEqual(["name", "partner_id", ...Array(12).fill(null)]));
 });

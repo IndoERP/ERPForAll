@@ -95,11 +95,22 @@ export class RpcClient {
     ) {
       throw new ClientError("validation", "Unsupported request path.");
     }
+    return this.runPost(path, options, () => this.sendReviewed(path, JSON.stringify(args), options));
+  }
+  /** The record import routes receive the original file with separately encoded options. */
+  postImport(action: "preview" | "test" | "import", file: File, document: Record<string, unknown> & { model: string }, csrf: string): Promise<unknown> {
+    const path = `/erp/impex/${action}`;
+    const body = new FormData();
+    body.set("file", file);
+    body.set("options", JSON.stringify(document));
+    const options = action === "import" ? { write: true } : {};
+    return this.runPost(path, options, () => this.send(path, body, options, undefined, csrf), document.model);
+  }
+  private async runPost(path: string, options: CallOptions, send: () => Promise<unknown>, model?: string): Promise<unknown> {
     const finish = options.background ? undefined : this.activity?.();
     try {
       this.connection?.("request", options);
-      const body = JSON.stringify(args);
-      const result = await this.sendReviewed(path, body, options);
+      const result = await send();
       this.connection?.("online", options);
       return result;
     } catch (error) {
@@ -109,12 +120,15 @@ export class RpcClient {
     }
     finally {
       finish?.();
-      if (options.write) this.written?.(path.startsWith("/erp/module/") ? "ir.module.module" : path.split("/")[4]!);
+      if (options.write) this.written?.(model ?? (path.startsWith("/erp/module/") ? "ir.module.module" : path.split("/")[4]!));
     }
   }
   /** POST a JSON document to a download route (the pivot spreadsheet, a dynamic report as PDF or XLSX) and take the file it answers (the route answers a file, not JSON). */
   postFile(path: "/erp/pivot/export" | "/erp/reporting/export", document: unknown, type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"): Promise<{ blob: Blob; fileName: string }> {
     return this.file(path, type, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document) });
+  }
+  postImpexFile(action: "template" | "export", document: object, type: string, csrf: string): Promise<{ blob: Blob; fileName: string }> {
+    return this.file(`/erp/impex/${action}`, type, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: JSON.stringify(document) });
   }
   /** GET a file of this server (a printed report, a stored attachment); a refusal is thrown with the server's sentence. */
   getFile(path: string, type: string): Promise<{ blob: Blob; fileName: string }> {
@@ -175,7 +189,7 @@ export class RpcClient {
     // permission failure never causes another automatic write.
     return this.send(path, body, options, key);
   }
-  private async send(path: string, body: string, options: CallOptions, key?: string): Promise<unknown> {
+  private async send(path: string, body: string | FormData, options: CallOptions, key?: string, csrf?: string): Promise<unknown> {
     // The server answers with the id it logged; it keeps the one sent unless that one is malformed.
     let requestId = newRequestId();
     const diagnostic = (status: number): ErrorDiagnostics => ({ endpoint: path, status, requestId });
@@ -183,7 +197,12 @@ export class RpcClient {
     try {
       response = await this.fetcher(path, {
         method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
-        headers: { "Content-Type": "application/json", "Accept": "application/json", "X-Request-Id": requestId, ...(key ? { "Idempotency-Key": key } : {}) },
+        headers: {
+          "Accept": "application/json", "X-Request-Id": requestId,
+          ...(typeof body === "string" ? { "Content-Type": "application/json" } : {}),
+          ...(key ? { "Idempotency-Key": key } : {}),
+          ...(csrf !== undefined ? { "X-CSRF-Token": csrf } : {}),
+        },
         body, signal: options.write ? undefined : options.signal,
       });
     } catch (error) {
@@ -200,6 +219,10 @@ export class RpcClient {
     }
     if (response.status === 429) {
       throw new ClientError("server", "The server is busy. Wait a moment, then try again.", 429, diagnostic(429));
+    }
+    if (csrf !== undefined && !response.ok && response.status < 500 && response.headers.get("Content-Type")?.startsWith("text/plain")) {
+      const message = (await response.text().catch(() => "")).slice(0, 2000);
+      throw new ClientError(response.status === 403 ? "permission" : "validation", message || "The import request was refused.", response.status, diagnostic(response.status));
     }
     const ambiguousWrite = options.write && response.status >= 500;
     const ambiguousMessage = "The server returned an error after the request was sent. The change may have been saved. Check the record before trying again.";

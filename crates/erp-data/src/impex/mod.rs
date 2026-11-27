@@ -9,6 +9,7 @@
 //! - [`export_data`]: records to a matrix of export cells (`id` gives external ids, created on
 //!   demand under `__export__`), after checking the caller's export right ([`ExportRights`]).
 
+mod catalog;
 mod convert;
 mod export;
 pub(crate) mod extract;
@@ -19,15 +20,20 @@ mod path;
 pub(crate) mod row;
 mod rpc;
 
+pub use catalog::{
+    ExchangeField, export_fields, import_fields, template_columns, validate_import_columns,
+};
 pub use export::{ExportResult, ExportRights, SuperuserOnly, export_data};
 pub use file::{
     ImportFile, ImportFileOptions, ImportFileType, MAX_CELL_BYTES, MAX_FILE_BYTES, MAX_FILE_CELLS,
-    MAX_FILE_COLUMNS, MAX_FILE_ROWS, MAX_TOTAL_TEXT_BYTES, read_import_file,
+    MAX_FILE_COLUMNS, MAX_FILE_ROWS, MAX_TOTAL_TEXT_BYTES, import_sheet_names, read_import_file,
+    read_import_file_with_positions,
 };
 pub(crate) use load::load_rows;
 pub use load::{DEFAULT_BATCH_SIZE, MAX_ROWS, load};
 pub use message::{ImportMessage, LoadResult, MessageType, RowSpan};
 pub(crate) use row::ValueRows;
+pub use rpc::GroupExportRights;
 
 use erp_fields::Result;
 use erp_orm::{Records, Transaction};

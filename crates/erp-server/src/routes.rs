@@ -78,6 +78,16 @@ pub const CALLBACK_PREFIX: &str = "/erp/callback/";
 pub const CONTENT_PREFIX: &str = "/erp/content/";
 /// Prefix of the printed reports (`/erp/report/<pdf|html>/<report>/<ids>`).
 pub const REPORT_PREFIX: &str = "/erp/report/";
+/// List data exchange (preview).
+pub const IMPEX_PREVIEW: &str = "/erp/impex/preview";
+/// List data exchange (test).
+pub const IMPEX_TEST: &str = "/erp/impex/test";
+/// List data exchange (import).
+pub const IMPEX_IMPORT: &str = "/erp/impex/import";
+/// List data exchange (template).
+pub const IMPEX_TEMPLATE: &str = "/erp/impex/template";
+/// List data exchange (export).
+pub const IMPEX_EXPORT: &str = "/erp/impex/export";
 /// The pivot view's spreadsheet download (`POST`).
 pub const PIVOT_EXPORT: &str = "/erp/pivot/export";
 /// A dynamic report's PDF or spreadsheet export (`POST`).
@@ -106,6 +116,11 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/session/api-key"),
     RouteMatch::Exact("/erp/health/ready"),
     RouteMatch::Exact("/erp/client-error"),
+    RouteMatch::Exact("/erp/impex/preview"),
+    RouteMatch::Exact("/erp/impex/test"),
+    RouteMatch::Exact("/erp/impex/import"),
+    RouteMatch::Exact("/erp/impex/template"),
+    RouteMatch::Exact("/erp/impex/export"),
     RouteMatch::Exact("/erp/pivot/export"),
     RouteMatch::Exact("/erp/reporting/export"),
     RouteMatch::Exact("/erp/bus/websocket"),
@@ -179,6 +194,11 @@ mod tests {
         SESSION_API_KEY,
         HEALTH_READY,
         CLIENT_ERROR,
+        IMPEX_PREVIEW,
+        IMPEX_TEST,
+        IMPEX_IMPORT,
+        IMPEX_TEMPLATE,
+        IMPEX_EXPORT,
         PIVOT_EXPORT,
         REPORTING_EXPORT,
         ASSISTANT_STATUS,

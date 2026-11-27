@@ -337,6 +337,15 @@ pub(crate) fn to_value(json: &Json) -> Result<Value, Box<str>> {
     })
 }
 
+/// Bind an untrusted browser context with the same typed keys and server-only exclusions as
+/// JSON-2. The credential transaction must also check its company's scope and active language.
+///
+/// # Errors
+/// An invalid or reserved context key, or a value outside the supported range.
+pub fn browser_context(json: &Json) -> Result<Context, RpcFailure> {
+    Ok(bind_context(json, &CarriedContext::none())?.context)
+}
+
 /// The call context (design note §7): the body's object replaces the context; carried keys fill
 /// in only what it lacks. Typed keys are checked here for shape; `lang` and
 /// `allowed_company_ids` are checked against the database and the principal by the service.

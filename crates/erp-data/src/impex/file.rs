@@ -130,6 +130,28 @@ pub struct ImportFile {
     pub sheet: Option<String>,
 }
 
+fn check_file_size(bytes: &[u8]) -> Result<()> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(Error::validation(format!(
+            "The import file has {} bytes; at most {MAX_FILE_BYTES} are accepted.",
+            bytes.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Read the sheet selector without decoding any sheet cells. File and archive limits are
+/// identical to the regular importer.
+pub fn import_sheet_names(bytes: &[u8]) -> Result<Vec<String>> {
+    check_file_size(bytes)?;
+    let mut workbook = Workbook::open(bytes)?;
+    let (sheets, _) = parse_workbook(&workbook.required("xl/workbook.xml")?)?;
+    if sheets.is_empty() {
+        return Err(not_a_workbook("it lists no sheet"));
+    }
+    Ok(sheets.into_iter().map(|sheet| sheet.name).collect())
+}
+
 /// Read `bytes` as an import file of `kind`.
 ///
 /// # Errors
@@ -141,12 +163,29 @@ pub fn read_import_file(
     kind: ImportFileType,
     options: &ImportFileOptions,
 ) -> Result<ImportFile> {
-    if bytes.len() > MAX_FILE_BYTES {
-        return Err(Error::validation(format!(
-            "The import file has {} bytes; at most {MAX_FILE_BYTES} are accepted.",
-            bytes.len()
-        )));
-    }
+    read_file(bytes, kind, options, None)
+}
+
+/// Parse a browser upload and retain the physical, one-based row number for each data row.
+/// A quoted CSV value can span several lines; an XLSX sheet can omit rows entirely.
+pub fn read_import_file_with_positions(
+    bytes: &[u8],
+    kind: ImportFileType,
+    options: &ImportFileOptions,
+) -> Result<(ImportFile, Vec<usize>)> {
+    let mut positions = Vec::new();
+    let file = read_file(bytes, kind, options, Some(&mut positions))?;
+    Ok((file, positions))
+}
+
+fn read_file(
+    bytes: &[u8],
+    kind: ImportFileType,
+    options: &ImportFileOptions,
+    positions: Option<&mut Vec<usize>>,
+) -> Result<ImportFile> {
+    let mut csv_lines = Vec::new();
+    check_file_size(bytes)?;
     let (rows, sheet) = match kind {
         ImportFileType::Csv => {
             if options.sheet.is_some() {
@@ -154,7 +193,14 @@ pub fn read_import_file(
                     "A CSV file has no sheets to choose from.",
                 ));
             }
-            (read_csv(bytes, options.separator.unwrap_or(','))?, None)
+            (
+                read_csv(
+                    bytes,
+                    options.separator.unwrap_or(','),
+                    positions.as_ref().map(|_| &mut csv_lines),
+                )?,
+                None,
+            )
         }
         ImportFileType::Xlsx => {
             if options.separator.is_some() {
@@ -164,15 +210,21 @@ pub fn read_import_file(
             (rows, Some(sheet))
         }
     };
-    shape(rows, sheet)
+    shape(rows, sheet, &csv_lines, positions)
 }
 
 /// Split the first row off as the titles and square the data rows to its width.
-fn shape(rows: Vec<Vec<String>>, sheet: Option<String>) -> Result<ImportFile> {
+fn shape(
+    rows: Vec<Vec<String>>,
+    sheet: Option<String>,
+    csv_lines: &[usize],
+    mut positions: Option<&mut Vec<usize>>,
+) -> Result<ImportFile> {
     let mut rows = rows
         .into_iter()
-        .filter(|row| row.iter().any(|cell| !cell.is_empty()));
-    let Some(mut header) = rows.next() else {
+        .enumerate()
+        .filter(|(_, row)| row.iter().any(|cell| !cell.is_empty()));
+    let Some((_, mut header)) = rows.next() else {
         return Err(Error::validation(
             "The import file is empty: its first row must hold the column titles.",
         ));
@@ -194,7 +246,7 @@ fn shape(rows: Vec<Vec<String>>, sheet: Option<String>) -> Result<ImportFile> {
         )));
     }
     let mut data = Vec::new();
-    for (index, mut row) in rows.enumerate() {
+    for (index, (source, mut row)) in rows.enumerate() {
         if data.len() >= MAX_FILE_ROWS {
             return Err(Error::validation(format!(
                 "The import file has more than {MAX_FILE_ROWS} data rows; at most {MAX_FILE_ROWS} are accepted."
@@ -214,6 +266,9 @@ fn shape(rows: Vec<Vec<String>>, sheet: Option<String>) -> Result<ImportFile> {
             )));
         }
         row.resize(width, String::new());
+        if let Some(ref mut positions) = positions {
+            positions.push(csv_lines.get(source).copied().unwrap_or(source + 1));
+        }
         data.push(row);
     }
     Ok(ImportFile {
@@ -223,7 +278,11 @@ fn shape(rows: Vec<Vec<String>>, sheet: Option<String>) -> Result<ImportFile> {
     })
 }
 
-fn read_csv(bytes: &[u8], separator: char) -> Result<Vec<Vec<String>>> {
+fn read_csv(
+    bytes: &[u8],
+    separator: char,
+    mut source_lines: Option<&mut Vec<usize>>,
+) -> Result<Vec<Vec<String>>> {
     let delimiter = match separator {
         ',' => b',',
         ';' => b';',
@@ -248,9 +307,33 @@ fn read_csv(bytes: &[u8], separator: char) -> Result<Vec<Vec<String>>> {
         .from_reader(text.as_bytes());
     let mut rows = Vec::new();
     let mut budget = CellBudget::default();
+    let mut cursor = 0;
+    let mut line_number = 1;
     for record in reader.records() {
         let record = record
             .map_err(|error| Error::validation(format!("The CSV file cannot be read: {error}")))?;
+        if let Some(ref mut lines) = source_lines {
+            // csv's saved position can precede blank lines and the LF of a CRLF.
+            // Advance across those bytes to the first character of this record.
+            let pos = record.position().ok_or_else(|| {
+                Error::programming("CSV reader did not return a record position.")
+            })?;
+            let mut start = usize::try_from(pos.byte())
+                .map_err(|_| Error::validation("CSV record offset is too large."))?;
+            let bytes = text.as_bytes();
+            while matches!(bytes.get(start), Some(b'\r' | b'\n')) {
+                start += 1;
+            }
+            while cursor < start {
+                if bytes[cursor] == b'\r'
+                    || bytes[cursor] == b'\n' && (cursor == 0 || bytes[cursor - 1] != b'\r')
+                {
+                    line_number += 1;
+                }
+                cursor += 1;
+            }
+            lines.push(line_number);
+        }
         check_counts(rows.len(), record.len())?;
         budget.charge_cells(record.len())?;
         let line = rows.len() + 1;
@@ -1331,6 +1414,28 @@ mod tests {
     }
 
     #[test]
+    fn web_import_reports_real_rows_after_blanks_and_multiline_cells() {
+        let (csv, lines) = read_import_file_with_positions(
+            b"\r\nname,note\r\n\r\nAda,\"line 1\r\nline 2\"\r\n,\r\nTia,ok\r\n",
+            ImportFileType::Csv,
+            &ImportFileOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(csv.rows.len(), 2);
+        assert_eq!(lines, [4, 7]);
+        let rows = sheet(
+            r#"<row r="3"><c r="A3" t="inlineStr"><is><t>Name</t></is></c></row><row r="10"><c r="A10" t="inlineStr"><is><t>Tia</t></is></c></row>"#,
+        );
+        let (_, lines) = read_import_file_with_positions(
+            &workbook(&[("Data", &rows)], None, None, false),
+            ImportFileType::Xlsx,
+            &ImportFileOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(lines, [10]);
+    }
+
+    #[test]
     fn the_1904_date_system_is_followed() {
         let rows = sheet(
             r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Day</t></is></c></row><row r="2"><c r="A2" s="1"><v>0</v></c></row>"#,
@@ -1346,6 +1451,7 @@ mod tests {
             r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Ada</t></is></c></row>"#,
         );
         let bytes = workbook(&[("Help", &first), ("Data", &second)], None, None, false);
+        assert_eq!(import_sheet_names(&bytes).unwrap(), ["Help", "Data"]);
         let error = xlsx(&bytes).unwrap_err();
         assert_eq!(
             error.message(),
@@ -1616,7 +1722,7 @@ mod tests {
         for _ in 0..600 {
             sparse.push(vec!["x".to_owned()]);
         }
-        let error = shape(sparse, None).unwrap_err();
+        let error = shape(sparse, None, &[], None).unwrap_err();
         assert!(
             error.message().contains("more than 500000 cells"),
             "{}",

@@ -2121,7 +2121,9 @@ dependencies = [
  "erp-addon-account-reporting",
  "erp-addon-ai-base",
  "erp-addon-analytic",
+ "bytes",
  "erp-addon-barcodes",
+ "csv",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
  "erp-addon-delivery",
@@ -2571,6 +2573,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror",
+ "multer",
  "tokio",
  "tokio-postgres",
  "tokio-tungstenite",
@@ -4579,6 +4582,23 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mutate_once"
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin 0.9.9",
+ "version_check",
+]
+
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"

@@ -280,6 +280,7 @@ mod assistant;
 pub(crate) mod callback;
 mod content;
 mod external_identity;
+mod impex;
 mod mcp;
 mod page_brand;
 mod password_change;
@@ -291,6 +292,9 @@ pub use assistant::{HistoryEntry, HistoryRole, WebAssistant};
 pub use content::{
     ContentHandoff, ContentHandoffRequest, ContentLookup, ContentOpenFailure, ContentOpener,
     ContentRange, ContentReader, FoundContent, WebAttachmentContent,
+};
+pub use impex::{
+    ExchangeColumn, ExchangeDownload, ExchangeFile, ExchangeUpload, ImportMode, WebDataExchange,
 };
 use page_brand::PageBrand;
 pub use pivot_export::{PivotExportPermit, PivotWorkbook, WebPivotExport};
@@ -434,6 +438,7 @@ pub struct WebApp {
     attachment_content: Option<Arc<dyn WebAttachmentContent>>,
     downloads: content::Downloads,
     attachment_policy: Option<Arc<dyn WebAttachmentPolicy>>,
+    data_exchange: Option<Arc<dyn WebDataExchange>>,
     active_pivot_exports: Arc<std::sync::atomic::AtomicUsize>,
     pivot_export: Option<Arc<dyn WebPivotExport>>,
     reporting_export: Option<Arc<dyn WebReportingExport>>,
@@ -499,6 +504,7 @@ impl WebApp {
             lifecycle: None,
             attachment_content: None,
             attachment_policy: None,
+            data_exchange: None,
             active_pivot_exports: Arc::default(),
             pivot_export: None,
             reporting_export: None,
@@ -816,6 +822,7 @@ impl WebApp {
                 | routes::SESSION_API_KEY
                 | routes::MCP
         )
+            && impex::Action::from_path(&classified_path).is_none()
             && !classified_path.starts_with(routes::JSON2_PREFIX)
             && !classified_path.starts_with(routes::CALLBACK_PREFIX)
             && LifecycleOperation::from_path(&classified_path).is_none()
@@ -1120,6 +1127,9 @@ impl WebApp {
             return self
                 .assistant(&parts, body, &auth, path == routes::ASSISTANT_STATUS)
                 .await;
+        }
+        if let Some(action) = impex::Action::from_path(path) {
+            return self.data_exchange(&parts, body, &auth, action).await;
         }
         if path == routes::PIVOT_EXPORT {
             return self.pivot_export(&parts, body, &auth).await;

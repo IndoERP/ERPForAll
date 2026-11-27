@@ -465,17 +465,22 @@ granted debug details).
 A list's control row has an Import / Export menu beside New. When first opened it asks the model's
 `erp_impex_rights` (`{export, import}`): export needs the read right and the export right `export_data` checks (a member
 of `base.group_allow_export` (Export Records, defined by base) or `base.group_erp_manager`), import needs the create and write rights. Import is also
-offered only when the list allows creating and editing. Export writes the chosen columns of the selected records, or of
-every record of the current search (at most 10,000), as CSV with a byte order mark; text that a spreadsheet could read as
-a formula gets a leading apostrophe. Import reads a CSV file (at most 10 MB and 10,000 rows) whose first line names the
-columns by field label or field name (`partner_id/id` paths included) and sends it to `load`; an unknown or repeated
-column is refused before the call, and the messages `load` returns are shown with their file lines.
+offered only when the list allows creating and editing. The export dialog starts with the visible columns in list order.
+Users can search the fields they may export, add or remove columns and reorder them with the arrow buttons or by dragging.
+CSV and XLSX downloads support the selected records or the current search, up to 10,000 records and 500,000 cells.
 
-An import screen reads the user's file with `read_import_file` (on any model, like `load`): `file` (base64),
+The import dialog offers blank CSV and XLSX templates before upload. The first Excel worksheet is for data.
+The Guide worksheet describes the columns and, for Contacts, includes example values. Users can drop a file or select one,
+choose a worksheet or CSV separator, preview records and map columns by label, field name or relation path such as
+`partner_id/id`. An unmatched column needs a mapping or an explicit choice to ignore it. **Test import** runs the same
+loader as **Import** and rolls back its transaction. Loader errors identify the affected source rows. Browser uploads use
+session-authenticated multipart requests and accept up to 10 MiB and 10,000 data rows.
+
+JSON-2 clients can also read a file with `read_import_file` on any model. The parameters are `file` (base64),
 `file_type` (`csv` or `xlsx`), and optionally `sheet` (the worksheet; required when a workbook has more than one) or
 `separator` (`,`, `;` or a tab, CSV only). It answers `{header, rows, sheet}`: the first row as column titles and the
-data rows as strings, squared to the titles, without entirely empty rows. The screen previews them and passes the
-same matrix to `load`, so a workbook is checked exactly like a CSV file. Workbook cells are read as text `load`
+data rows as strings, squared to the titles, without entirely empty rows. Clients can pass this matrix to `load`.
+Workbook cells are read as text `load`
 understands: numbers as stored, booleans as `1`/`0`, date-formatted cells as `YYYY-MM-DD` (with ` HH:MM:SS` when
 they have a time), formulas as their saved value. An error value, a formula saved without its value, a date before
 1 March 1900 or a value beyond the titled columns is refused with the cell's reference. A file is at most 16 MiB,

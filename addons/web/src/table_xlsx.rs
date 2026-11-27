@@ -321,6 +321,105 @@ fn write_inner(document: &TableDocument) -> std::result::Result<Workbook, XlsxEr
     })
 }
 
+/// Write a record table whose first column has the same type and styling as the others.
+/// Templates have a header-only Data sheet. Their examples and instructions live on Guide.
+pub fn write_record_table(
+    header: &[String],
+    rows: &[Vec<serde_json::Value>],
+    guide: &[Vec<String>],
+) -> Result<Vec<u8>> {
+    use serde_json::Value as Json;
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    sheet.set_name("Data").map_err(|e| fail(&e))?;
+    let mut styles = Styles::default();
+    let mut widths = Vec::with_capacity(header.len());
+    for (i, name) in header.iter().enumerate() {
+        let col =
+            u16::try_from(i).map_err(|_| Error::validation("Too many spreadsheet columns."))?;
+        let style = styles.get(Role::Header, true, 0, guarded(name));
+        sheet
+            .write_string_with_format(0, col, name, style)
+            .map_err(|e| fail(&e))?;
+        widths.push(width_of(name, 0, true));
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let at =
+            u32::try_from(i + 1).map_err(|_| Error::validation("Too many spreadsheet rows."))?;
+        if row.len() != header.len() {
+            return Err(Error::programming(
+                "An export row has the wrong number of columns.",
+            ));
+        }
+        for (j, value) in row.iter().enumerate() {
+            let col =
+                u16::try_from(j).map_err(|_| Error::validation("Too many spreadsheet columns."))?;
+            let width = match value {
+                Json::Null => continue,
+                Json::Bool(b) => {
+                    sheet.write_boolean(at, col, *b).map_err(|e| fail(&e))?;
+                    7.0
+                }
+                Json::Number(n) => {
+                    let text = n.to_string();
+                    // Excel stores at most 15 significant decimal digits. Keep large integer IDs exact.
+                    if n.as_i64()
+                        .is_some_and(|v| v.unsigned_abs() >= 1_000_000_000_000_000)
+                    {
+                        sheet.write_string(at, col, &text).map_err(|e| fail(&e))?;
+                    } else {
+                        let number = n.as_f64().ok_or_else(|| {
+                            Error::validation("Unrepresentable spreadsheet number.")
+                        })?;
+                        sheet.write_number(at, col, number).map_err(|e| fail(&e))?;
+                    }
+                    width_of(&text, 0, false)
+                }
+                Json::String(text) => {
+                    if text.encode_utf16().count() > 32_767 {
+                        return Err(Error::validation(format!(
+                            "Row {}, column {} exceeds the spreadsheet limit of 32767 characters.",
+                            i + 2,
+                            j + 1
+                        )));
+                    }
+                    let style = styles.get(Role::Label, false, 0, guarded(text));
+                    sheet
+                        .write_string_with_format(at, col, text, style)
+                        .map_err(|e| fail(&e))?;
+                    width_of(text, 0, false)
+                }
+                _ => return Err(Error::validation("A spreadsheet cell must be scalar.")),
+            };
+            widths[j] = widths[j].max(width);
+        }
+    }
+    for (j, width) in widths.into_iter().enumerate() {
+        let col =
+            u16::try_from(j).map_err(|_| Error::validation("Too many spreadsheet columns."))?;
+        sheet
+            .set_column_width(col, width.clamp(MIN_WIDTH, MAX_WIDTH))
+            .map_err(|e| fail(&e))?;
+    }
+    if !guide.is_empty() {
+        let guide_sheet = book.add_worksheet();
+        guide_sheet.set_name("Guide").map_err(|e| fail(&e))?;
+        for (i, row) in guide.iter().enumerate() {
+            let at = u32::try_from(i).map_err(|_| Error::validation("Too many guide rows."))?;
+            for (j, text) in row.iter().enumerate() {
+                let col =
+                    u16::try_from(j).map_err(|_| Error::validation("Too many guide columns."))?;
+                let style = styles.get(Role::Label, i == 0, 0, guarded(text));
+                guide_sheet
+                    .write_string_with_format(at, col, text, style)
+                    .map_err(|e| fail(&e))?;
+            }
+        }
+        guide_sheet.autofit();
+    }
+    book.save_to_buffer().map_err(|e| fail(&e))
+}
+
 #[cfg(test)]
 #[path = "tests/pivot_xlsx.rs"]
 mod tests;

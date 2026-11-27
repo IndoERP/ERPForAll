@@ -1391,7 +1391,73 @@ dialog .client-notifications { position: sticky; inset: auto; width: auto; margi
 .select-create-cards { display: grid; gap: 8px; }
 .select-create-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--surface-subtle); }
 .select-create-card button { width: 100%; min-height: 44px; white-space: normal; }
-.export-dialog-body fieldset { display: grid; gap: 8px; border: 1px solid var(--line); margin-block: 12px; }
+.export-dialog-body fieldset:not(.export-dialog-controls) { display: grid; gap: 8px; border: 1px solid var(--line); margin-block: 12px; }
+.export-dialog-controls, .impex-import-controls { display: grid; min-inline-size: 0; gap: 16px; border: 0; padding: 0; margin: 0; }
+.export-dialog-body :is(h3, p), .import-dialog-body :is(h3, p) { margin: 0; }
+.export-dialog-body h3, .import-dialog-body h3 { font-size: 14px; }
+.export-dialog-body [hidden], .import-dialog-body [hidden] { display: none; }
+.export-dialog-body > .impex-error:not(:empty) { margin-block-start: 12px; }
+.message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] { display: flex; flex-direction: column; overflow: hidden; }
+.message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] > .message-dialog-body { min-block-size: 0; }
+.message-dialog:is(.impex-export-dialog, .impex-import-dialog) > :is(.message-dialog-header, .message-dialog-footer) { flex: none; }
+.record-export-settings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 168px); align-items: center; gap: 12px; }
+.export-dialog-body fieldset.record-export-scope { min-inline-size: 0; gap: 2px; padding: 4px 12px 8px; margin: 0; border-radius: var(--radius-control); }
+.record-export-scope legend { padding-inline: 4px; font-weight: 600; }
+.record-export-scope label { display: flex; align-items: center; gap: 8px; min-block-size: 24px; }
+.record-export-scope input[type="radio"] { flex: none; inline-size: 16px; block-size: 16px; min-block-size: 0; padding: 0; margin: 0; accent-color: var(--accent); }
+.record-export-scope input:disabled + span { color: var(--muted); }
+.impex-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.impex-picker-pane { display: grid; align-content: start; gap: 8px; min-width: 0; min-height: 184px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-subtle); }
+.impex-picker-pane .field-label { gap: 4px; }
+.impex-field-list { display: grid; gap: 6px; max-height: 248px; margin: 0; padding: 2px; overflow-y: auto; list-style: none; }
+.impex-field-list:not(:has(li)) { display: none; }
+.impex-field-list li { min-width: 0; }
+.impex-field-list li[draggable] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); cursor: grab; }
+.message-dialog .impex-add-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; text-align: start; white-space: normal; }
+.impex-field-name { min-width: 0; overflow-wrap: anywhere; }
+.impex-field-name small { display: block; color: var(--muted); }
+.impex-field-actions { display: flex; gap: 4px; }
+.impex-field-actions button { min-width: 32px; padding-inline: 4px; }
+.impex-field-status { color: var(--muted); }
+.impex-error { color: var(--danger); }
+.impex-warning { color: var(--warning); }
+.impex-templates, .impex-upload, .impex-preview { display: grid; gap: 8px; min-width: 0; }
+.impex-template-actions, .impex-file-settings, .impex-preview-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.impex-file-settings:not(:has(> :not([hidden]))) { display: none; }
+.impex-upload { padding: 16px; border: 1px dashed var(--input-line); border-radius: var(--radius-panel); background: var(--surface-subtle); }
+.impex-upload[data-over] { border-color: var(--accent); background: var(--selected); }
+.impex-file-picker { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.impex-file-picker button { flex: none; }
+.impex-file-picker span { min-width: 0; overflow-wrap: anywhere; }
+.impex-file-settings select { max-width: 100%; }
+.impex-table-scroll { max-height: min(40dvh, 320px); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.impex-preview-table { width: 100%; border-collapse: collapse; }
+.impex-preview-table th, .impex-preview-table td { min-width: 140px; padding: 8px; text-align: start; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.impex-preview-table thead { position: sticky; inset-block-start: 0; background: var(--surface-subtle); }
+.impex-preview-table select { width: 100%; max-width: min(260px, 60vw); }
+.impex-import-footer { width: 100%; }
+.impex-import-feedback [hidden] { display: none; }
+.impex-import-feedback :is(p, ul) { margin: 0; overflow-wrap: anywhere; }
+.impex-import-feedback :is(p, ul):not(:empty), .impex-import-feedback button:not([hidden]) { margin-block-end: 8px; }
+.impex-messages { max-block-size: min(130px, 22dvh); overflow-y: auto; padding-inline-start: 20px; }
+.impex-messages li + li { margin-block-start: 4px; }
+@media (max-width: 639px) {
+  .message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] > .message-dialog-body { flex: 1 1 auto; max-block-size: none; }
+}
+@media (max-width: 560px) {
+  .record-export-settings { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .record-export-settings > .field-label { flex-direction: row; align-items: center; gap: 8px; }
+  .record-export-settings > .field-label > select { width: auto; }
+  .impex-picker { grid-template-columns: minmax(0, 1fr); }
+  .impex-picker-pane { min-height: 0; }
+  .impex-field-list { max-height: 152px; }
+  .impex-upload { padding: 12px; }
+}
+@media (pointer: coarse) {
+  .message-dialog :is(.impex-add-field, .impex-field-actions button, .impex-template-actions button, .impex-file-picker button) { min-height: 44px; }
+  .record-export-scope label { min-block-size: 44px; }
+  .impex-field-actions button { min-width: 44px; }
+}
 /* Background print dialog: status, progress, then the failures and warnings as plain lists. */
 .print-job-body { display: grid; gap: 8px; }
 .print-job-body p { margin: 0; }

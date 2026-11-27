@@ -13,9 +13,10 @@ use super::{ExportRights, MAX_ROWS};
 const MAX_COLUMNS: usize = 1_000;
 const MAX_EXPORT_FIELDS: usize = 1_000;
 
-struct RpcExportRights;
+/// Group policy shared by JSON-2 exports and authenticated web downloads.
+pub struct GroupExportRights;
 
-impl ExportRights for RpcExportRights {
+impl ExportRights for GroupExportRights {
     fn may_export<'a>(
         &'a self,
         tx: &'a mut Transaction,
@@ -99,7 +100,7 @@ fn bind_impex_rights<'a>(
     Box::pin(async move {
         let env = records.env().clone();
         let export = records.has_access(tx, Operation::Read).await?
-            && (env.su() || RpcExportRights.may_export(tx, &env).await?);
+            && (env.su() || GroupExportRights.may_export(tx, &env).await?);
         let import = records.has_access(tx, Operation::Create).await?
             && records.has_access(tx, Operation::Write).await?;
         Ok(Value::Map(std::sync::Arc::new(erp_fields::ValueMap::from(
@@ -257,9 +258,48 @@ fn bind_export_data<'a>(
             MAX_EXPORT_FIELDS,
         )?;
         let field_refs: Vec<&str> = fields_to_export.iter().map(String::as_str).collect();
-        let rights = RpcExportRights;
+        let rights = GroupExportRights;
         let result = super::export_data(&records, tx, &field_refs, &rights).await?;
         Ok(result.to_value())
+    })
+}
+
+/// Discover the authorized column catalog when a list data dialog opens.
+#[erp_orm::linkme::distributed_slice(erp_orm::rpc::RPC_IMPLS)]
+#[linkme(crate = erp_orm::linkme)]
+static IMPEX_FIELDS: RpcImpl = RpcImpl {
+    addon: "base",
+    model: "base",
+    method: "erp_impex_fields",
+    decl: RpcDecl::Expose {
+        effect: Effect::Read,
+        receiver: Receiver::Model,
+        params: &[ParamSpec::new("operation", true, "'import' or 'export'")],
+        bind: bind_impex_fields,
+    },
+    file: file!(),
+    line: line!(),
+};
+
+fn bind_impex_fields<'a>(
+    tx: &'a mut Transaction,
+    records: Records,
+    mut args: RpcArgs,
+) -> BoxFuture<'a, Result<Value, BindError>> {
+    Box::pin(async move {
+        let op: String = args.take("operation")?;
+        let fields = match op.as_str() {
+            "import" => super::import_fields(&records, tx).await?,
+            "export" => super::export_fields(&records, tx).await?,
+            _ => return Err(Error::validation("Choose import or export to list fields.").into()),
+        };
+        Ok(Value::list(fields.into_iter().map(|f| {
+            Value::Map(std::sync::Arc::new(erp_fields::ValueMap::from([
+                ("name".into(), Value::str(f.name)),
+                ("label".into(), Value::str(f.label)),
+                ("required".into(), Value::Bool(f.required)),
+            ])))
+        })))
     })
 }
 
@@ -282,11 +322,27 @@ static GET_IMPORT_TEMPLATES: RpcImpl = RpcImpl {
 };
 
 fn bind_get_import_templates<'a>(
-    _tx: &'a mut Transaction,
-    _records: Records,
+    tx: &'a mut Transaction,
+    records: Records,
     _args: RpcArgs,
 ) -> BoxFuture<'a, Result<Value, BindError>> {
-    Box::pin(async move { Ok(Value::list([])) })
+    static TEMPLATES: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        Value::list(
+            [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv")]
+                .into_iter()
+                .map(|(label, format)| {
+                    Value::Map(std::sync::Arc::new(erp_fields::ValueMap::from([
+                        ("format".into(), Value::str(format)),
+                        ("label".into(), Value::str(label)),
+                    ])))
+                }),
+        )
+    });
+    Box::pin(async move {
+        records.check_access(tx, Operation::Create).await?;
+        records.check_access(tx, Operation::Write).await?;
+        Ok(TEMPLATES.clone())
+    })
 }
 
 #[cfg(test)]

@@ -58,7 +58,7 @@ impl ExportResult {
     }
 }
 
-const NO_RIGHTS: &str =
+pub(super) const NO_RIGHTS: &str =
     "You don't have the rights to export data. Please contact an Administrator.";
 
 /// `export_data(fields)` on `records`.

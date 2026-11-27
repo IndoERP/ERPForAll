@@ -50,12 +50,13 @@ impl Kind {
         }
     }
 
-    // Initial ratchet from revision 504abd2b, exact driver batch blocks removed. No slack.
+    // Initial ratchet from revision 504abd2b, exact driver batch blocks removed. The template
+    // catalogue now shares a static descriptor, leaving one allocation for the access-check future.
     fn pinned_blocks(self) -> u64 {
         match self {
             Self::Load => 251,
             Self::Export => 66,
-            Self::Templates => 2,
+            Self::Templates => 1,
             Self::MalformedLoad => 5,
         }
     }
@@ -92,7 +93,18 @@ impl Kind {
                 assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
                 assert_eq!(error.message(), "load row 0 must be an array");
             }
-            Self::Templates => assert_eq!(result.unwrap(), Value::list([])),
+            Self::Templates => {
+                let Value::List(items) = result.unwrap() else {
+                    panic!("template list")
+                };
+                assert_eq!(items.len(), 2);
+                for (item, format) in items.iter().zip(["xlsx", "csv"]) {
+                    let Value::Map(fields) = item else {
+                        panic!("template descriptor")
+                    };
+                    assert_eq!(fields["format"], Value::str(format));
+                }
+            }
             Self::Export => {
                 let Value::Map(map) = result.unwrap() else {
                     panic!("export result map")
@@ -136,9 +148,9 @@ fn impex_binders_allocation_measurement() {
     });
     let model = h.registry().model_id("export.integer").unwrap();
     for kind in [
+        Kind::Templates,
         Kind::Load,
         Kind::Export,
-        Kind::Templates,
         Kind::MalformedLoad,
     ] {
         let exposed = match h.orm().exposure().get(model, kind.method()).unwrap() {
@@ -195,7 +207,9 @@ fn impex_binders_allocation_measurement() {
             );
             // These paths perform no I/O, so their byte counts have no driver batching term.
             match kind {
-                Kind::Templates => assert!(stats.total_bytes <= 17, "{stats:?}"),
+                // Fixed-size future containing the create/write access checks. The immutable
+                // format descriptors themselves are shared between calls.
+                Kind::Templates => assert!(stats.total_bytes <= 4_112, "{stats:?}"),
                 Kind::MalformedLoad => assert!(stats.total_bytes <= 10_356, "{stats:?}"),
                 Kind::Load | Kind::Export => {}
             }

@@ -101,6 +101,29 @@ pub fn request_within(
     body: &str,
     wait: Duration,
 ) -> Reply {
+    let reply = request_bytes(port, method, path, headers, body.as_bytes(), wait);
+    Reply {
+        status: reply.status,
+        headers: reply.headers,
+        body: String::from_utf8(reply.body).unwrap(),
+    }
+}
+
+pub struct BinaryReply {
+    pub status: u16,
+    pub headers: BTreeMap<String, Vec<String>>,
+    pub body: Vec<u8>,
+}
+
+/// One HTTP exchange, preserving uploaded and downloaded file bytes.
+pub fn request_bytes(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    wait: Duration,
+) -> BinaryReply {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream.set_read_timeout(Some(wait)).unwrap();
     let mut wire = format!(
@@ -111,13 +134,16 @@ pub fn request_within(
         wire.push_str(&format!("{name}: {value}\r\n"));
     }
     wire.push_str("\r\n");
-    wire.push_str(body);
     stream.write_all(wire.as_bytes()).unwrap();
+    stream.write_all(body).unwrap();
     let mut bytes = Vec::new();
     stream.read_to_end(&mut bytes).unwrap();
-    let text = String::from_utf8(bytes).unwrap();
-    let (head, body) = text.split_once("\r\n\r\n").unwrap();
-    let mut lines = head.split("\r\n");
+    let split = bytes
+        .windows(4)
+        .position(|chunk| chunk == b"\r\n\r\n")
+        .unwrap();
+    let (head, body) = bytes.split_at(split);
+    let mut lines = std::str::from_utf8(head).unwrap().split("\r\n");
     let status = lines
         .next()
         .unwrap()
@@ -134,10 +160,10 @@ pub fn request_within(
             .or_default()
             .push(value.trim().to_owned());
     }
-    Reply {
+    BinaryReply {
         status,
         headers,
-        body: body.to_owned(),
+        body: body[4..].to_vec(),
     }
 }
 pub fn cookie(reply: &Reply, name: &str) -> String {
