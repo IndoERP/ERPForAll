@@ -63,6 +63,14 @@ pub enum ConfigError {
     /// `field_key_file` is not a key file; the message names the line, never its content.
     #[error("{0}")]
     FieldKeys(#[source] erp_fields::Error),
+    /// The process has field keys (from `erp --field-key-file`) that this configuration does not
+    /// name: the node settings would record `server.field_keys = none` and could not tell two
+    /// nodes with different keys apart.
+    #[error(
+        "field keys were given outside the server configuration (--field-key-file): set \
+         field_key_file in server.toml instead"
+    )]
+    FieldKeysOutsideConfig,
     /// Callback names, targets and secret files are validated together at startup.
     #[error("invalid [callbacks] configuration or protected callback secret file")]
     Callbacks,
@@ -268,7 +276,8 @@ impl ServerConfig {
 
     /// Load strict TOML and private mode-600 regular files, refusing symlink secret paths. The
     /// keys of `field_key_file`, when set, are installed for the process
-    /// ([`erp_orm::field_encryption::install`]).
+    /// ([`erp_orm::field_encryption::install`]); a process that already has keys from elsewhere
+    /// must name the same file here.
     /// # Errors
     /// Invalid configuration, secret file, database binding or explicit proxy mode.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -366,6 +375,11 @@ impl ServerConfig {
                         .map_err(ConfigError::FieldKeys)?;
                 erp_orm::field_encryption::install(keys.clone()).map_err(ConfigError::FieldKeys)?;
                 Some(keys)
+            }
+            // keys installed by other means would serve the ORM while the node settings below
+            // record none
+            None if erp_orm::field_encryption::installed().is_some() => {
+                return Err(ConfigError::FieldKeysOutsideConfig);
             }
             None => None,
         };

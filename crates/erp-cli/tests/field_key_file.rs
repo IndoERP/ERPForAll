@@ -124,3 +124,53 @@ fn a_key_file_with_a_malformed_key_is_refused() {
     fs::set_permissions(&keys, fs::Permissions::from_mode(0o600)).unwrap();
     assert_refused(&module_dry_run("upgrade", &keys), "32 bytes");
 }
+
+/// `erp server` with keys from the option only: its node settings would record no keys, so the
+/// configuration must name the file itself (`field_key_file`).
+#[test]
+fn the_server_refuses_keys_its_configuration_does_not_name() {
+    let dir = tempdir().unwrap();
+    let keys = key_file(dir.path(), 0o600);
+    for (name, value) in [
+        (
+            "runtime-url",
+            "postgresql://runtime:dummy-password@127.0.0.1:5548/erpforall_keys\n",
+        ),
+        (
+            "owner-url",
+            "postgresql://owner:dummy-owner@127.0.0.1:5548/erpforall_keys\n",
+        ),
+        (
+            "proxy-token",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        ),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, value).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let config = dir.path().join("server.toml");
+    fs::write(
+        &config,
+        "database='erpforall_keys'\ndatabase_url_file='runtime-url'\n\
+         owner_database_url_file='owner-url'\nbind='127.0.0.1:18069'\n\
+         public_origin='https://erp.example.test'\nproxy_mode='authenticated'\n\
+         trusted_proxies=['127.0.0.1/32']\nproxy_token_file='proxy-token'\n\
+         addons_path=['addons']\nassets_manifest='manifest.json'\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_erp"))
+        .arg("server")
+        .arg("--config")
+        .arg(&config)
+        .arg("--field-key-file")
+        .arg(&keys)
+        .output()
+        .expect("run erp binary");
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("set field_key_file in server.toml"),
+        "{stderr}"
+    );
+}

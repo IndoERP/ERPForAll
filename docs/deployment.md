@@ -253,7 +253,9 @@ of a database needs the same file: the node settings check refuses a node whose 
   other commands that build the ORM from `DATABASE_URL` take the same file with the global option
   `--field-key-file <path>` (before or after the subcommand), under the same rules: a regular file of mode 600, not
   a symlink. A relative path is relative to the working directory, not to `server.toml`. Commands that read
-  `--config` load `field_key_file` from it; giving both is accepted only when they hold the same keys.
+  `--config` (the server among them) take the keys from its `field_key_file`: the node settings check compares that
+  file's fingerprint, so keys given only with the option are refused there; giving both is accepted only when they
+  hold the same keys.
 - **Missing key:** when the linked addons declare an encrypted field and no key file is given, every command that
   builds the ORM (the server, `erp db init`, `erp module upgrade`, …) stops with an error naming the field.
 - **Lost key:** values sealed with it cannot be read again. Back the key file up separately from the database dumps;

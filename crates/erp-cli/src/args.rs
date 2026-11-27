@@ -80,7 +80,8 @@ pub struct Cli {
     /// Keys of encrypted fields for commands that build the ORM without a server
     /// configuration (`module install`/`upgrade`, `db init`, ...): the file that
     /// `field_key_file` of `server.toml` names, mode 600 and not a symlink. Required when the
-    /// linked addons declare an encrypted field.
+    /// linked addons declare an encrypted field. A command that reads `--config` takes its keys
+    /// from `field_key_file` and refuses keys given only here.
     #[arg(long = "field-key-file", global = true, value_name = "PATH")]
     pub field_key_file: Option<PathBuf>,
 }
