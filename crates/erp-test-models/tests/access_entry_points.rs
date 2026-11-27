@@ -60,6 +60,7 @@ use erp_test_models::{base_users, test_access, test_rel};
 use erp_testkit::{DomainPolicy, Harness, Otherwise};
 
 const OBJ: &str = "test_access.some_obj";
+const HIDDEN_DOCUMENT: &[u8] = b"hidden document";
 /// The model of the typed-relation probe (`RecordSet::related` needs a `Many2one<C>` field).
 const ITEM: &str = "test_rel.counter_item";
 /// The model of the upsert probes (a business key on `name`).
@@ -173,6 +174,7 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     ),
     ("Records::read", Checked(Refused(Read))),
     ("Records::read_binary_bounded", Checked(Refused(Read))),
+    ("Records::read_content_binary", Checked(Refused(Read))),
     ("Records::read_with", Checked(Refused(Read))),
     ("Records::read_rows", Checked(Refused(Read))),
     ("Records::fetch", Checked(Refused(Read))),
@@ -392,6 +394,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
              own transaction already resolved for the stored subject (the ORM's principal \
              resolver); it reads no record of a model and returns the stored subject or a \
              refusal, never another principal",
+        ),
+    ),
+    (
+        "Transaction::job_queue_health",
+        Unchecked(
+            "counts entries in the core job queue for the selected company and job kind; requires System or jobs.admin before reading queue state (jobs_admin_ui.rs)",
         ),
     ),
     (
@@ -783,6 +791,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         Unchecked(MODULE_OPERATION),
     ),
     (
+        "Transaction::call_authenticated_hook",
+        Unchecked(
+            "System-only private dispatch, rebinding the hook and its res.users singleton to the resolved authenticated user; the hook's record operations run under that user's policy (system_only_entry_points.rs)",
+        ),
+    ),
+    (
         "Transaction::call_selection_callback",
         Unchecked(MODULE_OPERATION),
     ),
@@ -795,6 +809,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         Unchecked(ROLE_GRANT),
     ),
     ("Transaction::grant_node_role", Unchecked(ROLE_GRANT)),
+    (
+        "Orm::replay_outbox",
+        Unchecked(
+            "owner-side service opens its own fully elevated System transaction to read the private event outbox and advance a consumer cursor atomically with its callback (outbox_delivery.rs); it serves no requesting record principal",
+        ),
+    ),
     (
         "Transaction::install_event_schema",
         Unchecked(
@@ -1075,6 +1095,21 @@ const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, 
 /// leave the engine. replaces them with scoped elevation blocks where it can.
 const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
+        "approvals/workflow.rs::steps",
+        1,
+        "compares the editor's visible steps with the complete saved plan of one authorized draft or revision; a difference returns a generic refusal, and only rows read with the editor's rights can be published or copied (approval_configuration.rs)",
+    ),
+    (
+        "approvals/workflow/projection.rs::existing_references",
+        1,
+        "counts existing references among the stored recipient IDs of an authorized policy revision to distinguish deleted recipients from inaccessible ones; hidden references cause a generic refusal and only caller-visible IDs enter the projected steps (approval_configuration.rs)",
+    ),
+    (
+        "mail/external_preview.rs::checked_preview",
+        1,
+        "stores a server-rendered PDF after checking write access to both the wizard and document and report access to the record; clears caller defaults and returns the preview in the caller's environment",
+    ),
+    (
         "mail/notification.rs::persist_requests",
         1,
         "creates only fan-out requests for actually posted messages that still exist after flushing, preserving the operation identity and clearing caller defaults",
@@ -1088,6 +1123,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "mail/thread_discuss.rs::add_member",
         1,
         "creates only the new channel owner or a company-eligible user invited by the current owner, with cleared defaults",
+    ),
+    (
+        "mail/thread_discuss/workspace.rs::conversation_start",
+        2,
+        "creates a private channel and its memberships for the internal caller and active internal peers in the current company after checking partner read access; clears caller defaults and requires current membership to reuse an existing direct channel",
     ),
     (
         "sale/invoice_lineage.rs::assign_sources",
@@ -1945,6 +1985,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "invalidates/updates linked budget lines after checking caller write access and `account.group_account_manager` on the budget amendment inside a savepoint",
     ),
     (
+        "account/budget/avc.rs::check_and_apply_move_avc",
+        1,
+        "during posting, creates mail.message notifications on moves with budget warnings using escaped, server-generated text and cleared default context",
+    ),
+    (
         "account/budget/avc.rs::check_and_record_commitments",
         1,
         "records budget commitment rows (`account.budget.commitment`) when authorized purchase orders are confirmed, after verifying order access and company match; ordinary purchase users cannot forge or edit commitment rows directly",
@@ -2702,6 +2747,15 @@ async fn probe(name: &str, tx: &mut Transaction, f: &Fixture) -> Option<erp_fiel
                 .read_binary_bounded(tx, "document", 32, 64)
                 .await
                 .map(|_| Seen::Done),
+            "Records::read_content_binary" => hidden
+                .read_content_binary(tx, "document", 32, true)
+                .await
+                .map(|content| {
+                    let content = content.expect("the hidden record has a document");
+                    assert_eq!(content.bytes.as_deref(), Some(HIDDEN_DOCUMENT));
+                    assert!(content.digest.is_some());
+                    Seen::Done
+                }),
             "Records::read_with" => all
                 .read_with(tx, &named, Load::Raw)
                 .await
@@ -3225,6 +3279,7 @@ async fn fixture(h: &Harness) -> Fixture {
                     ("name", Value::str("Hidden")),
                     ("val", Value::Int(-1)),
                     ("categ_id", Value::Int(categ)),
+                    ("document", Value::Bytes(Arc::from(HIDDEN_DOCUMENT))),
                 ]),
             ],
         )

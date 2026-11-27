@@ -223,6 +223,38 @@ fn capture_env() -> crate::Env {
 }
 
 #[test]
+fn model_capture_cache_is_shared_only_within_one_registry_generation() {
+    use std::sync::Arc;
+
+    let registry = Arc::new(
+        erp_registry::RegistryBuilder::new([&erp_registry::BASE_ADDON])
+            .build()
+            .unwrap(),
+    );
+    let model = registry.model_id("base").unwrap();
+    // No transaction is opened; building and rebuilding use only registry metadata.
+    let pool = crate::pool::create_pool(tokio_postgres::Config::new(), 1).unwrap();
+    let orm = crate::Orm::builder(Arc::clone(&registry), pool)
+        .build()
+        .unwrap();
+    assert_eq!(orm.shared.capture_models.len(), registry.models().len());
+    orm.shared.capture_models[model.index()].set(false).unwrap();
+    let same_generation = orm.clone();
+    assert_eq!(
+        same_generation.shared.capture_models[model.index()].get(),
+        Some(&false)
+    );
+
+    let rebuilt = orm.rebuild(registry).build().unwrap();
+    assert!(orm.same_lineage(&rebuilt));
+    assert!(rebuilt.shared.capture_models[model.index()].get().is_none());
+    rebuilt.shared.capture_models[model.index()]
+        .set(true)
+        .unwrap();
+    assert_eq!(orm.shared.capture_models[model.index()].get(), Some(&false));
+}
+
+#[test]
 fn capture_context_requires_identity_and_keeps_original_actor() {
     let env = capture_env();
     let error = super::CaptureContext::from_env(&env, vec![1]).unwrap_err();

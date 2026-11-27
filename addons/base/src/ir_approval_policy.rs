@@ -20,7 +20,7 @@ use erp_sdk::serde_json::Value as Json;
 
 use erp_sdk::prelude::*;
 use erp_sdk::rpc::{Effect, Exposure};
-use erp_sdk::{Actor, CompanyId, Operation, PrincipalKind, Row, SUPERUSER_ID, UserId};
+use erp_sdk::{Actor, CompanyId, Operation, PrincipalKind, Row, SUPERUSER_ID, TimestampTz, UserId};
 
 /// Shared eligibility rules for one decision and for distinct scopes in a review queue.
 pub(super) const ELIGIBILITY: &str = include_str!("approval_request/eligible.sql");
@@ -57,6 +57,10 @@ pub struct IrApprovalPolicy {
     /// Archived revisions select nothing; archiving is the only change a revision accepts.
     #[field(boolean, default = true)]
     pub active: bool,
+    /// A receipt captures this stamp when submitted. An archival invalidates the old stamp,
+    /// including receipts outside the archiving transaction's snapshot.
+    #[field(timestamptz, readonly, copy = false, groups = ".")]
+    pub last_archived_at: Option<TimestampTz>,
     /// The company the revision applies to; empty for all companies.
     #[field(many2one, comodel = "res.company", ondelete = "restrict")]
     pub company_id: Option<RecId>,
@@ -868,18 +872,28 @@ impl IrApprovalPolicy {
             same_selector(tx, &records.ids()).await?;
         }
         let archives = matches!(vals.get("active"), Some(Cell::Bool(false)));
-        sup.call(tx, records, (vals,)).await?;
-        if activates {
-            check_revisions(this.env(), tx, &records.ids()).await?;
-        } else if archives {
-            // A later reactivation must not revive outstanding decisions from this revision.
+        if archives {
+            tx.flush_model(records.model_id()).await?;
             tx.execute(
-                "UPDATE ir_approval_request SET expires_at = statement_timestamp() \
-                 WHERE revision_id = ANY($1::bigint[]) AND state IN ('pending','approved') \
-                   AND expires_at > statement_timestamp()",
+                "UPDATE ir_approval_request r SET expires_at = least(statement_timestamp(),
+                     CASE WHEN r.revision_archived_at IS DISTINCT FROM p.last_archived_at
+                          THEN p.last_archived_at END)
+                 FROM ir_approval_policy p WHERE p.id=r.revision_id AND p.id=ANY($1::bigint[])
+                   AND r.state IN ('pending','approved') AND r.expires_at>statement_timestamp()",
                 &[&records.ids()],
             )
             .await?;
+            tx.execute(
+                "UPDATE ir_approval_policy SET last_archived_at =
+                     greatest(clock_timestamp(), last_archived_at + interval '1 microsecond')
+                 WHERE id=ANY($1::bigint[]) AND active",
+                &[&records.ids()],
+            )
+            .await?;
+        }
+        sup.call(tx, records, (vals,)).await?;
+        if activates {
+            check_revisions(this.env(), tx, &records.ids()).await?;
         }
         Ok(())
     }

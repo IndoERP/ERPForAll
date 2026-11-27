@@ -234,10 +234,14 @@ mod tests {
         let declared = declarations().unwrap();
         assert_eq!(
             declared.len(),
-            17 + crate::image_settings::declarations().unwrap().len()
+            18 + crate::image_settings::declarations().unwrap().len()
                 + crate::attachments::settings::PARAMETERS.len()
                 + crate::report_job::PARAMETERS.len()
         );
+        assert!(declared.iter().any(|decl| {
+            decl.key() == crate::report_job::PREVIEW_KEY
+                && decl.default_value() == &erp_sdk::Value::Bool(crate::report_job::PREVIEW_DEFAULT)
+        }));
         for decl in &declared {
             let key = decl.key();
             let default = decl.default_text();

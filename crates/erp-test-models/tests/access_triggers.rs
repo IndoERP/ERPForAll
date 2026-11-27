@@ -626,6 +626,22 @@ async fn schema_sync_creates_the_triggers_once_and_repairs_them() {
         "an unchanged sync sends no trigger DDL: {ddl:?}"
     );
 
+    // Replacing a view preserves its comment. A fresh sync must still detect the
+    // changed definition, restore the declared projection, and then settle again.
+    let definition_query = "SELECT pg_get_viewdef('approval_request_view'::regclass, false)";
+    let original: String = tx.query(definition_query, &[]).await.unwrap()[0].get(0);
+    tx.batch(&format!(
+        "CREATE OR REPLACE VIEW approval_request_view AS SELECT v.* FROM ({}) v WHERE true",
+        original.trim_end().trim_end_matches(';')
+    ))
+    .await
+    .unwrap();
+    let altered: String = tx.query(definition_query, &[]).await.unwrap()[0].get(0);
+    assert_ne!(altered, original);
+    tx.init_models(&[]).await.unwrap();
+    let repaired: String = tx.query(definition_query, &[]).await.unwrap()[0].get(0);
+    assert_eq!(repaired, original);
+
     tx.batch(
         "DROP TRIGGER res_groups_policy_bump ON res_groups; \
          COMMENT ON TRIGGER ir_capability_policy_bump ON ir_capability IS 'edited'",

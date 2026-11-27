@@ -522,6 +522,12 @@ choose a worksheet or CSV separator, preview records and map columns by label, f
 loader as **Import** and rolls back its transaction. Loader errors identify the affected source rows. Browser uploads use
 session-authenticated multipart requests and accept up to 10 MiB and 10,000 data rows.
 
+File imports and import tests follow the approval policy for the model's `load` method.
+File exports follow the policy for `export_data`, which has a write effect because it can
+create external IDs. When a transfer requires approval, use the matching JSON-2 method
+with an `Idempotency-Key` and retry the same call after approval. File previews and blank
+templates remain available to users with the required model and field access.
+
 JSON-2 clients can also read a file with `read_import_file` on any model. The parameters are `file` (base64),
 `file_type` (`csv` or `xlsx`), and optionally `sheet` (the worksheet; required when a workbook has more than one) or
 `separator` (`,`, `;` or a tab, CSV only). It answers `{header, rows, sheet}`: the first row as column titles and the

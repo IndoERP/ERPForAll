@@ -269,3 +269,60 @@ test("the notification shortcut focuses the inbox and acknowledgement updates th
   unsubscribe();
   view.dispose();
 });
+
+test("opening Notifications cancels a saved conversation that is still loading", async () => {
+  let finish!: (value: unknown) => void;
+  const summary = new Promise(resolve => { finish = resolve; });
+  const call = vi.fn(async (_: string, method: string) => {
+    if (method === "conversation_search") return { items: [], next: null };
+    if (method === "conversation_saved") return { items: [{ id: 5, channel_id: 7, channel_name: "Purchasing", preview: "Order" }], next: null };
+    if (method === "conversation_summary") return await summary;
+    if (method === "messaging_notifications") return [];
+    throw new Error(method);
+  });
+  const view = renderDiscuss({ store: new MessagingStore({ reportError: e => { throw e; } }), rpc: { call } as unknown as RpcClient, uid: 5, userName: "A" });
+  document.body.append(view.node);
+  find(view.node, "Discuss").click();
+  find(view.node, "Saved").click();
+  await vi.waitFor(() => expect(view.node.querySelector('[data-key="s5"]')).toBeTruthy());
+  view.node.querySelector<HTMLButtonElement>('[data-key="s5"]')!.click();
+  expect(call.mock.calls.some(([, method]) => method === "conversation_summary")).toBe(true);
+  view.notifications.open();
+  await vi.waitFor(() => expect(view.node.textContent).toContain("No notifications."));
+  finish({ id: 7, name: "Purchasing", channel_type: "group", owner: true, unread: 0, bookmarks: 1, seen: 0, latest: 5, preview: "Order", sender: null, date: null });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(view.node.querySelector(".discuss-panel")?.classList.contains("has-thread")).toBe(false);
+  expect(mounts).toHaveLength(0);
+  view.dispose();
+});
+
+test("a notification refresh preserves an in-flight acknowledgement and keyboard focus", async () => {
+  vi.stubGlobal("WebSocket", Socket);
+  let acknowledge!: () => void;
+  const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+  let title = "Order", first = true;
+  const call = vi.fn(async (_: string, method: string) => {
+    if (method === "messaging_notifications") return [{ message: first ? 10 : 11, model: null, res_id: null, subject: title, unread: true }];
+    if (method === "messaging_notification_read") { await ack; first = false; return null; }
+    throw new Error(method);
+  });
+  const view = renderDiscuss({ store: new MessagingStore({ reportError: e => { throw e; } }), rpc: { call } as unknown as RpcClient,
+    uid: 5, userName: "A", policy: { company: 5, csrf: "test", retry: [1, 4] } });
+  document.body.append(view.node);
+  view.notifications.open();
+  await vi.waitFor(() => find(view.node, "Mark Order as read"));
+  const mark = find(view.node, "Mark Order as read");
+  mark.focus();
+  mark.click();
+  title = "Order updated";
+  Socket.all[0]!.replay();
+  await vi.waitFor(() => find(view.node, "Mark Order updated as read"));
+  const refreshed = find(view.node, "Mark Order updated as read");
+  refreshed.click();
+  expect(call.mock.calls.filter(([, method]) => method === "messaging_notification_read")).toHaveLength(1);
+  expect(document.activeElement).toBe(refreshed);
+  acknowledge();
+  await vi.waitFor(() => expect(view.node.querySelector('[data-key="n11"]')).toBeTruthy());
+  expect(document.activeElement).toBe(view.node.querySelector('[data-key="n11"]'));
+  view.dispose();
+});

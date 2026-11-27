@@ -1273,6 +1273,20 @@ test("Confirm clicked right after typing the password sends run_check once", asy
   expect(session.calls.filter(c => c.path.endsWith("/run_check")).map(c => c.body["password"])).toEqual(["current-secret"]);
 });
 
+test("password-manager autofill can correct a required-field error before confirming", async () => {
+  const session = await openIdentity(passwordFixtures());
+  const input = document.querySelector<HTMLInputElement>(".wizard-dialog input[name=password]")!;
+  input.value = "draft";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(input.validity.valueMissing).toBe(true);
+  input.value = "fixture";
+  dialogButton("Confirm").click();
+  await vi.waitFor(() => expect(heading()).toBe("Change password"));
+  expect(session.calls.filter(c => c.path.endsWith("/run_check"))).toHaveLength(1);
+});
+
 /// (partial: mounted client with explicit HTTP fixtures; typing both passwords and clicking at once submits the own form)
 test("Change password clicked right after typing both passwords submits them", async () => {
   const session = await openIdentity(passwordFixtures());
@@ -1317,6 +1331,18 @@ test("a submission answered with the identity confirmation is sent again exactly
   expect(changes[1]!.body).toEqual(changes[0]!.body);
   expect(session.calls.filter(c => c.path.endsWith("/run_check"))).toHaveLength(2);
   expect(presented).toEqual([]);
+});
+
+test("cancelling renewed identity confirmation discards the retained password operation", async () => {
+  const session = await openIdentity(passwordFixtures({ ownAnswers: ["identity"] }));
+  await confirmIdentity();
+  await submitOwn();
+  await vi.waitFor(() => expect(heading()).toBe("Confirm your identity"));
+  typeSecret("password", "fixture");
+  dialogButton("Cancel").click();
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog")).toBeNull());
+  expect(session.calls.filter(call => call.path.endsWith("change.password.own/change_password"))).toHaveLength(1);
+  expect(session.calls.filter(call => call.path.endsWith("/run_check"))).toHaveLength(1);
 });
 
 /// (partial: mounted client with explicit HTTP fixtures; an interrupted resubmission is reported and never repeated)

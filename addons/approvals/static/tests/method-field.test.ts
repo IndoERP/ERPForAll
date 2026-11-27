@@ -7,13 +7,13 @@ let field: WidgetHandle;
 let services: MessageServices;
 afterEach(() => { field.dispose(); services.dispose(); document.body.replaceChildren(); });
 
-function mount(model: unknown) {
+function mount(model: unknown, readonly = false, value: string | false = "") {
   const change = vi.fn();
   const report = vi.fn();
   const call = vi.fn(async (resource: string) => resource === "ir.model" ? [{ model: "res.partner" }] : ["web_save"]);
   services = new MessageServices(document.body, report);
   field = methodField({
-    values: { model_id: model, effect: "write" }, value: "", field: { name: "method", label: "Method" },
+    values: { model_id: model, effect: "write" }, value, field: { kind: "char", name: "method", label: "Method", readonly },
     context: {}, messages: services, change, report, rpc: { call },
   } as unknown as WidgetEnvironment);
   document.body.append(field.node);
@@ -39,5 +39,11 @@ test("a model and effect determine the searchable methods and the selected value
 test("a workflow across all models has no method picker queries", () => {
   const { input, call } = mount(false);
   expect(input.disabled).toBe(true);
+  expect(call).not.toHaveBeenCalled();
+});
+
+test.each([[false, "All methods"], ["web_save", "web_save"]] as const)("a read-only workflow displays its method scope for %s", (value, display) => {
+  const { call } = mount({ id: 23 }, true, value);
+  expect(field.node.querySelector(".field-read-value")?.textContent).toBe(display);
   expect(call).not.toHaveBeenCalled();
 });

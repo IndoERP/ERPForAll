@@ -27,6 +27,27 @@ fn refusal(call: &str, uid: i64) -> String {
 }
 
 #[tokio::test]
+async fn authenticated_hooks_require_system_and_a_private_method() {
+    let db = TestDb::create().await.unwrap();
+    let orm = orm_on(&db);
+    let uid = UserId::new(2).unwrap();
+    for (principal, method) in [(uid, "_post_login"), (SUPERUSER_ID, "post_login")] {
+        let mut tx = orm.begin(principal).await.unwrap();
+        let err = tx
+            .call_authenticated_hook::<(), ()>(uid, erp_orm::Context::new(), method, ())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Access);
+        assert_eq!(
+            err.message(),
+            "Authenticated hook dispatch requires a system transaction and a private method"
+        );
+        tx.rollback().await.unwrap();
+    }
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
 async fn call_init_refuses_a_user_transaction() {
     let db = TestDb::create().await.unwrap();
     let orm = orm_on(&db);

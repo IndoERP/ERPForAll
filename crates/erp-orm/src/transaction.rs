@@ -13,7 +13,7 @@
 //! [`Orm::run`] is the unit-of-work entry point: it retries serialization failures and deadlocks.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use deadpool_postgres::{Object, Pool};
@@ -134,6 +134,8 @@ pub(crate) struct Shared {
     pub(crate) registry: Arc<Registry>,
     pub(crate) dispatch: Dispatch,
     pub(crate) graph: ComputeGraph,
+    /// Whether creating a model can reach an outbox event through this generation's field graph.
+    pub(crate) capture_models: Box<[OnceLock<bool>]>,
     /// Relational facts of the registry (inverses, field domains, FK metadata).
     pub(crate) relations: crate::relational::Relations,
     /// The models a write to each table may change (the write ticks of streams).
@@ -1043,6 +1045,12 @@ impl OrmBuilder {
             shared: Arc::new(Shared {
                 generation_attachments: Arc::new(self.generation_attachments),
                 tables: write_gens::TableModels::build(&self.registry),
+                capture_models: self
+                    .registry
+                    .models()
+                    .iter()
+                    .map(|_| OnceLock::new())
+                    .collect(),
                 registry: self.registry,
                 dispatch,
                 graph,

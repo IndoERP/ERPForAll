@@ -126,7 +126,7 @@ fn spec_data_001_schema_validation_before_loading() {
     assert_eq!(e.line(), 2);
     assert_eq!(
         e.detail(),
-        "unknown attribute 'unknown_attr' on <record>; allowed: id, model, forcecreate, uid, context"
+        "unknown attribute 'unknown_attr' on <record>; allowed: id, model, forcecreate, protect, uid, context"
     );
 
     // Required attribute.

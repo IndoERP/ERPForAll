@@ -351,6 +351,13 @@ async fn ir_job_actions_require_job_admin_capability() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert!(err.message().contains("jobs.admin"));
 
+    let err = tx
+        .job_queue_health(&user_env, "test_jobs.ui_script")
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access);
+    assert!(err.message().contains("jobs.admin"));
+
     tx.rollback().await.unwrap();
 }
 

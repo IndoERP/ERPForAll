@@ -397,6 +397,30 @@ describe("Activity menu client", () => {
     handle.dispose();
   });
 
+  test("the disclosure keeps its actions in Tab order until focus leaves", async () => {
+    const rpc = { call: async (model: string) => model === "mail.activity" ? answer([], 0) : { total: 2, items: [] } } as unknown as RpcClient;
+    const handle = renderActivityMenu({ ...envFor(rpc), openApprovals: vi.fn(),
+      discussNotifications: { count: async () => 1, open: vi.fn(), subscribe: () => () => {} } });
+    const next = document.createElement("button");
+    container.append(handle.node, next);
+    const toggle = trigger(handle.node);
+    toggle.focus();
+    toggle.click();
+    await handle.refresh();
+    const actions = [...handle.node.querySelectorAll<HTMLButtonElement>(".activity-menu-body button")];
+    expect(actions.map(action => action.dataset["focusKey"])).toEqual(["footer", "approvals", "notifications"]);
+    expect(actions.map(action => action.tabIndex)).toEqual([0, 0, 0]);
+    for (const action of actions) {
+      action.focus();
+      action.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    }
+    next.focus();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(next);
+    handle.dispose();
+  });
+
   /// (partial: the entry is hidden only for a deployment without the mail.activity model; every other first-read failure keeps it in a failed state)
   test("isDisplayed is false only for the unknown mail.activity model", async () => {
     expect(isUnknownActivityModel(unknownModel())).toBe(true);

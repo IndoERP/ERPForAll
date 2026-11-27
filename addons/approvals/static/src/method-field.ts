@@ -6,7 +6,8 @@ import {
 
 export function methodField(env: WidgetEnvironment): WidgetHandle {
   if (env.mode === "read" || env.field.readonly) {
-    return resolveFieldWidget("char", "form").render({ ...env, field: { ...env.field, widget: "char", readonly: true } });
+    const value = env.value === undefined || env.value === null || env.value === false || env.value === "" ? t("All methods") : env.value;
+    return resolveFieldWidget("char", "form").render({ ...env, value, field: { ...env.field, widget: "char", readonly: true } });
   }
   const relation = env.values?.["model_id"];
   const modelId = Array.isArray(relation) ? relation[0]

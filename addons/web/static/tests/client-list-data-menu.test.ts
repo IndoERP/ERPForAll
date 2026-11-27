@@ -268,6 +268,23 @@ test("A refused test renders the row and field message", async () => {
   expect(options.imported).not.toHaveBeenCalled();
 });
 
+test("dropping multiple files invalidates the previous preview before another import can run", async () => {
+  const { dialog, fileCalls } = await startImport();
+  chooseFile(dialog, "previous.csv");
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+  const drop = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File([], "first.csv"), new File([], "second.csv")] } });
+  dialog.querySelector(".impex-upload")!.dispatchEvent(drop);
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("Drop one file at a time.");
+  expect(importButton(dialog).disabled).toBe(true);
+  expect(testButton(dialog).disabled).toBe(true);
+  expect(mappings(dialog)).toHaveLength(0);
+  importButton(dialog).click();
+  expect(fileCalls.some(request => request.action === "import")).toBe(false);
+  chooseFile(dialog, "replacement.csv");
+  await vi.waitFor(() => expect(importButton(dialog).disabled).toBe(false));
+});
+
 test("Re-selecting the file clears the previous test, and import can run directly", async () => {
   const { dialog, options } = await startImport();
   const reloadFailure = new Error("Reload failed");

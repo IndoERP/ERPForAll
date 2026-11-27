@@ -80,6 +80,73 @@ fn native_drafts_publish_once_and_legacy_policies_keep_visible_history() {
         ))[0]
             .as_i64()
             .unwrap();
+        let saved = success(&admin(
+            WORKFLOW,
+            "create",
+            json!({"vals_list":[{
+                "name":"Saved reviewers","model_id":model,"method":"write",
+                "step_ids":[[0,0,{"name":"Team","user_ids":[[6,0,[first,second]]]}]]
+            }]}),
+        ))[0]
+            .as_i64()
+            .unwrap();
+        let limited = admin(
+            WORKFLOW,
+            "action_publish",
+            json!({
+                "ids":[saved], "context":{"allowed_company_ids":[fixture.user(Subject::A).company]}
+            }),
+        );
+        assert_eq!(limited.status, 403);
+        assert_eq!(workflow(saved)["state"], "draft");
+        let title = "Policy with unavailable reviewers";
+        let restricted_policy = admin(
+            POLICY,
+            "create",
+            json!({
+                "context":{"allowed_company_ids":[fixture.user(Subject::A).company]},
+                "vals_list":[{
+                    "name":title,"principal_kind":"user","effect":"write","model":"res.partner",
+                    "method":"create","outcome":"approve","review_steps":[{"name":"Team","user_ids":[first,second]}]
+                }]
+            }),
+        );
+        assert_eq!(restricted_policy.status, 403);
+        let error: Value = serde_json::from_str(&restricted_policy.body).unwrap();
+        assert_eq!(
+            error["message"],
+            "All reviewers must be visible when creating a workflow revision."
+        );
+        assert_eq!(
+            success(&admin(
+                POLICY,
+                "search_count",
+                json!({"domain":[["name","=",title]]})
+            )),
+            0
+        );
+        success(&admin(
+            "res.users",
+            "write",
+            json!({"ids":[second],"vals":{"active":false}}),
+        ));
+        assert_eq!(
+            admin(WORKFLOW, "action_publish", json!({"ids":[saved]})).status,
+            422
+        );
+        assert_eq!(workflow(saved)["state"], "draft");
+        let step = workflow(saved)["step_ids"][0].as_i64().unwrap();
+        success(&admin(
+            STEP,
+            "write",
+            json!({"ids":[step],"vals":{"user_ids":[[6,0,[first]]]}}),
+        ));
+        success(&admin(WORKFLOW, "action_publish", json!({"ids":[saved]})));
+        success(&admin(
+            "res.users",
+            "write",
+            json!({"ids":[second],"vals":{"active":true}}),
+        ));
         let draft_values =
             json!({"vals_list":[{"name":"Native review","model_id":model,"method":"web_save"}]});
         assert_eq!(
@@ -125,6 +192,14 @@ fn native_drafts_publish_once_and_legacy_policies_keep_visible_history() {
         ));
         success(&admin(WORKFLOW, "action_publish", json!({"ids":[draft]})));
         let published = workflow(draft);
+        let restricted_revision = admin(
+            WORKFLOW,
+            "action_create_revision",
+            json!({
+                "ids":[draft],"context":{"allowed_company_ids":[fixture.user(Subject::A).company]}
+            }),
+        );
+        assert_eq!(restricted_revision.status, 403);
         let policy = published["policy_id"]
             .as_i64()
             .or_else(|| published["policy_id"][0].as_i64())

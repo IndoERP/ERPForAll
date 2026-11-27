@@ -1948,12 +1948,8 @@ impl Transaction {
                 .iter()
                 .find(|v| v.model == view.name)
                 .ok_or_else(|| Error::invariant("Missing model view definition."))?;
-            let ddl = format!(
-                "CREATE OR REPLACE VIEW {} AS {}",
-                erp_sql::quote(&view.table),
-                (provider.select)()
-            );
-            self.batch(&ddl).await?;
+            self.sync_base_model_view(&view.table, &(provider.select)())
+                .await?;
         }
         if !views.is_empty() {
             self.init_models_locked(
@@ -1972,6 +1968,33 @@ impl Transaction {
         self.seal_clear_columns(&clear).await?;
         self.set_timeouts(&saved.0, &saved.1).await?;
         Ok(SchemaSync { steps })
+    }
+
+    /// PostgreSQL normalizes a view's SELECT on creation. Record the declaration and
+    /// the installed definition together so an unchanged sync needs only a catalog read.
+    async fn sync_base_model_view(&mut self, table: &str, select: &str) -> Result<()> {
+        const STATE: &str = "SELECT 'erpforall model view v1 ' ||
+            encode(sha256(convert_to($2::text || chr(31) || pg_get_viewdef(c.oid, false), 'UTF8')), 'hex'),
+            obj_description(c.oid, 'pg_class')
+            FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
+            AND c.relname::text = $1 AND c.relkind = 'v'";
+        let current = self.query(STATE, &[&table, &select]).await?;
+        if let Some(row) = current.first() {
+            let expected: &str = row.get(0);
+            if row.get::<_, Option<&str>>(1) == Some(expected) {
+                return Ok(());
+            }
+        }
+        let name = erp_sql::quote(table);
+        self.batch(&format!("CREATE OR REPLACE VIEW {name} AS {select}"))
+            .await?;
+        let installed = self.query(STATE, &[&table, &select]).await?;
+        let marker: &str = installed
+            .first()
+            .ok_or_else(|| Error::invariant("Created model view is missing from the catalog."))?
+            .get(0);
+        self.batch(&format!("COMMENT ON VIEW {name} IS {}", literal(marker)))
+            .await
     }
 
     /// Bound the rest of the transaction by [`SCHEMA_LOCK_TIMEOUT`] and

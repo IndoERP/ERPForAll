@@ -2214,6 +2214,68 @@ async fn approval_request_flow() {
         .status(),
         409
     );
+    // This editor's snapshot predates both independent submissions under the same revision.
+    let mut stale = f.begin(admin).await;
+    let revision = stale
+        .env()
+        .records(MODEL)
+        .unwrap()
+        .browse([policy_id])
+        .unwrap();
+    revision.read(&mut stale, &["active"]).await.unwrap();
+    let submit = |key| {
+        approval_rpc(
+            &f,
+            &service,
+            requester,
+            WRITE,
+            values("Submitted during policy edit"),
+            Some(key),
+        )
+    };
+    let (first, second) = tokio::join!(
+        submit("019a0000-0000-7000-8000-000000000004"),
+        submit("019a0000-0000-7000-8000-000000000005"),
+    );
+    let overlapping = [pending_id(&first), pending_id(&second)];
+    assert_ne!(overlapping[0], overlapping[1]);
+    // Archiving and reactivating in a single transaction cannot revive either submission.
+    for active in [false, true] {
+        revision
+            .write(
+                &mut stale,
+                RawVals::new().set_cell("active", Cell::Bool(active)),
+            )
+            .await
+            .unwrap();
+    }
+    stale.commit().await.unwrap();
+    drop(stale);
+    for id in overlapping {
+        let archived = approval_rpc(
+            &f,
+            &service,
+            requester,
+            STATUS,
+            json!({"request_id":id}),
+            None,
+        )
+        .await;
+        assert_eq!(body(&archived)["state"], "expired");
+        assert_eq!(body(&archived)["can_decide"], false);
+    }
+    let fresh = pending_id(&submit("019a0000-0000-7000-8000-000000000006").await);
+    let current = approval_rpc(
+        &f,
+        &service,
+        reviewer,
+        STATUS,
+        json!({"request_id":fresh}),
+        None,
+    )
+    .await;
+    assert_eq!(body(&current)["state"], "pending");
+    assert_eq!(body(&current)["can_decide"], true);
     f.write(
         admin,
         policy_id,

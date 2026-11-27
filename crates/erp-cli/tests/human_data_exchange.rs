@@ -6,6 +6,8 @@
     clippy::panic,
     reason = "integration assertions"
 )]
+#[path = "support/multiuser_fixture.rs"]
+mod multiuser_fixture;
 #[path = "support/native_http.rs"]
 mod native_http;
 
@@ -66,6 +68,74 @@ fn ok(reply: &BinaryReply) {
 fn json_ok(reply: &BinaryReply) -> Value {
     ok(reply);
     serde_json::from_slice(&reply.body).unwrap()
+}
+
+#[test]
+fn browser_files_honor_the_canonical_import_and_export_policies() {
+    use multiuser_fixture::{Subject, success};
+    multiuser_fixture::run(|fixture| {
+        let native = fixture.native;
+        let page = native_http::request(
+            native.port,
+            "GET",
+            "/erp",
+            &[("cookie", &native.cookies)],
+            "",
+        );
+        let csrf = native_http::embedded(&page, "erp-bootstrap")["csrf"]["logout"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let browser = Browser {
+            fixture: native,
+            csrf,
+        };
+        let reviewer = fixture.user(Subject::Admin);
+        let id = success(&fixture.rpc(
+            Subject::Admin,
+            TAG,
+            "create",
+            json!({"vals_list":[{"name":"Transfer policy tag"}]}),
+        ))[0]
+            .as_i64()
+            .unwrap();
+        let upload = json!({"model":TAG,"format":"csv","fields":["name"]});
+        let download = json!({"model":TAG,"format":"csv","fields":[{"name":"name","label":"Name"}],"ids":[id]});
+        let template =
+            json!({"model":TAG,"format":"csv","fields":[{"name":"name","label":"Name"}]});
+        let source = b"name\nPending file review\n";
+        for (method, outcome) in [("load", "approve"), ("export_data", "deny")] {
+            let mut policy = json!({"name":method,"principal_kind":"user","outcome":outcome,
+                "model":TAG,"method":method,"effect":"write"});
+            if outcome == "approve" {
+                policy["approver_user_ids"] = json!([[6, 0, [reviewer.id]]]);
+            }
+            success(&fixture.rpc(
+                Subject::Admin,
+                "ir.approval.policy",
+                "create",
+                json!({"vals_list":[policy]}),
+            ));
+        }
+        ok(&browser.upload("preview", &upload, source));
+        ok(&browser.download("template", &template));
+        for action in ["test", "import"] {
+            let response = browser.upload(action, &upload, source);
+            assert_eq!(response.status, 422);
+            assert!(
+                String::from_utf8_lossy(&response.body)
+                    .contains("res.partner.category.load through JSON-2")
+            );
+        }
+        let remaining = success(&fixture.rpc(
+            Subject::Admin,
+            TAG,
+            "search_count",
+            json!({"domain":[["name","=","Pending file review"]]}),
+        ));
+        assert_eq!(remaining, 0);
+        assert_eq!(browser.download("export", &download).status, 403);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -169,7 +239,16 @@ async fn bounded_preview_and_transactional_import_share_the_browser_session() {
             .get::<_, i64>(0)
     };
     let options = json!({"model":TAG,"format":"csv","fields":["id",null,"name"]});
-    let source = b"identifier,unused,title\n__import__.browser_tag,,=literal\n";
+    let source = b"identifier,unused,title\n,Notes for this file,\n__import__.browser_tag,,=literal\n,End of file,\n";
+    for action in ["test", "import"] {
+        let empty = browser.upload(
+            action,
+            &options,
+            b"identifier,unused,title\n,Only a note,\n",
+        );
+        assert_eq!(empty.status, 422);
+        assert!(String::from_utf8_lossy(&empty.body).contains("no data rows"));
+    }
     let test = json_ok(&browser.upload("test", &options, source));
     assert_eq!(test["count"], 1, "{test}");
     assert!(test.get("ids").is_none());
@@ -179,17 +258,18 @@ async fn bounded_preview_and_transactional_import_share_the_browser_session() {
     assert_eq!(count().await, 0, "Test left an external ID");
     assert_eq!(jobs().await, 0, "Test left a queued job");
     let imported = json_ok(&browser.upload("import", &options, source));
+    assert_eq!(imported["ids"].as_array().unwrap().len(), 1);
     let id = imported["ids"][0].as_i64().unwrap();
     assert_eq!(count().await, 1);
     assert_eq!(jobs().await, 1, "Import should commit the queued job");
-    let bad_options = json!({"model":TAG, "format":"csv", "fields":["id","color","name"]});
-    let bad = b"identifier,color,title\n__import__.browser_other,1,new\n\n__import__.browser_tag,invalid,modified\n";
+    let bad_options = json!({"model":TAG, "format":"csv", "fields":["id","color","name",null]});
+    let bad = b"identifier,color,title,notes\n__import__.browser_other,1,new,\n,,,Only a note\n\n__import__.browser_tag,invalid,modified,\n";
     let test = json_ok(&browser.upload("test", &bad_options, bad));
     assert_eq!(test["count"], false);
-    assert_eq!(test["messages"][0]["file_rows"], json!({"from":4,"to":4}));
+    assert_eq!(test["messages"][0]["file_rows"], json!({"from":5,"to":5}));
     let result = json_ok(&browser.upload("import", &bad_options, bad));
     assert_eq!(result["ids"], false);
-    assert!(!result["messages"].as_array().unwrap().is_empty());
+    assert_eq!(result["messages"][0]["file_rows"], json!({"from":5,"to":5}));
     assert_eq!(jobs().await, 1, "A failed file must roll back queued jobs");
     assert_eq!(fixture.client.query_one("SELECT count(*) FROM ir_model_data WHERE module='__import__' AND name='browser_other'", &[]).await.unwrap().get::<_,i64>(0), 0);
 
@@ -258,6 +338,26 @@ async fn bounded_preview_and_transactional_import_share_the_browser_session() {
     )
     .unwrap();
     assert_eq!(file.rows[0], ["=literal", "__import__.browser_tag"]);
+    let contacts = json_ok(&browser.upload(
+        "import",
+        &json!({"model":"res.partner", "format":"csv", "fields":["name","category_id/id"]}),
+        b"name,tag\nTagged Alpha,__import__.browser_tag\nTagged Beta,__import__.browser_tag\n",
+    ));
+    assert_eq!(contacts["ids"].as_array().unwrap().len(), 2);
+    for (format, kind) in [
+        ("csv", erp_data::ImportFileType::Csv),
+        ("xlsx", erp_data::ImportFileType::Xlsx),
+    ] {
+        let reply = browser.download("export", &json!({
+            "model": TAG, "format":format, "ids":[id], "fields":[{"name":"partner_ids","label":"Partners"}]
+        }));
+        ok(&reply);
+        let table = erp_data::read_import_file(&reply.body, kind, &Default::default()).unwrap();
+        assert_eq!(table.rows.len(), 1);
+        let mut names: Vec<_> = table.rows[0][0].split(',').collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Tagged Alpha", "Tagged Beta"]);
+    }
     let template = browser.download(
         "template",
         &json!({"model":"res.partner","format":"xlsx","fields":[{"name":"phone","label":"Phone"},{"name":"email","label":"Email"},{"name":"city","label":"City"}]}),

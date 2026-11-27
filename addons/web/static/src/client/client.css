@@ -5574,6 +5574,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .discuss-nav button[aria-pressed=true], .app-bar .discuss-nav button[aria-pressed=true] { color: var(--selected-text); background: var(--selected); border-color: var(--selected-line); }
 .discuss-list { overflow: auto; padding: 5px; flex: 1; overscroll-behavior: contain; }
 .discuss-entry { display: flex; align-items: center; min-width: 0; }
+.discuss-entry .discuss-icon[aria-disabled="true"] { opacity: .55; }
 .discuss-panel .discuss-row { display: flex; gap: 9px; align-items: center; flex: 1; min-width: 0; padding: 10px 8px; border: 0; border-radius: var(--radius-control); background: transparent; text-align: start; color: var(--text); }
 .discuss-panel .discuss-row[aria-current=true], .app-bar .discuss-panel .discuss-row[aria-current=true] { background: var(--selected); }
 .discuss-panel button:hover:not(:disabled), .discuss-window .discuss-icon:hover { background: var(--hover); }

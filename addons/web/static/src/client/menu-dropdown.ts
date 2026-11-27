@@ -3,7 +3,7 @@
 export interface MenuDropdownOptions {
   /** The button or clickable trigger that controls menu visibility. */
   readonly trigger: HTMLElement;
-  /** The menu container element with role="menu". */
+  /** The popup container. A disclosure with role="region" preserves its controls' native Tab order. */
   readonly menu: HTMLElement;
   /**
    * Visibility presentation:
@@ -56,6 +56,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   const { trigger, menu } = options;
   const mode = options.mode ?? "display";
   const doc = trigger.ownerDocument;
+  const disclosure = menu.getAttribute("role") === "region";
 
   let open = false;
   let disposed = false;
@@ -63,7 +64,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   let wantFocus = true;
 
   // Set initial accessibility attributes
-  if (!trigger.hasAttribute("aria-haspopup")) {
+  if (!disclosure && !trigger.hasAttribute("aria-haspopup")) {
     trigger.setAttribute("aria-haspopup", "true");
   }
   trigger.setAttribute("aria-expanded", "false");
@@ -98,6 +99,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
       currentFocusedIndex = 0;
     }
 
+    if (disclosure) return;
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
       item.tabIndex = i === currentFocusedIndex ? 0 : -1;
@@ -253,7 +255,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
     }
 
     if (event.key === "Tab") {
-      close(false);
+      if (!disclosure) close(false);
       return;
     }
 
@@ -307,8 +309,7 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
     }
   };
 
-  // Document pointerdown listener for click-outside
-  const onDocPointerdown = (event: PointerEvent): void => {
+  const onOutside = (event: Event): void => {
     sync();
     if (disposed || !open) return;
     const target = event.target as Node | null;
@@ -323,7 +324,8 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   trigger.addEventListener("click", onTriggerClick);
   menu.addEventListener("keydown", onMenuKeydown);
   menu.addEventListener("focusin", onMenuFocusin);
-  doc.addEventListener("pointerdown", onDocPointerdown);
+  doc.addEventListener("pointerdown", onOutside);
+  if (disclosure) doc.addEventListener("focusin", onOutside);
 
   return {
     open: openMenu,
@@ -340,7 +342,8 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
       menu.removeEventListener("scroll", cue);
       menu.removeEventListener("keydown", onMenuKeydown);
       menu.removeEventListener("focusin", onMenuFocusin);
-      doc.removeEventListener("pointerdown", onDocPointerdown);
+      doc.removeEventListener("pointerdown", onOutside);
+      if (disclosure) doc.removeEventListener("focusin", onOutside);
     }
   };
 }

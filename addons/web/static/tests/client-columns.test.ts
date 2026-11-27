@@ -81,6 +81,24 @@ test("in a container narrower than the content the columns shrink to fit, never 
  expect(await fit(840,[300,100])).toEqual({ widths: [500, 300], table: "840px" });
 });
 
+test("the last sortable column leaves room for its sort button, touch chooser and resize handle", () => {
+  const host = document.createElement("div"), t = document.createElement("table");
+  Object.defineProperty(host, "clientWidth", { value: 200 });
+  t.innerHTML = '<thead><tr><th></th><th>Name</th><th class="sortable-column column-choices-anchor">Status</th></tr></thead><tbody></tbody>';
+  document.body.append(host); host.append(t);
+  const widths = new Map<string, number>();
+  const fields = [{ name: "name", label: "Name", kind: "char" }, { name: "state", label: "Status", kind: "selection" }];
+  resizeColumns(t, fields, widths)();
+  const handle = t.querySelector<HTMLElement>('[aria-label="Resize Status column"]')!;
+  const minimum = Number(handle.getAttribute("aria-valuemin"));
+  // 12px cell padding, 44px touch chooser, 16px resize gutter and 6px between controls.
+  const controls = 12 + 44 + 16 + 6;
+  expect(widths.get("state")! - controls).toBeGreaterThanOrEqual(44);
+  handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  expect(widths.get("state")).toBe(minimum);
+  expect(minimum - controls).toBeGreaterThanOrEqual(44);
+});
+
 test("settle after attaching sizes the columns in the same task, so the content layout is never painted",()=>{
  const widths=new Map<string,number>(),host=document.createElement("div");
  Object.defineProperty(host,"clientWidth",{configurable:true,value:440});

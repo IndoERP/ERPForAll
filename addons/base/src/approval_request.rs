@@ -65,6 +65,8 @@ pub struct IrApprovalRequest {
         ondelete = "restrict"
     )]
     pub revision_id: Option<RecId>,
+    #[field(timestamptz, readonly, groups = ".")]
+    pub revision_archived_at: Option<TimestampTz>,
     #[field(json, required = true)]
     pub companies: Option<Json>,
     #[field(json, required = true, groups = ".")]
@@ -139,7 +141,10 @@ fn expired() -> Error {
 async fn live(tx: &mut Transaction, id: i64) -> Result<bool> {
     let rows = tx
         .query(
-            "SELECT expires_at > clock_timestamp() FROM ir_approval_request WHERE id = $1",
+            "SELECT r.expires_at > clock_timestamp()
+                 AND r.revision_archived_at IS NOT DISTINCT FROM p.last_archived_at
+             FROM ir_approval_request r JOIN ir_approval_policy p ON p.id=r.revision_id
+             WHERE r.id = $1",
             &[&id],
         )
         .await?;
@@ -307,9 +312,10 @@ pub async fn admit(tx: &mut Transaction, call: Call<'_>) -> Result<Admission> {
     let inserted = tx
         .query(
             "INSERT INTO ir_approval_request (requester_id, request_key, binding, payload, \
-             target_model, target_method, revision_id, companies, excluded, current_step, state, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 'pending', \
-                     clock_timestamp() + interval '24 hours') \
+             target_model, target_method, revision_id, companies, excluded, current_step, state, expires_at, revision_archived_at) \
+             SELECT $1, $2, $3, $4, $5, $6, p.id, $8, $9, 1, 'pending', \
+                    clock_timestamp() + interval '24 hours', p.last_archived_at \
+             FROM ir_approval_policy p WHERE p.id=$7 \
              ON CONFLICT (requester_id, request_key) DO NOTHING RETURNING id",
             &[
                 &requester,
@@ -410,7 +416,7 @@ impl Review {
         let sql = format!(
             "SELECT r.requester_id, r.state, r.payload, r.operation, p.active, r.current_step,
                     {summary} AS summary FROM ir_approval_request r {joins} WHERE r.id=$1 {lock}",
-            summary = queue::SUMMARY,
+            summary = queue::summary(),
             joins = queue::JOINS,
         );
         let rows = tx.query(&sql, &[&id]).await?;

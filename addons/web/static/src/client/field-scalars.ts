@@ -166,11 +166,18 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
   if (input instanceof HTMLTextAreaElement && config.rows !== undefined) input.rows = config.rows;
   input.value = numeric && numericLocale && !empty && typeof value === "number" ? config.enable_formatting === false && !percentage ? String(value) : percentage ? formatNumeric(percentFromFraction(value), "float", numericLocale, config.digits?.[1]) : formatNumeric(value, numericKind, numericLocale) : text;
   const shell = wrap(input); let represented = input.value;
+  const managedPassword = secret && input instanceof HTMLInputElement && options.model !== undefined && passwordModels.has(options.model);
   shell.node.classList.toggle("field-empty", empty);
   const validate = (commit: boolean): void => {
     shell.clear(); shell.node.classList.toggle("field-dirty", input.value !== represented);
     try {
-      if (!input.checkValidity()) throw new ClientError("validation", input.validationMessage);
+      if (!input.checkValidity()) {
+        shell.invalid(input.validationMessage);
+        // Autofill can replace a managed password without an input event. Its native constraint
+        // must follow the current value even after we have displayed the missing-value error.
+        if (managedPassword) input.setCustomValidity("");
+        return;
+      }
       if (numeric && input.value === represented) return;
       if (percentage) {
         // The percent symbol is optional on input; the draft is a float percent, the stored value its fraction.
@@ -195,7 +202,7 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
     else if (numeric && (event.key === "Enter" || event.key === "Tab")) { if (event.key === "Enter") event.preventDefault(); validate(true); }
   });
   let reset = (): void => {};
-  if (secret && input instanceof HTMLInputElement && options.model && passwordModels.has(options.model)) {
+  if (managedPassword) {
     input.autocomplete = options.model === "res.users.identitycheck" ? "current-password" : "new-password";
     wrapPassword(input, field.label);
     reset = () => { input.type = "password"; input.value = ""; };

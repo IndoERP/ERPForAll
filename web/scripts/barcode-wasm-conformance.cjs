@@ -19,7 +19,7 @@ for (const c of cases) {
     } finally { parser.free(); }
 }
 async function browserCorpus() {
-    const { chromium } = require(join(process.env.HOME, '.local/share/erpforall-qa/node_modules/playwright'));
+    const { chromium } = require('playwright');
     const directory = resolve(process.argv[3]);
     const server = createServer((request, response) => {
         const path = new URL(request.url, 'http://localhost').pathname;

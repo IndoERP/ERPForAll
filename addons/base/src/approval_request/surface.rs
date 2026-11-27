@@ -29,14 +29,15 @@ static STAGE: BaseModelView = BaseModelView {
 };
 
 fn request_sql() -> String {
-    "SELECT r.id, ('Request #' || r.id)::text AS name,
-         CASE WHEN r.state IN ('pending','approved') AND r.expires_at<=statement_timestamp()
+    format!("SELECT r.id, ('Request #' || r.id)::text AS name,
+         CASE WHEN r.state IN ('pending','approved') AND NOT {live}
             THEN 'expired' ELSE r.state END AS state,
          r.target_model, r.target_method, coalesce(nullif(u.name,''),'User #' || r.requester_id) AS requester_name,
          p.name AS policy_name, r.current_step, greatest(1,jsonb_array_length(nullif(p.review_steps,'null'))) AS step_count,
          coalesce(p.review_steps -> (r.current_step-1) ->> 'name',p.name) AS current_step_name,
-         r.expires_at AT TIME ZONE 'UTC' AS expires_at,r.payload AS payload_sha256,r.operation AS execution_receipt
-     FROM ir_approval_request r JOIN res_users u ON u.id=r.requester_id JOIN ir_approval_policy p ON p.id=r.revision_id".into()
+         {expiry} AT TIME ZONE 'UTC' AS expires_at,r.payload AS payload_sha256,r.operation AS execution_receipt
+     FROM ir_approval_request r JOIN res_users u ON u.id=r.requester_id JOIN ir_approval_policy p ON p.id=r.revision_id",
+        live = super::queue::LIVE, expiry = super::queue::EXPIRY)
 }
 
 fn scope_sql() -> String {
@@ -46,24 +47,25 @@ fn scope_sql() -> String {
     include_str!("visibility.sql")
         .replace("{companies}", &MAX_COMPANIES.to_string())
         .replace("{eligibility}", &eligible)
+        .replace("{live}", super::queue::LIVE)
 }
 
 fn stage_sql() -> String {
-    "WITH stages AS (
+    format!("WITH stages AS (
         SELECT r.id AS request_id,n.position,coalesce(p.review_steps -> (n.position-1) ->> 'name',p.name) AS name,
           coalesce(d.reviewer_id, CASE WHEN r.current_step=n.position AND greatest(0,jsonb_array_length(nullif(p.review_steps,'null')))=0
                    THEN r.decider_id END) AS signer,
           CASE WHEN d.id IS NOT NULL THEN CASE WHEN d.approved THEN 'approved' ELSE 'denied' END
                WHEN r.decider_id IS NOT NULL AND r.current_step=n.position THEN CASE WHEN r.state='denied' THEN 'denied' ELSE 'approved' END
                WHEN n.position<>r.current_step THEN 'waiting'
-               WHEN r.expires_at<=statement_timestamp() THEN 'expired' ELSE 'pending' END AS state,d.decided_at
+               WHEN NOT {live} THEN 'expired' ELSE 'pending' END AS state,d.decided_at
         FROM ir_approval_request r JOIN ir_approval_policy p ON p.id=r.revision_id
         CROSS JOIN LATERAL generate_series(1,greatest(1,jsonb_array_length(nullif(p.review_steps,'null')))) n(position)
         LEFT JOIN ir_approval_decision d ON d.request_id=r.id AND d.position=n.position
      )
      SELECT (s.request_id-1)*16+s.position AS id,s.request_id,s.position,s.name,s.state,
             coalesce(nullif(u.name,''),'User #' || u.id) AS decider_name,s.decided_at AT TIME ZONE 'UTC' AS decided_at
-     FROM stages s LEFT JOIN res_users u ON u.id=s.signer".into()
+     FROM stages s LEFT JOIN res_users u ON u.id=s.signer", live = super::queue::LIVE)
 }
 
 #[model(

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Composition of list import/export from the shared data loader and the web workbook writer.
 use bytes::Bytes;
+use erp_addon_base::approval_request::{self, Admission};
 use erp_addon_web::table_xlsx;
 use erp_data::impex::{self, ExchangeField, GroupExportRights, ImportFileOptions, ImportFileType};
 use erp_fields::{Error, Result, Value, convert::value_to_json};
-use erp_orm::{BoxFuture, Operation, Transaction};
+use erp_orm::rpc::Exposure;
+use erp_orm::{BoxFuture, Operation, Records, Transaction};
 use erp_server::web::{
     ExchangeDownload, ExchangeFile, ExchangeUpload, ImportMode, WebDataExchange,
 };
@@ -46,6 +48,38 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| Error::internal(format!("Data exchange worker failed: {e}")))?
 }
 
+/// Binary file transfers have no idempotency receipt. Only dispatch an operation that its
+/// ordinary RPC admission allows without a key. Governed operations use the JSON-2 lifecycle.
+async fn check_transfer_policy(
+    tx: &mut Transaction,
+    records: &Records,
+    method: &str,
+) -> Result<()> {
+    let model = records.model_name();
+    let Some(Exposure::Exposed(exposed)) = tx.exposure().get(records.model_id(), method) else {
+        return Err(Error::access("This data transfer method is unavailable."));
+    };
+    let call = approval_request::Call {
+        model,
+        method,
+        effect: exposed.effect(),
+        key: None,
+        payload: None,
+        binding: None,
+    };
+    file_admission(approval_request::admit(tx, call).await?, model, method)
+}
+
+fn file_admission(admission: Admission, model: &str, method: &str) -> Result<()> {
+    match admission {
+        Admission::Dispatch => Ok(()),
+        Admission::KeyRequired => Err(Error::validation(format!(
+            "This transfer requires approval. Submit {model}.{method} through JSON-2 with an Idempotency-Key and retry that call after approval."
+        ))),
+        Admission::Defer(error) | Admission::ReplayOnly(error) => Err(error),
+    }
+}
+
 async fn upload(
     tx: &mut Transaction,
     mode: ImportMode,
@@ -62,6 +96,9 @@ async fn upload(
     let records = env.records(&options.model)?;
     records.check_access(tx, Operation::Create).await?;
     records.check_access(tx, Operation::Write).await?;
+    if mode != ImportMode::Preview {
+        check_transfer_policy(tx, &records, "load").await?;
+    }
     let (read, sheets, selected_sheet) = blocking(move || {
         let sheets = if kind == ImportFileType::Xlsx {
             impex::import_sheet_names(&bytes)?
@@ -84,7 +121,7 @@ async fn upload(
         Ok((read, sheets, read_options.sheet))
     })
     .await?;
-    let (mut file, positions) = match read {
+    let (mut file, mut positions) = match read {
         Ok(data) => data,
         Err(error)
             if mode == ImportMode::Preview
@@ -126,9 +163,24 @@ async fn upload(
     }
     impex::validate_import_columns(&records, tx, &fields).await?;
     if fields.len() != mapping.len() {
-        for row in &mut file.rows {
-            let mut keep = mapping.iter().map(Option::is_some);
-            row.retain(|_| keep.next() == Some(true));
+        // Removing an ignored column can turn a note or footer into a blank row.
+        // Keep each surviving row paired with its original worksheet row or CSV line.
+        (file.rows, positions) = file
+            .rows
+            .into_iter()
+            .zip(positions)
+            .filter_map(|(mut row, position)| {
+                let mut keep = mapping.iter().map(Option::is_some);
+                row.retain(|_| keep.next() == Some(true));
+                row.iter()
+                    .any(|cell| !cell.is_empty())
+                    .then_some((row, position))
+            })
+            .unzip();
+        if file.rows.is_empty() {
+            return Err(Error::validation(
+                "The mapped columns contain no data rows.",
+            ));
         }
     }
     let result = impex::load(&records, tx, &fields, &file.rows).await?;
@@ -165,9 +217,11 @@ async fn download(
     options: ExchangeDownload,
 ) -> Result<ExchangeFile> {
     let kind = ImportFileType::parse(&options.format)?;
+    // The record picker offers only single-cell columns. Join many-to-many display names
+    // in that cell so one selected record always occupies one exported row.
     let env = tx
         .env()
-        .with_context([("import_compat", Value::Bool(false))]);
+        .with_context([("import_compat", Value::Bool(true))]);
     let records = env.records(&options.model)?;
     let available = if template {
         impex::import_fields(&records, tx).await?
@@ -233,6 +287,7 @@ async fn download(
         }
         let selected = records.browse(ids)?;
         selected.check_access(tx, Operation::Read).await?;
+        check_transfer_policy(tx, &selected, "export_data").await?;
         if selected.exists(tx).await?.len() != selected.len() {
             return Err(Error::validation(
                 "One or more selected records no longer exist.",
@@ -350,4 +405,29 @@ fn csv_file(header: &[String], rows: &[Vec<Json>]) -> Result<Vec<u8>> {
     writer
         .into_inner()
         .map_err(|e| Error::internal(format!("Cannot finish CSV: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Admission, Error, file_admission};
+    use erp_fields::ErrorKind;
+
+    #[test]
+    fn files_dispatch_only_when_rpc_admission_allows_the_transfer() {
+        assert!(file_admission(Admission::Dispatch, "res.partner", "load").is_ok());
+        for method in ["load", "export_data"] {
+            let error = file_admission(Admission::KeyRequired, "res.partner", method).err();
+            assert!(error.is_some_and(|e| e.kind() == ErrorKind::Validation
+                && e.message().contains(&format!(
+                    "res.partner.{method} through JSON-2 with an Idempotency-Key"
+                ))));
+        }
+        let error = file_admission(
+            Admission::ReplayOnly(Error::access("Expired receipt.")),
+            "res.partner",
+            "load",
+        )
+        .err();
+        assert!(error.is_some_and(|e| e.kind() == ErrorKind::Access && e.message() == "Expired receipt."));
+    }
 }

@@ -84,7 +84,10 @@ async fn sync(tx: &mut Transaction, policies: &Records, creating: bool) -> Resul
     } else {
         None
     };
-    let rows = policies.read_with(tx, POLICY_FIELDS, Load::Raw).await?;
+    let rows = policies
+        .with_context([("active_test", Value::Bool(false))])
+        .read_with(tx, POLICY_FIELDS, Load::Raw)
+        .await?;
     if rows.len() != policies.len() {
         return Err(Error::invariant(
             "A policy revision was unavailable for its workflow history.",
@@ -244,13 +247,23 @@ async fn existing_references(
     }
     // Legacy JSON can outlive a deleted user or group. Only existing references can appear
     // in the native relationship. The original policy remains the immutable engine record.
-    let records = env
-        .records(model)?
-        .search_with(
-            tx,
-            &Domain::condition("id", Operator::In, ids)?,
-            &SearchOptions::new().active_test(false),
-        )
-        .await?;
+    let count = ids.len();
+    let model = env.records(model)?;
+    let domain = Domain::condition("id", Operator::In, ids)?;
+    let options = SearchOptions::new().active_test(false);
+    let records = model.search_with(tx, &domain, &options).await?;
+    if records.len() < count
+        && !env.su()
+        && model
+            .sudo(true)
+            .search_with(tx, &domain, &options)
+            .await?
+            .len()
+            != records.len()
+    {
+        return Err(Error::access(
+            "All reviewers must be visible when creating a workflow revision.",
+        ));
+    }
     Ok(records.ids())
 }

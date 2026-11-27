@@ -603,6 +603,34 @@ fn approval_queues_page_only_requests_visible_to_the_current_user() {
             queue(Subject::Admin, "reviewed", 0, 25)["items"][0]["state"],
             "denied"
         );
+        // Upgrade a pre-stamp schema with both a live and an already expired receipt.
+        let legacy_pending = submit(Subject::A, "019a0000-0000-7000-8000-000000000014");
+        runtime
+            .block_on(native.client.batch_execute(
+                "DROP VIEW approval_request_view, approval_request_stage, approval_request_scope;
+             ALTER TABLE ir_approval_request DROP COLUMN revision_archived_at;
+             ALTER TABLE ir_approval_policy DROP COLUMN last_archived_at;
+             UPDATE ir_module_module SET latest_version='1.22' WHERE name='base';",
+            ))
+            .unwrap();
+        success(&native_http::json_post(
+            native.port,
+            &native.cookies,
+            "/erp/module/upgrade",
+            r#"{"modules":["base","approvals"]}"#,
+        ));
+        let upgraded = queue(Subject::Admin, "review", 0, 25);
+        assert_eq!(upgraded["total"], 1);
+        assert_eq!(upgraded["items"][0]["id"], legacy_pending);
+        assert_eq!(
+            orm(
+                Subject::A,
+                VIEW,
+                "read",
+                json!({"ids":[second],"fields":["state"]})
+            )[0]["state"],
+            "expired"
+        );
     });
 }
 
@@ -781,6 +809,21 @@ fn sequential_review_stages_bind_decisions_and_recheck_every_signer() {
         assert_eq!(denied["state"], "denied");
         assert_eq!(denied["steps"][1]["state"], "denied");
         assert_eq!(write(key).status, 403);
+
+        // A signer can also be eligible for the next stage of the same request.
+        let overlapping = submit("019a0000-0000-7000-8000-000000000100");
+        let shown = success(&status(director, overlapping));
+        let next = success(&decide(
+            director,
+            overlapping,
+            1,
+            true,
+            &shown["payload_sha256"],
+        ));
+        assert_eq!(next["can_decide"], true);
+        let reviewed = queue(director, "reviewed");
+        assert_eq!(reviewed["items"][0]["id"], overlapping);
+        assert_eq!(reviewed["items"][0]["can_decide"], true);
     });
 }
 

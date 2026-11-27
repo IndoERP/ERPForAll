@@ -9,6 +9,9 @@ const FLEX_MIN = 80, NAME_MIN = 160;
 /** Left and right padding of a list cell (client.css `--list-cell-x`): an arch `width` names the content width, as in
  *  the reference, and the column is that plus its padding. */
 const CELL_PADDING = 24;
+// The last sortable header shares a cell with the chooser. In the touch layout both controls
+// need 44px, with 6px between them, 16px for the resize edge and the normal leading padding.
+const CHOOSER_HEADER_MIN = CELL_PADDING / 2 + 44 + 6 + 44 + 16;
 /**
   Width rules by field kind or widget, border box in px (cell padding included). A `fixed` column takes the width of
  *  its widest value and header, kept between the bounds, and never grows with the list: a number, a date or a check box
@@ -114,17 +117,18 @@ export function resizeColumns(table: HTMLTableElement, columns: readonly ListCol
     const col = el("col"); group.append(col);
     const rule = ruleOf(field);
     // The narrowest this column is drawn when the list is fitted; a manual resize may go down to 80 px or this floor.
-    const floor = rule ? rule.lo : index === nameIndex ? NAME_MIN : FLEX_MIN;
+    const controlsMin = head.matches(".sortable-column.column-choices-anchor") ? CHOOSER_HEADER_MIN : 0;
+    const floor = Math.max(controlsMin, rule?.lo ?? (index === nameIndex ? NAME_MIN : FLEX_MIN));
     const flexible = !rule || !rule.fixed && rule.hi === undefined;
     // One-line content width bound by the rule: a fixed column keeps it, a flexible one starts from it (capped).
     const spec = (measured: number): Spec => {
-      if (rule?.fixed) { const width = Math.max(rule.lo, Math.min(rule.hi ?? rule.lo, measured)); return { width, min: width, max: width }; }
-      if (rule?.hi !== undefined) return { width: measured, min: rule.lo, max: rule.hi };
+      if (rule?.fixed) { const width = Math.max(floor, Math.min(rule.hi ?? floor, measured)); return { width, min: width, max: width }; }
+      if (rule?.hi !== undefined) return { width: measured, min: floor, max: Math.max(floor, rule.hi) };
       return { width: Math.min(AUTO_COLUMN_MAX, measured), min: floor };
     };
-    const manualMin = Math.min(floor, 80);
+    const manualMin = Math.max(controlsMin, Math.min(floor, FLEX_MIN));
     const clamp = (value: number): number => Math.max(manualMin, Math.min(4096, Math.round(value)));
-    return { field, head, col, floor, flexible, spec, manualMin, clamp };
+    return { field, head, col, floor, controlsMin, flexible, spec, manualMin, clamp };
   });
   if (frame.actions) { const actions = el("col"); actions.style.width = "40px"; group.append(actions); }
   table.prepend(group);
@@ -136,9 +140,11 @@ export function resizeColumns(table: HTMLTableElement, columns: readonly ListCol
   const hasRecords = (): boolean => table.querySelector("tbody tr[data-id], tbody tr.x2many-row") !== null;
   const apply = (): void => {
     let total = side;
-    for (const {field, col} of entries) {
-      const width = widths.get(field.name);
-      if (width === undefined) throw new Error(`Missing column width for ${field.name}.`);
+    for (const {field, col, controlsMin} of entries) {
+      const saved = widths.get(field.name);
+      if (saved === undefined) throw new Error(`Missing column width for ${field.name}.`);
+      // Column choices may move the chooser to a header with a previously saved narrower width.
+      const width = Math.max(saved, controlsMin);
       col.style.width = `${width}px`; total += width;
     }
     // One data column (the last flexible one the user has not resized) has no fixed width: when the list is wider

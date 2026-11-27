@@ -300,6 +300,11 @@ fn read_csv(
         ))
     })?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if source_lines.is_some() && text.contains('"') {
+        // The browser importer refuses malformed quoting before it can merge or change records.
+        // The csv reader itself tolerates stray quotes and EOF inside a quoted field.
+        validate_browser_csv_quotes(text.as_bytes(), delimiter)?;
+    }
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -349,6 +354,51 @@ fn read_csv(
         rows.push(row);
     }
     Ok(rows)
+}
+
+fn validate_browser_csv_quotes(bytes: &[u8], delimiter: u8) -> Result<()> {
+    enum Field {
+        Start,
+        Unquoted,
+        Quoted,
+        AfterQuote,
+    }
+    let mut field = Field::Start;
+    let mut line = 1;
+    let mut opening_line = 1;
+    for (i, &byte) in bytes.iter().enumerate() {
+        let newline = matches!(byte, b'\r' | b'\n');
+        field = match field {
+            Field::Quoted if byte == b'"' => Field::AfterQuote,
+            Field::Quoted => Field::Quoted,
+            Field::Start if byte == b'"' => {
+                opening_line = line;
+                Field::Quoted
+            }
+            Field::AfterQuote if byte == b'"' => Field::Quoted,
+            _ if byte == delimiter || newline => Field::Start,
+            Field::AfterQuote => {
+                return Err(Error::validation(format!(
+                    "Line {line} of the CSV file has text after a closing quote."
+                )));
+            }
+            Field::Unquoted if byte == b'"' => {
+                return Err(Error::validation(format!(
+                    "Line {line} of the CSV file has a quote inside an unquoted value."
+                )));
+            }
+            _ => Field::Unquoted,
+        };
+        if byte == b'\r' || byte == b'\n' && (i == 0 || bytes[i - 1] != b'\r') {
+            line += 1;
+        }
+    }
+    if let Field::Quoted = field {
+        return Err(Error::validation(format!(
+            "Line {opening_line} of the CSV file opens a quote that is never closed."
+        )));
+    }
+    Ok(())
 }
 
 /// `rows` already read (titles included) and the width of the next row, against the limits.
@@ -1411,6 +1461,48 @@ mod tests {
         assert_eq!(csv.header, ["Name", "Start"]);
         assert_eq!(csv.rows, [vec!["Ada", "2024-03-15"]]);
         assert_eq!(csv.sheet, None);
+    }
+
+    #[test]
+    fn browser_csv_refuses_malformed_quotes_and_keeps_escaped_multiline_fields() {
+        let options = ImportFileOptions {
+            sheet: None,
+            separator: Some(';'),
+        };
+        for (source, message) in [
+            (
+                "name;note\r\nAnne;\"first\r\nBob;second\n",
+                "Line 2 of the CSV file opens a quote",
+            ),
+            (
+                "name;note\r\nAnne;\"first\r\n\"\"word\n",
+                "Line 2 of the CSV file opens a quote",
+            ),
+            (
+                "name;note\rAnne;\"first\"suffix",
+                "Line 2 of the CSV file has text after a closing quote",
+            ),
+            (
+                "name;note\nAnne;fi\"rst",
+                "Line 2 of the CSV file has a quote inside an unquoted value",
+            ),
+        ] {
+            let error =
+                read_import_file_with_positions(source.as_bytes(), ImportFileType::Csv, &options)
+                    .unwrap_err();
+            assert!(error.message().contains(message), "{}", error.message());
+        }
+        let (file, lines) = read_import_file_with_positions(
+            b"name;note\r\nAnne;\"first; \"\"one\"\"\r\nsecond\"\r\nBob;\"\"",
+            ImportFileType::Csv,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(
+            file.rows,
+            [vec!["Anne", "first; \"one\"\r\nsecond"], vec!["Bob", ""]]
+        );
+        assert_eq!(lines, [2, 4]);
     }
 
     #[test]

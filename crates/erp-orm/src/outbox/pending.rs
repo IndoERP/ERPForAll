@@ -185,11 +185,13 @@ impl crate::Transaction {
     }
 
     pub(crate) fn capture_model_relevant(&self, model: ModelId) -> bool {
-        self.registry()
-            .model_by_id(model)
-            .fields
-            .iter()
-            .any(|f| self.capture_relevant(model, f.id))
+        *self.shared.capture_models[model.index()].get_or_init(|| {
+            self.registry()
+                .model_by_id(model)
+                .fields
+                .iter()
+                .any(|f| self.capture_relevant(model, f.id))
+        })
     }
 
     pub(crate) fn check_capture_create(

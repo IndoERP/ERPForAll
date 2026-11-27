@@ -65,18 +65,20 @@ mod computed_relation {
     }
 }
 
-async fn harness() -> Harness {
+fn capture_fixture(plain_eventful: bool) -> erp_testkit::HarnessBuilder {
     let fields = const { &[FieldDecl::char("name"), FieldDecl::integer("number")] };
-    let h = Harness::builder([&base_users::ADDON, &ADDON])
-        .with_decls([
-            ModelDecl::new("test_capture", EVENTFUL)
-                .eventful(true)
-                .fields(fields),
-            ModelDecl::new("test_capture", PLAIN).fields(fields),
-        ])
-        .build()
-        .await
-        .unwrap();
+    Harness::builder([&base_users::ADDON, &ADDON]).with_decls([
+        ModelDecl::new("test_capture", EVENTFUL)
+            .eventful(true)
+            .fields(fields),
+        ModelDecl::new("test_capture", PLAIN)
+            .eventful(plain_eventful)
+            .fields(fields),
+    ])
+}
+
+async fn harness() -> Harness {
+    let h = capture_fixture(false).build().await.unwrap();
     let mut tx = h.begin().await.unwrap();
     tx.install_event_schema().await.unwrap();
     tx.commit().await.unwrap();
@@ -228,6 +230,53 @@ async fn actual_creates_commit_atomically_in_one_ordered_insert() {
     assert_eq!(events[0].get::<_, i64>(4), 1);
     assert_eq!(events[1].get::<_, i64>(4), 2);
     assert_eq!(events[0].get::<_, String>(5), events[1].get::<_, String>(5));
+    observer.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn rebuilt_registry_rechecks_which_creates_emit_events() {
+    let h = harness().await;
+    let mut tx = begin(&h).await;
+    tx.env()
+        .records(PLAIN)
+        .unwrap()
+        .create(&mut tx, vec![RawVals::new()])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let registry = capture_fixture(true).registry_only().unwrap();
+    assert_eq!(registry.model_id(PLAIN), h.registry().model_id(PLAIN));
+    let rebuilt = h.orm().rebuild(registry).build().unwrap();
+    let mut tx = rebuilt
+        .begin_opts(
+            BeginOptions::new(SUPERUSER_ID)
+                .operation_identity(OperationIdentity::generate().unwrap()),
+        )
+        .await
+        .unwrap();
+    let created = tx
+        .env()
+        .records(PLAIN)
+        .unwrap()
+        .create(&mut tx, vec![RawVals::new()])
+        .await
+        .unwrap()
+        .ids();
+    tx.commit().await.unwrap();
+
+    let mut observer = h.begin().await.unwrap();
+    let events = observer
+        .query(
+            &format!("SELECT record_ids::text FROM {TABLE} WHERE model = $1 AND kind = 'create'"),
+            &[&PLAIN],
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    let captured: Vec<i64> = serde_json::from_str(events[0].get(0)).unwrap();
+    assert_eq!(captured, created);
     observer.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }

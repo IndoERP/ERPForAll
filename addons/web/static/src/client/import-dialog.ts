@@ -263,12 +263,14 @@ export function importDialog(options: ImportDialogOptions): DialogHandle {
       else show();
     });
   };
-  const choose = (chosen: File): void => {
-    if (pending || !fields || completed) return;
+  const choose = (files: FileList): void => {
+    if (!files.length || pending || !fields || completed) return;
+    const chosen = files.length === 1 ? files[0] : undefined;
     file = undefined; format = undefined; documentPreview = undefined; mapping = [];
     sheet.replaceChildren(); separator.value = ","; preview.replaceChildren();
-    fileSummary.textContent = chosen.name;
+    fileSummary.textContent = chosen?.name ?? "No file selected";
     invalidate();
+    if (!chosen) { show("", "Drop one file at a time."); return; }
     const extension = /\.(csv|xlsx)$/i.exec(chosen.name)?.[1]?.toLowerCase();
     if (extension !== "csv" && extension !== "xlsx") { show("", "Choose a CSV or Excel (.xlsx) file."); return; }
     if (chosen.size > MAX_IMPORT_BYTES) { show("", "The file is larger than 10 MiB. Split it into smaller files."); return; }
@@ -277,8 +279,7 @@ export function importDialog(options: ImportDialogOptions): DialogHandle {
   };
   input.addEventListener("click", () => { input.value = ""; });
   input.addEventListener("change", () => {
-    const chosen = input.files?.[0];
-    if (chosen) choose(chosen);
+    if (input.files) choose(input.files);
   });
   separator.addEventListener("change", readFile);
   sheet.addEventListener("change", readFile);
@@ -295,8 +296,7 @@ export function importDialog(options: ImportDialogOptions): DialogHandle {
     event.preventDefault(); delete upload.dataset["over"];
     if (controls.disabled) return;
     const dropped = event.dataTransfer?.files;
-    if (dropped?.length === 1) { input.value = ""; choose(dropped[0]!); }
-    else if (dropped?.length) show("", "Drop one file at a time.");
+    if (dropped?.length) { input.value = ""; choose(dropped); }
   });
 
   function renderPreview(result: Preview, candidates: readonly ImpexField[]): void {

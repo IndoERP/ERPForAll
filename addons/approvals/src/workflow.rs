@@ -117,6 +117,7 @@ pub struct ApprovalWorkflowStep {
         relation = "approval_workflow_step_user_rel",
         column1 = "step_id",
         column2 = "user_id",
+        context = [("active_test", false)],
         string = "Approver Users"
     )]
     pub user_ids: Vec<RecId>,
@@ -267,16 +268,22 @@ async fn technical_model(
 
 async fn steps(tx: &mut Transaction, record: &Records) -> Result<Vec<Data>> {
     let id = record.ensure_one()?.int()?;
-    let selected = record
-        .env()
-        .records(STEP)?
-        .search_with(
-            tx,
-            &Domain::condition("workflow_id", Operator::Eq, id)?,
-            &SearchOptions::new().order("sequence, id").limit(17),
-        )
-        .await?;
-    selected.read_with(tx, STEP_FIELDS, Load::Raw).await
+    let model = record.env().records(STEP)?;
+    let domain = Domain::condition("workflow_id", Operator::Eq, id)?;
+    let options = SearchOptions::new().order("sequence, id").limit(17);
+    let selected = model.search_with(tx, &domain, &options).await?;
+    let visible = selected.read_with(tx, STEP_FIELDS, Load::Raw).await?;
+    if !record.env().su() {
+        // Compare against the complete saved plan. A draft must not publish or copy a
+        // different set of stages or recipients because the editor switched companies.
+        let complete = model.sudo(true).search_with(tx, &domain, &options).await?;
+        if complete.read_with(tx, STEP_FIELDS, Load::Raw).await? != visible {
+            return Err(Error::access(
+                "Every configured stage and reviewer must be visible to revise or publish this workflow.",
+            ));
+        }
+    }
+    Ok(visible)
 }
 
 fn step_values(

@@ -112,3 +112,39 @@ test("a legacy workflow detail resolves its revision through the authorized nati
   });
   expect(result).toMatchObject({ action: "36", id: "8", view_type: "form", menu: "16", cids: ["3"] });
 });
+
+test.each([
+  ["mine", "is_mine"], ["reviewed:3", "is_reviewed"], ["review", "to_review"],
+])("the legacy %s queue opens its native filter", async (tab, filter) => {
+  const fetch = vi.fn(async () => answer(200, { wire_major: 1, id: 36, target: "current" }));
+  const route = await clientActionRedirects.get("approvals.requests")({
+    route: { action: "35", list_tab: tab }, rpc: new RpcClient(fetch, () => {}),
+    context: {}, signal: new AbortController().signal,
+  });
+  expect(route.search_filters).toBe(JSON.stringify([filter]));
+  expect(route.id).toBeUndefined();
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+test("an unknown legacy queue fails before loading any action", async () => {
+  const fetch = vi.fn(async () => answer(200, {}));
+  await expect(clientActionRedirects.get("approvals.requests")({
+    route: { action: "35", list_tab: "typo" }, rpc: new RpcClient(fetch, () => {}),
+    context: {}, signal: new AbortController().signal,
+  })).rejects.toMatchObject({ kind: "validation", message: "Unknown approval queue." });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test.each([
+  { records: [], kind: "permission", message: "This approval workflow is unavailable." },
+  { records: [{ id: 2 }, { id: 3 }], kind: "server", message: "Invalid approval workflow lookup." },
+  { records: null, kind: "server", message: "Invalid approval workflow lookup." },
+  { records: [{ id: 0 }], kind: "server", message: "Invalid approval workflow identity." },
+])("a legacy detail refuses an unavailable or ambiguous workflow ($records)", async ({ records, kind, message }) => {
+  const fetch = vi.fn(async (url: RequestInfo | URL) => String(url).endsWith("erp_load_web_action_ref")
+    ? answer(200, { wire_major: 1, id: 36, target: "current" }) : answer(200, { records }));
+  await expect(clientActionRedirects.get("approvals.configuration")({
+    route: { action: "35", id: "108" }, rpc: new RpcClient(fetch, () => {}),
+    context: {}, signal: new AbortController().signal,
+  })).rejects.toMatchObject({ kind, message });
+});

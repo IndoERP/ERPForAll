@@ -261,7 +261,7 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   const dropdown = document.createElement("div");
   dropdown.className = "activity-menu-dropdown";
   dropdown.id = `activity-menu-panel-${++panelSerial}`;
-  // Read-only content: a labelled region, not a menu. Set before attachMenuDropdown, which keeps an existing role.
+  // A disclosure contains counts and ordinary buttons in reading order.
   dropdown.setAttribute("role", "region");
   dropdown.setAttribute("aria-label", "Activities");
   const body = document.createElement("div");
@@ -551,8 +551,6 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
     onOpen: () => { void refresh(); },
     onClose: () => { openEpoch++; }
   });
-  // The panel is a disclosure, not a menu: attachMenuDropdown stamped aria-haspopup="true" (meaning a menu).
-  trigger.removeAttribute("aria-haspopup");
   trigger.setAttribute("aria-controls", dropdown.id);
 
   const onActivityChange = () => {

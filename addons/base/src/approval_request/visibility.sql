@@ -6,7 +6,7 @@ WITH RECURSIVE configured AS (
                AND btrim(max(value_text), E' \n\r\t') ~ '^([1-9]|[1-5][0-9]|6[0-4])$'
            THEN btrim(max(value_text))::bigint ELSE 0 END AS bound FROM configured
 ), candidates AS (
-    SELECT r.id, r.requester_id, r.revision_id, r.current_step, r.state, r.expires_at,
+    SELECT r.id, r.requester_id, r.revision_id, r.current_step, r.state, {live} AS live,
            r.companies, r.excluded, positions.step, d.reviewer_id,
            CASE WHEN positions.step=r.current_step THEN r.decider_id END AS final_decider
     FROM ir_approval_request r JOIN ir_approval_policy p ON p.id=r.revision_id
@@ -20,7 +20,7 @@ WITH RECURSIVE configured AS (
     FROM ir_approval_request
     UNION ALL
     SELECT c.id, member.uid, false,
-           c.step=c.current_step AND c.state='pending' AND c.expires_at>statement_timestamp(),
+           c.step=c.current_step AND c.state='pending' AND c.live,
            member.uid=coalesce(c.reviewer_id,c.final_decider,0)
     FROM candidates c JOIN eligibility e USING (revision_id,companies,excluded,step)
     CROSS JOIN LATERAL unnest(e.users) member(uid), limits

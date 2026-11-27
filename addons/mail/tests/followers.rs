@@ -12,7 +12,7 @@
 mod support;
 
 use erp_sdk::prelude::*;
-use erp_sdk::{ErrorKind, Operation};
+use erp_sdk::{BeginOptions, ErrorKind, Operation, OperationIdentity};
 use erp_testkit::{DomainPolicy, FieldPolicy, Harness, Otherwise, assert_query_count};
 use support::*;
 
@@ -435,7 +435,14 @@ async fn set_subtypes_of_another_partner_needs_write_access() {
 #[tokio::test]
 async fn deleting_a_thread_deletes_its_messages_and_followers() {
     let h = harness().await;
-    let mut tx = h.begin().await.unwrap();
+    let mut tx = h
+        .orm()
+        .begin_opts(
+            BeginOptions::new(h.principal())
+                .operation_identity(OperationIdentity::generate().unwrap()),
+        )
+        .await
+        .unwrap();
     let t = ticket(&mut tx, "T").await;
     let t2 = ticket(&mut tx, "T2").await;
     let (p1, p2) = (partner(&mut tx, "P1").await, partner(&mut tx, "P2").await);

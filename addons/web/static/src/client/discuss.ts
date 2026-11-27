@@ -134,6 +134,7 @@ export function renderDiscuss(options: Options): DiscussControl {
   let selected: Channel | null = null, chatter: Chatter | undefined, section: Section = "all";
   const subscriptions = new Map<number, () => void>();
   const notificationListeners = new Set<() => void>();
+  const acknowledgements = new Set<string>();
   let workspace: HTMLElement | null = null, dead = false, generation = 0, selection = 0;
   let history: (string | number | null)[] = [null], next: string | number | null = null;
   let endPicker: (() => void) | undefined, endSocket: (() => void) | undefined;
@@ -142,7 +143,7 @@ export function renderDiscuss(options: Options): DiscussControl {
   const company = policy?.company ?? (Array.isArray(allowed) && positive(allowed[0]) ? allowed[0] : null);
   const bus = company !== null && typeof BroadcastChannel === "function" ? new BroadcastChannel(`erp.discuss.${uid}.${company}`) : undefined;
   if (bus) bus.onmessage = event => {
-    if (event.data === "notifications") notificationsChanged();
+    if (event.data === "notifications") void notificationsChanged();
     else if (event.data === "refresh") void refresh();
   };
   const links = new Map<Section, HTMLButtonElement>();
@@ -158,6 +159,7 @@ export function renderDiscuss(options: Options): DiscussControl {
     if (e.key === "Escape" && !e.defaultPrevented && !workspace) { closeQuick(); trigger.focus(); }
   });
   function selectSection(id: Section, load = true) {
+    ++selection;
     section = id; history = [null]; list.replaceChildren(); next = null;
     if (id === "inbox") {
       closePicker(false);
@@ -165,9 +167,9 @@ export function renderDiscuss(options: Options): DiscussControl {
     }
     if (load) void refresh();
   }
-  function notificationsChanged() {
+  async function notificationsChanged() {
     for (const listener of notificationListeners) listener();
-    if (section === "inbox") void refresh();
+    if (section === "inbox") await refresh();
   }
   function persist(c: Channel) {
     const id = String(c.id);
@@ -326,12 +328,20 @@ export function renderDiscuss(options: Options): DiscussControl {
       if (e.unread) { const badge = el("span", e.unread >= 1000 ? "999+" : String(e.unread), "discuss-unread"); badge.setAttribute("aria-label", `${e.unread} unread`); meta.append(badge); }
       b.append(meta); row.append(b);
       if (e.remove) { const remove = iconButton("Remove saved message", "x", e.remove); remove.dataset["key"] = "remove" + e.key; row.append(remove); }
-      if (e.markRead) {
+      const acknowledge = e.markRead;
+      if (acknowledge) {
+        const key = "read" + e.key;
         const markRead = iconButton(`Mark ${e.name} as read`, "square-check-big", () => {
-          markRead.disabled = true;
-          void e.markRead!().catch(fail).finally(() => { markRead.disabled = false; });
+          if (acknowledgements.has(key)) return;
+          acknowledgements.add(key);
+          markRead.setAttribute("aria-disabled", "true");
+          void acknowledge().catch(fail).finally(() => {
+            acknowledgements.delete(key);
+            list.querySelector(`button[data-key="${key}"]`)?.removeAttribute("aria-disabled");
+          });
         });
-        markRead.dataset["key"] = "read" + e.key;
+        markRead.dataset["key"] = key;
+        if (acknowledgements.has(key)) markRead.setAttribute("aria-disabled", "true");
         row.append(markRead);
       }
       list.append(row);
@@ -341,7 +351,8 @@ export function renderDiscuss(options: Options): DiscussControl {
     if (focus) {
       const controls = Array.from(list.querySelectorAll<HTMLButtonElement>("button"));
       const same = controls.find(b => b.dataset["key"] === focus);
-      const marked = focus.startsWith("readn") ? controls.find(b => b.dataset["key"] === focus.slice(4)) : undefined;
+      // Acknowledgement can move a notice out of the first 50. Keep the reader in the inbox.
+      const marked = focus.startsWith("readn") ? controls.find(b => b.dataset["key"] === focus.slice(4)) ?? controls[0] ?? links.get("inbox") : undefined;
       (same ?? marked)?.focus({ preventScroll: true });
     }
   }
@@ -389,7 +400,7 @@ export function renderDiscuss(options: Options): DiscussControl {
               await call("messaging_notification_read", { message_id: n.message }, true);
               if (!dead) {
                 bus?.postMessage("notifications");
-                notificationsChanged();
+                await notificationsChanged();
               }
             } } : {}),
             open: () => {
