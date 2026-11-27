@@ -76,6 +76,13 @@ pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
+
+    /// Keys of encrypted fields for commands that build the ORM without a server
+    /// configuration (`module install`/`upgrade`, `db init`, ...): the file that
+    /// `field_key_file` of `server.toml` names, mode 600 and not a symlink. Required when the
+    /// linked addons declare an encrypted field.
+    #[arg(long = "field-key-file", global = true, value_name = "PATH")]
+    pub field_key_file: Option<PathBuf>,
 }
 
 /// Top-level subcommands.

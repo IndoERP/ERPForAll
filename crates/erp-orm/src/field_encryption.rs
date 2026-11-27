@@ -431,7 +431,8 @@ pub fn installed() -> Option<&'static Arc<FieldKeys>> {
 fn no_keys(model: &str, field: &str) -> Error {
     Error::programming(format!(
         "the field {model}.{field} is encrypted, but this process has no field keys: set \
-         field_key_file in server.toml (see the deployment guide, \"Encrypted fields\")"
+         field_key_file in server.toml, or pass --field-key-file to an erp command without \
+         --config (see the deployment guide, \"Encrypted fields\")"
     ))
 }
 
