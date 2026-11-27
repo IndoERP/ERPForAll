@@ -288,10 +288,13 @@ fn contacts_install_creates_every_record_by_xml_id() {
                 "contacts.menu_localisation",
             ]
         );
+        assert_eq!(
+            xml_ids(&orm, "contacts", "ir.ui.view").await,
+            ["contacts.partner_kanban"]
+        );
         let base_views = xml_ids(&orm, "base", "ir.ui.view").await;
         for id in [
             "base.partner_list",
-            "base.partner_kanban",
             "base.partner_form",
             "base.partner_search",
             "base.partner_category_list",
@@ -418,7 +421,7 @@ fn partner_views_validate_and_serve_the_documented_fields() {
             );
         }
         // parent_id carries invisible="is_company" modifier in form view
-        let parent_id_node = views[1]["nodes"]
+        let parent_id_node = views[2]["nodes"]
             .as_array()
             .unwrap()
             .iter()
@@ -430,7 +433,7 @@ fn partner_views_validate_and_serve_the_documented_fields() {
             "is_company"
         );
 
-        let search = field_names(&views[2]);
+        let search = field_names(&views[3]);
         for field in [
             "complete_name",
             "email",
@@ -444,7 +447,7 @@ fn partner_views_validate_and_serve_the_documented_fields() {
             );
         }
         // The search filters: companies, individuals, archived
-        let filter_names: Vec<&str> = views[2]["nodes"]
+        let filter_names: Vec<&str> = views[3]["nodes"]
             .as_array()
             .unwrap()
             .iter()
@@ -466,7 +469,7 @@ fn partner_views_validate_and_serve_the_documented_fields() {
 
         // The group-by items a person can try in the list's Group By menu: each carries its grouping
         // field in the filter's context expression.
-        let group_filters: Vec<&str> = views[2]["nodes"]
+        let group_filters: Vec<&str> = views[3]["nodes"]
             .as_array()
             .unwrap()
             .iter()
@@ -480,7 +483,7 @@ fn partner_views_validate_and_serve_the_documented_fields() {
         );
         // Each context is `{'group_by': <field>}`: its string literals are the key, then the field.
         let literals = |name: &str| -> Vec<String> {
-            views[2]["nodes"]
+            views[3]["nodes"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -622,7 +625,6 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
 
         let view_xml_ids: &[&str] = &[
             "partner_list",
-            "partner_kanban",
             "partner_form",
             "partner_search",
             "partner_category_list",
@@ -719,7 +721,6 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
         let base_views = xml_ids(&upgraded.orm, "base", "ir.ui.view").await;
         for id in [
             "base.partner_list",
-            "base.partner_kanban",
             "base.partner_form",
             "base.partner_search",
             "base.partner_category_list",
@@ -745,13 +746,8 @@ fn base_upgrade_from_1_6_picks_up_partner_views_and_access_rows() {
         }
 
         // 4. Verify views can be served
-        let served = get_views(
-            &upgraded.orm,
-            "res.partner",
-            &["list", "kanban", "form", "search"],
-        )
-        .await;
-        assert_eq!(served["views"].as_array().unwrap().len(), 4);
+        let served = get_views(&upgraded.orm, "res.partner", &["list", "form", "search"]).await;
+        assert_eq!(served["views"].as_array().unwrap().len(), 3);
     });
 }
 
