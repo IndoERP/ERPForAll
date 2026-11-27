@@ -249,8 +249,15 @@ printf 'k2026a %s\n' "$(openssl rand -base64 32)" > /srv/erp/private/field-keys
 A key id is 1 to 32 letters, digits, `.`, `_` or `-`; at most 16 keys; lines starting with `#` are ignored. Every node
 of a database needs the same file: the node settings check refuses a node whose key set differs.
 
-- **Missing key:** when the linked addons declare an encrypted field and `field_key_file` is not set, every command
-  that builds the ORM (the server, `erp db init`, `erp module upgrade`, …) stops with an error naming the field.
+- **Commands without `--config`:** `erp module install`/`upgrade`/`uninstall`, `erp db init` and the
+  other commands that build the ORM from `DATABASE_URL` take the same file with the global option
+  `--field-key-file <path>` (before or after the subcommand), under the same rules: a regular file of mode 600, not
+  a symlink. A relative path is relative to the working directory, not to `server.toml`. Commands that read
+  `--config` (the server among them) take the keys from its `field_key_file`: the node settings check compares that
+  file's fingerprint, so keys given only with the option are refused there; giving both is accepted only when they
+  hold the same keys.
+- **Missing key:** when the linked addons declare an encrypted field and no key file is given, every command that
+  builds the ORM (the server, `erp db init`, `erp module upgrade`, …) stops with an error naming the field.
 - **Lost key:** values sealed with it cannot be read again. Back the key file up separately from the database dumps;
   a dump without its key file is unreadable for these fields, which is the point.
 - **Rotation:** put a new key on the first line and keep the old ones below it. New and changed values are sealed
@@ -458,6 +465,9 @@ database. Rehearse it on a copy first:
    ```sh
    erp module upgrade -d erp base --addons-path /srv/erp/addons
    ```
+
+   When the addons declare encrypted fields, add `--field-key-file /srv/erp/private/field-keys` (the file that
+   `field_key_file` names), run as the user that owns that file.
 
    Name the modules to upgrade (installed modules that depend on them are upgraded too); `--dry-run` shows the plan
    without changing anything. A non-zero exit code means the operation was refused or failed; the message names the

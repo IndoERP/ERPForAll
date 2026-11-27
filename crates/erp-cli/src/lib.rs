@@ -21,6 +21,7 @@ pub mod db;
 mod db_lifecycle;
 pub mod dev;
 pub mod error;
+pub mod field_keys;
 mod human;
 pub mod identity;
 mod live;
@@ -115,6 +116,11 @@ where
 
 /// Executes a parsed CLI command.
 fn execute(cli: &Cli) -> Result<()> {
+    // before any command builds an ORM: a registry with encrypted fields refuses to build
+    // without keys
+    if let Some(path) = cli.field_key_file.as_deref() {
+        field_keys::install_from_file(path)?;
+    }
     match cli.command {
         Commands::Server(ref args) => human::serve(args),
         Commands::ReportWorker => Err(CliError::Execution(
