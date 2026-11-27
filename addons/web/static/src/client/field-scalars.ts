@@ -1,6 +1,8 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { button, el } from "./dom.js";
 import { absentPlaceholderInput, badgeTones } from "./field-options.js";
+import { passwordModels } from "./password-flow.js";
+import { wrapPassword } from "./password-editor.js";
 import { fieldShell } from "./field-shell.js";
 import { icon } from "./icons.js";
 import { ClientError } from "./transport.js";
@@ -193,7 +195,11 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
     else if (numeric && (event.key === "Enter" || event.key === "Tab")) { if (event.key === "Enter") event.preventDefault(); validate(true); }
   });
   let reset = (): void => {};
-  if (secret && input instanceof HTMLInputElement) {
+  if (secret && input instanceof HTMLInputElement && options.model && passwordModels.has(options.model)) {
+    input.autocomplete = options.model === "res.users.identitycheck" ? "current-password" : "new-password";
+    wrapPassword(input, field.label);
+    reset = () => { input.type = "password"; input.value = ""; };
+  } else if (secret && input instanceof HTMLInputElement) {
     const reveal = button("Show", () => { const visible = input.type === "password"; input.type = visible ? "text" : "password"; reveal.textContent = visible ? "Hide" : "Show"; reveal.setAttribute("aria-pressed", String(visible)); }, "field-password-reveal");
     reveal.setAttribute("aria-label", `Reveal ${field.label}`); reveal.setAttribute("aria-pressed", "false"); shell.node.append(reveal);
     reset = () => { input.type = "password"; reveal.setAttribute("aria-pressed", "false"); };

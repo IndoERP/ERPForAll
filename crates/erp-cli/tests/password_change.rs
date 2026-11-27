@@ -1230,3 +1230,103 @@ async fn access_manager_cannot_reset_a_portal_user_of_another_company() {
     );
     f.cleanup().await;
 }
+
+#[path = "support/form_browser.rs"]
+mod form_browser;
+
+/// The browser types into the real forms on a fresh database. Only status codes leave the browser.
+#[ignore = "requires the web toolchain and Chromium"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_password_dialogs_submit_for_the_correct_account() {
+    check_password_dialogs(false).await;
+}
+
+#[ignore = "requires the web toolchain and Chromium"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_password_dialogs_work_in_office_blue() {
+    check_password_dialogs(true).await;
+}
+
+async fn check_password_dialogs(office_blue: bool) {
+    use std::{
+        io::Write,
+        path::Path,
+        process::{Command, Stdio},
+    };
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let compiler = Path::new(env!("CARGO_BIN_EXE_erp")).with_file_name("erp-ui-compile");
+    let assets = form_browser::build_assets(root, &compiler);
+    let fixture = NativeFixture::start_with_assets(|_| {}, Some(assets.path())).await;
+    if office_blue {
+        let installed = native_http::json_post(
+            fixture.port,
+            &fixture.cookies,
+            "/erp/module/install",
+            r#"{"modules":["theme_office_blue"]}"#,
+        );
+        assert_eq!(installed.status, 200, "{}", installed.body);
+        let scope = json!({"kind":"global"});
+        let key = "theme_office_blue.appearance";
+        let current = ok(call(
+            &fixture,
+            "ir.config.setting",
+            "erp_read_values",
+            json!({"scope":scope,"keys":[key]}),
+        ));
+        ok(call(
+            &fixture,
+            "ir.config.setting",
+            "erp_write_values",
+            json!({"scope":scope,"expected_revision":current["revision"],
+                   "changes":[{"key":key,"value":"office-blue"}]}),
+        ));
+    }
+    let created = ok(call(
+        &fixture,
+        "res.users",
+        "create",
+        json!({"vals_list":[{
+            "name":"Reset Target", "login":"password-target", "password":"target-before"
+        }]}),
+    ));
+    let target = created[0].as_i64().unwrap();
+    let action: i64 = fixture
+        .client
+        .query_one(
+            "SELECT res_id FROM ir_model_data WHERE module='base' AND name='settings_users_action'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let mut child = Command::new("bash").current_dir(root).args([
+        "-c", "set -eu; eval \"$(scripts/web-toolchain.sh env)\"; exec node web/scripts/browser-password-dialogs.mjs"
+    ]).stdin(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(json!({
+        "origin": format!("http://127.0.0.1:{}", fixture.port), "cookies":fixture.cookies,
+        "action":action, "target":target, "officeBlue":office_blue, "actor":"fixture-administrator-password", "oldTarget":"target-before",
+        "newTarget":"browser-target-after", "newActor":"browser-actor-after"
+    }).to_string().as_bytes()).unwrap();
+    let status = child.wait().unwrap();
+    if status.success() {
+        assert_eq!(
+            login(&fixture, "password-target", "browser-target-after").status,
+            303
+        );
+        assert_eq!(
+            login(&fixture, "fixture-admin", "browser-actor-after").status,
+            303
+        );
+        assert_ne!(
+            login(&fixture, "password-target", "target-before").status,
+            303
+        );
+    }
+    fixture.cleanup().await;
+    assert!(status.success(), "password dialog browser checks failed");
+}

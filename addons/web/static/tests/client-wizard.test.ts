@@ -1231,7 +1231,10 @@ test("a refused identity confirmation keeps the dialog open and does not resend 
   typeSecret("password", "wrong-secret");
   await vi.waitFor(() => expect(dialogButton("Confirm").disabled).toBe(false));
   dialogButton("Confirm").click();
-  await vi.waitFor(() => expect(presented).toHaveLength(1));
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog [role=alert]")?.textContent).toContain("current password"));
+  expect(presented).toHaveLength(0);
+  expect((document.activeElement as HTMLInputElement).name).toBe("password");
+  expect((document.activeElement as HTMLInputElement).value).toBe("");
   expect(heading()).toBe("Confirm your identity");
   expect(session.calls.filter(c => c.path.endsWith("res.users/preference_change_password"))).toHaveLength(1);
 });
@@ -1263,8 +1266,8 @@ const submitOwn = async () => {
 /// (partial: mounted client with explicit HTTP fixtures; a click right after typing, whose blur commits the field, still confirms)
 test("Confirm clicked right after typing the password sends run_check once", async () => {
   const session = await openIdentity(passwordFixtures());
-  // A browser fires the field's change event when the click blurs it, then the click: no wait in between.
-  typeSecret("password", "current-secret");
+  // Simulate a password manager setting the control with no input/change event.
+  document.querySelector<HTMLInputElement>(".wizard-dialog input[name=password]")!.value = "current-secret";
   dialogButton("Confirm").click();
   await vi.waitFor(() => expect(heading()).toBe("Change password"));
   expect(session.calls.filter(c => c.path.endsWith("/run_check")).map(c => c.body["password"])).toEqual(["current-secret"]);
@@ -1364,3 +1367,21 @@ function drawnTrail(root: HTMLElement): (string | null | undefined)[] {
   const previous = crumbs.querySelector(".breadcrumb-previous .breadcrumb-back")?.textContent;
   return [...older, ...(previous ? [previous] : []), crumbs.querySelector(".breadcrumb-current")?.textContent];
 }
+
+test.each([
+  ["erp.exceptions.AccessDenied", "Too many login failures, please wait a bit before trying again.", true],
+  ["erp.exceptions.AccessError", "Administrator access required.", false],
+] as const)("identity confirmation preserves the server's %s refusal", async (name, message, inline) => {
+  const fixtures = passwordFixtures();
+  const session = await openIdentity((path, body) => path.endsWith("/run_check")
+    ? new Response(JSON.stringify({ name, message }), { status: 403, headers: { "Content-Type": "application/json" } })
+    : fixtures(path, body));
+  await confirmIdentity();
+  if (inline) {
+    await vi.waitFor(() => expect(document.querySelector(".wizard-dialog [role=alert]")?.textContent).toBe(message));
+    expect(presented).toHaveLength(0);
+  } else {
+    await vi.waitFor(() => expect(presented).toContainEqual(expect.objectContaining({ kind: "permission", message })));
+  }
+  expect(session.calls.filter(c => c.path.endsWith("/run_check"))).toHaveLength(1);
+});

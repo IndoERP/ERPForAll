@@ -7,7 +7,9 @@ import { buttonHidden, runObjectButton } from "./buttons.js";
 import { askButtonPrompt } from "./button-prompt.js";
 import { actionButton, button, confirmChoice, el } from "./dom.js";
 import type { ButtonNode, ButtonPrompt, CancelNode, View } from "./metadata.js";
-import { passwordArguments, passwordModels, passwordSubmission, type Resubmission } from "./password-flow.js";
+import { passwordFormValues } from "./password-editor.js";
+import { t } from "./translate.js";
+import { IDENTITY_MODEL, IDENTITY_METHOD, passwordArguments, passwordModels, passwordSubmission, type Resubmission } from "./password-flow.js";
 import { RecordForm, formFocus } from "./record-form.js";
 import type { RecordState } from "./record.js";
 import { ClientError, type RpcClient } from "./transport.js";
@@ -33,6 +35,7 @@ export class WizardDialog {
   private uncertain = false;
   private saveUncertain = false;
   private nextFocus: string | undefined;
+  private passwordFocus: HTMLInputElement | undefined;
   private dead = false;
   private readonly debounce=new ButtonDebouncer();
   private readonly hotkeys:ButtonHotkeys;
@@ -40,7 +43,7 @@ export class WizardDialog {
   private readonly prior = document.activeElement;
   constructor(private readonly env: {
     /** The My Preferences presentation of the title block (avatar initial, row icons). */
-    profileTitle?: boolean; messages?: MessageServices; editorLocale?: EditorLocale; numericLocale?: import("./numeric-values.js").NumericLocale;debug?:boolean;uid?:number;action?(id:number,context:Record<string,unknown>):Promise<void>;url?(href:string):Promise<void>; name: string; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
+    actorName?: string; profileTitle?: boolean; messages?: MessageServices; editorLocale?: EditorLocale; numericLocale?: import("./numeric-values.js").NumericLocale;debug?:boolean;uid?:number;action?(id:number,context:Record<string,unknown>):Promise<void>;url?(href:string):Promise<void>; name: string; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
     report(error: unknown): void; notice(message: string): void;
     openRecord(model: string, id: number): Promise<void>;
     /** The page's cached view loader for the dialog's field widgets. */
@@ -57,6 +60,21 @@ export class WizardDialog {
     reload.setAttribute("aria-label", "Reload wizard");
     const head = el("div", undefined, "wizard-heading"); head.append(heading, close);
     const sheet = el("div", undefined, "content-sheet"); sheet.append(this.form);
+    if (passwordModels.has(env.state.model)) {
+      this.dialog.classList.add("password-dialog");
+      if (env.state.model === IDENTITY_MODEL) {
+        const hint = el("p", env.actorName ? t("Enter your current password to continue as {name}.", { name: env.actorName }) : t("Enter the current password for your signed-in account."), "password-identity-hint");
+        hint.id = "password-identity-hint";
+        this.dialog.setAttribute("aria-describedby", hint.id);
+        sheet.prepend(hint);
+      }
+      this.form.addEventListener("keydown", event => {
+        if (event.key === "Enter" && !event.isComposing && event.target instanceof HTMLInputElement) {
+          event.preventDefault();
+          this.submissionButton()?.click();
+        }
+      });
+    }
     const footer = el("div", undefined, "wizard-footer");
     footer.setAttribute("role", "toolbar"); footer.setAttribute("aria-label", "Wizard actions");
     this.status.setAttribute("role", "status");
@@ -95,9 +113,7 @@ export class WizardDialog {
         if (passwordModels.has(env.state.model)) {
           if (this.dead || this.pending || this.commitPending !== undefined || this.uncertain || this.saveUncertain) throw new ClientError("validation", "The wizard cannot be edited during this operation.");
           env.state.change(name, value);
-          // A typed secret is not re-rendered: that would replace the button the click is about to land on. The reset
-          // wizard's selected-user lines (an array, changed from their own line dialog) are rendered as before.
-          if (Array.isArray(value) && !this.dead) this.surface.render(focus);
+          // Keep the input and the button mounted across the blur that precedes a click.
           return;
         }
         this.runCommit(async () => {
@@ -152,17 +168,50 @@ export class WizardDialog {
     }
     const focus = formFocus(this.dialog);
     this.pending = true; this.disable();
-    void job().catch(error => { this.env.report(error); }).finally(() => {
+    void job().catch(error => {
+      if (!this.passwordError(error)) this.env.report(error);
+    }).finally(() => {
       this.pending = false;
       if (!this.dead) {
         for (const [input, disabled] of this.disabled) input.disabled = disabled;
         this.disabled.clear();
         const target = this.nextFocus ?? focus; this.nextFocus = undefined;
-        this.surface.render(target);
+        // Password controls own uncommitted browser/autofill values until the managed call finishes.
+        if (!passwordModels.has(this.env.state.model)) this.surface.render(target);
         this.disable();
-        if (target) for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) if (control.dataset["focusKey"] === target) control.focus();
+        if (this.passwordFocus) {
+          this.passwordFocus.focus();
+          this.passwordFocus = undefined;
+        } else if (target) {
+          for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) {
+            if (control.dataset["focusKey"] === target) control.focus();
+          }
+        }
       }
     }).catch(error => { this.env.report(error); });
+  }
+  private passwordError(error: unknown): boolean {
+    if (!(error instanceof ClientError) || !passwordModels.has(this.env.state.model)) return false;
+    const method = error.diagnostics?.endpoint.split("/").pop();
+    if (!method || !passwordSubmission(this.env.state.model, method)) return false;
+    const refused = method === IDENTITY_METHOD && error.status === 403 && error.diagnostics?.name === "erp.exceptions.AccessDenied";
+    if (!refused && error.status !== 429 && !(error.kind === "validation" && error.status === 422)) return false;
+    const message = refused && error.message === "Access Denied" ? t("Could not confirm your identity. Enter the current password for your signed-in account.") : error.message;
+    this.notify({ kind: "notification", title: null, level: "danger", message, then_close: false });
+    if (refused) {
+      const field = this.form.querySelector<HTMLInputElement>("input[name=password]");
+      if (field) {
+        field.value = "";
+        field.type = "password";
+        this.env.state.change("password", false);
+        field.closest(".managed-password-control")?.querySelector("button")?.setAttribute("aria-pressed", "false");
+        field.setAttribute("aria-invalid", "true");
+        this.notification.id = "password-operation-error";
+        field.setAttribute("aria-describedby", this.notification.id);
+        this.passwordFocus = field;
+      }
+    }
+    return true;
   }
   private runCommit(job: () => Promise<void>): void {
     if (this.dead || this.pending || this.uncertain || this.saveUncertain) return;
@@ -257,6 +306,9 @@ export class WizardDialog {
     await this.surface.commit();
     for (const [input, disabled] of this.disabled) input.disabled = disabled;
     const valid = this.surface.valid(), invalidFocus = formFocus(this.form);
+    if (!valid && passwordModels.has(this.env.state.model) && document.activeElement instanceof HTMLInputElement) {
+      this.passwordFocus = document.activeElement;
+    }
     this.disable();
     if (!valid) this.nextFocus = invalidFocus;
     return valid;
@@ -288,7 +340,7 @@ export class WizardDialog {
           const kind = passwordSubmission(this.env.state.model, method);
           if (kind === undefined) return undefined;
           if (!await this.validated()) return null;
-          return passwordArguments(kind, this.env.state.values, this.env.state.id, context());
+          return passwordArguments(kind, passwordFormValues(kind, this.form, this.env.state.values), this.env.state.id, context());
         },
         // The confirmation that answers a submission replaces this wizard, so the kept operation is sent again
         // without this wizard's closed-state guard.

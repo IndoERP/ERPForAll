@@ -5642,3 +5642,23 @@ select.styled-select::picker-icon { display: none; }
 .mcp-receipt { padding: 12px; border: 1px solid var(--selected-line); border-radius: var(--radius-panel); background: var(--selected); }
 .mcp-receipt button { margin: 6px 4px 0 0; }
 .mcp-status { margin: 0; }
+
+/* Managed identity and password dialogs */
+.wizard-dialog.password-dialog { width: min(28rem, calc(100vw - 1.5rem)); color: var(--text); }
+.password-dialog .password-identity-hint { margin: 0 0 1rem; color: var(--muted); overflow-wrap: anywhere; }
+.password-dialog .record-form, .password-dialog .record-form .form-group-grid { display: flex; flex-direction: column; align-items: stretch; gap: .85rem; }
+.password-dialog .record-form:not(.settings-form) .field-label.field-shell { display: flex; flex-direction: column; align-items: stretch; gap: .35rem; }
+.password-dialog .record-form .field-label label { white-space: normal; }
+.password-dialog .managed-password-control { position: relative; min-width: 0; }
+.password-dialog .record-form .managed-password-control input { box-sizing: border-box; width: 100%; min-height: 40px; padding: .45rem 2.65rem .45rem .65rem; border: 1px solid var(--input-line); border-radius: var(--radius-control); }
+.managed-password-control input::-ms-reveal { display: none; }
+.password-dialog .managed-password-reveal { position: absolute; inset-block: 1px; inset-inline-end: 1px; width: 40px; display: grid; place-items: center; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: var(--radius-control); }
+.managed-password-reveal:hover, .managed-password-reveal:focus-visible { color: var(--text); }
+.password-eye { display: grid; place-items: center; width: 15px; height: 15px; box-sizing: border-box; border: 1.5px solid currentColor; border-radius: 75% 15%; transform: rotate(45deg); }
+.password-eye::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.managed-password-reveal[aria-pressed=true] .password-eye::before { content: ""; position: absolute; width: 20px; height: 2px; background: currentColor; }
+.password-dialog .password-reset-rows { display: grid; gap: .85rem; min-width: 0; }
+.password-dialog .password-reset-rows > p { margin: 0; color: var(--muted); }
+.password-dialog .password-reset-target { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.password-dialog .password-reset-target legend { font-weight: 600; padding: 0; margin-bottom: .65rem; overflow-wrap: anywhere; }
+.password-dialog > .content-sheet { padding-bottom: 1.25rem; }

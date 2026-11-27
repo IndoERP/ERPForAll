@@ -1,5 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { expect, test, vi } from "vitest";
+import { passwordResetRows, passwordFormValues } from "../src/client/password-editor.js";
 import { passwordArguments, passwordResubmitted, passwordSubmission, type Resubmission } from "../src/client/password-flow.js";
 import { runObjectButton, type ButtonEnvironment } from "../src/client/buttons.js";
 import type { ButtonNode } from "../src/client/metadata.js";
@@ -105,4 +106,25 @@ test("a password model's record state refuses a generic save before any request"
     await expect(new RecordState(rpc, model, [], {}).save()).rejects.toThrow(/never saved/);
   }
   expect(rpc.call).not.toHaveBeenCalled();
+});
+
+test("reset inputs retain the selected server line ids when only one account receives a password", () => {
+  const rows = [{ id: 31, user_login: "first" }, { id: 32, user_login: "second" }];
+  const field = { kind: "char", required: false, readonly: false, selection: null, relation: null, relationField: null } as const;
+  const form = document.createElement("form");
+  const editor = passwordResetRows(rows, [
+    { ...field, name: "user_login", label: "Login", readonly: true },
+    { ...field, name: "new_passwd", label: "New password" },
+  ]);
+  form.append(editor.node);
+  expect([...form.querySelectorAll("legend")].map(label => label.textContent)).toEqual(["first", "second"]);
+  const inputs = [...form.querySelectorAll("input")];
+  expect(inputs.every(input => input.type === "password" && !input.required)).toBe(true);
+  inputs[1]!.value = "replacement";
+  const values = passwordFormValues("reset_users", form, { user_ids: rows });
+  expect(passwordArguments("reset_users", values, 7, context)["changes"]).toEqual([
+    { line_id: 31, new_passwd: "" }, { line_id: 32, new_passwd: "replacement" }
+  ]);
+  editor.dispose();
+  expect(inputs.every(input => input.value === "")).toBe(true);
 });

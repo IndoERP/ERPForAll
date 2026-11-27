@@ -5199,7 +5199,7 @@ export class HumanApp {
     await state.load(result.res_id ?? undefined);
     if (!this.live(binding)) return;
     let scope: WizardDialog;
-    scope = new WizardDialog({ profileTitle, numericLocale: this.numericLocale, name: result.name, state, view, rpc: this.rpc, context,debug:this.debug,uid:this.userId,
+    scope = new WizardDialog({ actorName: this.userName, profileTitle, numericLocale: this.numericLocale, name: result.name, state, view, rpc: this.rpc, context,debug:this.debug,uid:this.userId,
       action:(id,effective)=>this.declaredButtonAction(id,state,view.fields,effective,binding,refresh,scope),
       url:href=>runUrlButton(href,{baseUrl:location.href,navigate:async route=>{if(!await scope.canLeave(true))return;await scope.close();await this.navigate(route);},openExternal:(url,target,features)=>{window.open(url,target,features);}}),
       openRecord: async (model, id) => { if (this.live(binding)) await this.openRelatedRecord(model, id); }, views: this.viewLoader,
