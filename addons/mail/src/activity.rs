@@ -444,6 +444,8 @@ impl MailActivity {
         let utc: Arc<str> = Arc::from("UTC");
         for index in 0..deadlines.len() {
             let Some(deadline) = deadlines[index] else {
+                // A new activity has no deadline until the form supplies one.
+                out.set(index, MailActivity::STATE, None)?;
                 continue;
             };
             let zone = users[index]

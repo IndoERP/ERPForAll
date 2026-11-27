@@ -908,6 +908,16 @@ async fn my_activities_action_ships_with_mail_and_loads_for_an_internal_user() {
         ]
     );
     tx.commit().await.unwrap();
+    let mut audit = orm
+        .begin_opts(
+            erp_orm::BeginOptions::new(SUPERUSER_ID)
+                .isolation(erp_orm::Isolation::ReadCommitted)
+                .on_primary(),
+        )
+        .await
+        .unwrap();
+    audit.install_audit_schema().await.unwrap();
+    audit.commit().await.unwrap();
     let real = runtime_web(&db, &orm).await;
     let service = RpcService::new(real.clone(), Host, RpcConfig::default());
     let response = service
@@ -945,6 +955,52 @@ async fn my_activities_action_ships_with_mail_and_loads_for_an_internal_user() {
         serde_json::to_value(&expected).unwrap(),
         "{body}"
     );
+    // My Activities → New starts with an unsaved record and no deadline. Use the form's
+    // actual field specification, then edit the deadline on the same unsaved form.
+    let caller = principal_of(&real, employee).await;
+    let form_fields = serde_json::json!({
+        "summary": {}, "res_name": {}, "activity_type_id": {}, "user_id": {},
+        "date_deadline": {}, "state": {}, "note": {}
+    });
+    for (values, changed, expected) in [
+        (
+            serde_json::json!({}),
+            serde_json::json!([]),
+            serde_json::json!(false),
+        ),
+        (
+            serde_json::json!({"date_deadline":"2099-12-31"}),
+            serde_json::json!(["date_deadline"]),
+            serde_json::json!("planned"),
+        ),
+        (
+            serde_json::json!({"date_deadline":false,"state":"planned"}),
+            serde_json::json!(["date_deadline"]),
+            serde_json::json!(false),
+        ),
+    ] {
+        let response = service
+            .call(RpcCall::json2(
+                "/json/2/mail.activity/onchange",
+                serde_json::to_vec(&serde_json::json!({
+                    "ids": [], "values": values, "field_names": changed, "fields_spec": form_fields
+                }))
+                .unwrap(),
+                Caller::Principal(caller.clone()),
+            ))
+            .await;
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(response.status(), 200, "{body}");
+        // An initially empty value can be omitted from an onchange diff.
+        if expected == false && changed == serde_json::json!([]) {
+            assert!(
+                body["value"]["state"].is_null() || body["value"]["state"] == false,
+                "{body}"
+            );
+        } else {
+            assert_eq!(body["value"]["state"], expected, "{body}");
+        }
+    }
     drop(service);
     drop(real);
     drop(orm);
