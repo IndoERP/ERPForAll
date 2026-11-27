@@ -156,6 +156,32 @@ impl Transaction {
         }
     }
 
+    /// Read the current company's queue counts and the local runtime's worker status.
+    pub async fn job_queue_health(&mut self, env: &Env, kind: &str) -> Result<serde_json::Value> {
+        self.require_job_admin(env, "job_queue_health").await?;
+        if !super::kind::is_valid_kind_name(kind) {
+            return Err(Error::validation("Invalid job kind."));
+        }
+        let company = env
+            .company_id()?
+            .ok_or_else(|| Error::validation("Select a company to inspect its queue."))?;
+        let rows = self.query(
+            "SELECT count(*) FILTER (WHERE state='ready'), count(*) FILTER (WHERE state='running'),
+             floor(extract(epoch FROM statement_timestamp() - min(run_after) FILTER
+                (WHERE state='ready' AND run_after<=statement_timestamp())))::bigint
+             FROM erp_job WHERE kind=$1 AND run_as_company=$2",
+            &[&kind, &company],
+        ).await?;
+        let row = rows
+            .first()
+            .ok_or_else(|| Error::invariant("Missing queue summary."))?;
+        Ok(serde_json::json!({
+            "local_runner": self.shared.ordinary_job_runners.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "waiting": row.get::<_, i64>(0), "running": row.get::<_, i64>(1),
+            "oldest_due_seconds": row.get::<_, Option<i64>>(2),
+        }))
+    }
+
     /// The state of the job with `uuid`, for an error message (`None`: gone).
     async fn job_state_of(&mut self, uuid: Uuid) -> Result<Option<JobState>> {
         let rows = self.query(STATE_SQL, &[&uuid]).await?;

@@ -794,6 +794,20 @@ impl<'r> JobContext<'r> {
         {
             let resolver = Arc::clone(&self.inner.resolver);
             match resolver.admit(tx, &self.claimed.principal).await {
+                Ok(principal) if !self.claimed.principal.companies.is_empty() => {
+                    // Env::new restores the login's baseline if no selection is explicit.
+                    // Preserve the selection admitted for this chunk, including its order.
+                    let ids = principal
+                        .companies()
+                        .allowed()
+                        .iter()
+                        .map(|c| erp_fields::Value::Int(c.get()));
+                    let context = tx
+                        .env()
+                        .context()
+                        .with("allowed_company_ids", erp_fields::Value::list(ids));
+                    tx.replace_principal_in_context(principal, context);
+                }
                 Ok(principal) => tx.replace_principal(principal),
                 Err(refusal) => {
                     return Err(ChunkFailure::Job(JobError::PrincipalRevoked {

@@ -247,3 +247,57 @@ async fn notify_mix_enqueue_throughput_with_notify_coalesced_and_at_the_floor() 
     notify_mix(&h, 1_000).await;
     notify_mix(&h, 50).await;
 }
+
+/// Drain a fixed backlog with the same database pool and runner on each revision.
+/// The wait begins when the backlog is released, after the fixture has finished loading it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "milestone queue throughput and p95 pickup latency"]
+async fn drain_ten_thousand_due_jobs() {
+    const TOTAL: i64 = 10_000;
+    let h = harness().await;
+    exec(
+        &h,
+        "INSERT INTO perf_pickup (seq) SELECT generate_series(0,9999)",
+    )
+    .await;
+    for start in (0..TOTAL).step_by(100) {
+        let requests = (start..start + 100)
+            .map(|seq| {
+                EnqueueRequest::new("test_jobs.stamp")
+                    .payload(&serde_json::json!({"seq":seq}))
+                    .unwrap()
+            })
+            .collect();
+        support::jobs::enqueue(&h, requests).await;
+    }
+    let runner = JobRunner::builder(runner_orm(&h, 1).await, PassResolver)
+        .build()
+        .unwrap();
+    exec(&h, "UPDATE perf_pickup SET enqueued=statement_timestamp()").await;
+    let started = Instant::now();
+    let handle = runner.spawn();
+    while cell(
+        &h,
+        "SELECT count(*)::text FROM erp_job WHERE kind='test_jobs.stamp'",
+    )
+    .await
+        != "0"
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(1200),
+            "worker did not drain backlog"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let elapsed = started.elapsed();
+    handle.shutdown().await;
+    assert_eq!(
+        cell(&h, "SELECT count(started)::text FROM perf_pickup").await,
+        TOTAL.to_string()
+    );
+    let p95 = cell(&h, "SELECT round((percentile_cont(.95) WITHIN GROUP (ORDER BY extract(epoch FROM started-enqueued)*1000))::numeric,1)::text FROM perf_pickup").await;
+    eprintln!(
+        "BACKLOG n={TOTAL} jobs_per_second={:.2} p95_wait_ms={p95}",
+        TOTAL as f64 / elapsed.as_secs_f64()
+    );
+}

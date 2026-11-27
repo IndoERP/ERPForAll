@@ -19,6 +19,68 @@ use multiuser_mail::{Mail, NO_SUCH_ID, OUTSIDE, record_denied, records, slot};
 use serde_json::json;
 
 #[test]
+fn discuss_workspace_menu_and_action_use_the_session_company() {
+    run(|f| {
+        let menu = f.xmlid("mail", "discuss_workspace_menu");
+        let action = f.xmlid("mail", "discuss_workspace_action");
+        let allowed = f.user(Subject::A).company;
+        let other = f.user(Subject::B).company;
+        let tree = success(&f.rpc(
+            Subject::A,
+            "ir.ui.menu",
+            "erp_load_web_menus",
+            json!({"context":{"allowed_company_ids":[allowed]}}),
+        ));
+        let entry = tree["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == menu)
+            .unwrap();
+        assert_eq!(entry["parent_id"], serde_json::Value::Null);
+        assert_eq!(entry["module"], "mail");
+        assert_eq!(entry["action_kind"], "client");
+        assert_eq!(entry["action_id"], action);
+
+        let open = |subject, company| {
+            f.rpc(
+                subject,
+                "ir.actions.client",
+                "erp_load_web_client_action",
+                json!({"ids":[action],"wire_major":1,"context":{"allowed_company_ids":[company]}}),
+            )
+        };
+        let opened = success(&open(Subject::A, allowed));
+        assert_eq!(opened["result"]["tag"], "mail.discuss");
+        assert_eq!(opened["result"]["params"], json!({}));
+        assert_eq!(open(Subject::A, other).status, 403);
+        assert_eq!(open(Subject::Anonymous, allowed).status, 401);
+        error(
+            &f.rpc(
+                Subject::A,
+                "res.users",
+                "erp_normalize_action_result",
+                json!({"wire_major":1,"context":{"allowed_company_ids":[allowed]},
+                    "result":{"type":"ir.actions.client","tag":"mail.discuss","params":{"company_id":other}}}),
+            ),
+            422,
+            "erp.exceptions.ValidationError",
+            "Discuss takes no action parameters.",
+        );
+        let portal = f.xmlid("base", "group_portal");
+        success(&f.rpc(
+            Subject::Admin,
+            "res.users",
+            "write",
+            json!({"ids":[f.user(Subject::A).id],"vals":{"group_ids":[[6,0,[portal]]]}}),
+        ));
+        let after_demotion = open(Subject::A, allowed);
+        assert!(matches!(after_demotion.status, 401 | 403));
+        assert!(!after_demotion.body.contains("mail.discuss"));
+    });
+}
+
+#[test]
 fn protected_mail_subtype_returns_a_validation_error_over_http() {
     run(|fixture| {
         let comment = fixture.xmlid("mail", "mt_comment");
@@ -947,12 +1009,22 @@ fn conversation_membership_installed_two_browser_tabs() {
             .success()
     );
     multiuser_fixture::run_with_assets(assets.path().to_owned(), move |f| {
+        let user = f.user(Subject::A);
+        let peers = ["Discuss Browser Peer", "Discuss Browser Colleague"];
+        for login in peers {
+            f.provision(multiuser_fixture::UserSpec {
+                login,
+                company: user.company,
+                companies: vec![user.company],
+                groups: vec![f.group("group_user")],
+            });
+        }
         let mut browser = toolchain()
             .arg("web/scripts/browser-discuss.mjs")
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
-        let input = json!({"origin":format!("http://127.0.0.1:{}",f.native.port),"login":f.user(Subject::A).login,"password":format!("{} & = fixture £ password",f.native.db.name())});
+        let input = json!({"origin":format!("http://127.0.0.1:{}",f.native.port),"login":user.login,"peers":peers,"password":format!("{} & = fixture £ password",f.native.db.name())});
         browser
             .stdin
             .take()
@@ -962,6 +1034,137 @@ fn conversation_membership_installed_two_browser_tabs() {
         assert!(
             browser.wait().unwrap().success(),
             "Discuss browser flow failed"
+        );
+    });
+}
+
+#[test]
+fn discuss_workspace_reuses_direct_messages_and_limits_search_and_bookmarks_to_members() {
+    use multiuser_fixture::UserSpec;
+    run(|f| {
+        let a = f.user(Subject::A);
+        let b = f.user(Subject::B);
+        let port = f.native.port;
+        let group = f.group("group_user");
+        let peer = f.provision(UserSpec {
+            login: "Workspace Peer",
+            company: a.company,
+            companies: vec![a.company],
+            groups: vec![group],
+        });
+        let extra = f.provision(UserSpec {
+            login: "Workspace Colleague",
+            company: a.company,
+            companies: vec![a.company],
+            groups: vec![group],
+        });
+        let model = "discuss.channel";
+        let people = success(&a.rpc_on(
+            port,
+            model,
+            "conversation_people",
+            json!({"query":"Workspace P"}),
+        ));
+        assert_eq!(people.as_array().unwrap().len(), 1);
+        assert_eq!(people[0]["id"], peer.id);
+        let start = |actor: &multiuser_fixture::User, ids: Vec<i64>| {
+            success(&actor.rpc_on(port, model, "conversation_start", json!({"user_ids":ids})))
+                .as_i64()
+                .unwrap()
+        };
+        let (left, right) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| start(a, vec![peer.id]));
+            let two = scope.spawn(|| start(&peer, vec![a.id]));
+            (one.join().unwrap(), two.join().unwrap())
+        });
+        assert_eq!(left, right);
+        assert_eq!(left, start(a, vec![peer.id]));
+        let group_channel = start(a, vec![peer.id, extra.id]);
+        assert_ne!(group_channel, left);
+        let one = |actor: &multiuser_fixture::User| {
+            success(&actor.rpc_on(port, model, "conversation_summary", json!({"ids":[left]})))
+        };
+        assert_eq!(one(a)["name"], "Workspace Peer");
+        let response = b.rpc_on(port, model, "conversation_summary", json!({"ids":[left]}));
+        assert!(response.status == 403 || success(&response).is_null());
+        assert_ne!(
+            a.rpc_on(
+                port,
+                model,
+                "conversation_invite",
+                json!({"ids":[left],"user_id":extra.id})
+            )
+            .status,
+            200
+        );
+        let post = success(&a.rpc_on(
+            port,
+            model,
+            "thread_post",
+            json!({"ids":[left],"post":{"body":"Snapshot & detail"}}),
+        ));
+        let message = post["message_id"].as_i64().unwrap();
+        assert_eq!(one(&peer)["preview"], "Snapshot & detail");
+        assert_eq!(one(&peer)["unread"], 1);
+        let page = success(&peer.rpc_on(
+            port,
+            model,
+            "conversation_search",
+            json!({"filter":"unread"}),
+        ));
+        assert_eq!(page["items"][0]["id"], left);
+        let older = success(&peer.rpc_on(
+            port,
+            model,
+            "conversation_search",
+            json!({"cursor":format!("{message}:{left}")}),
+        ));
+        let older_ids: Vec<_> = older["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_i64().unwrap())
+            .collect();
+        assert!(older_ids.contains(&group_channel));
+        assert!(!older_ids.contains(&left));
+        assert!(
+            success(&extra.rpc_on(
+                port,
+                model,
+                "conversation_search",
+                json!({"query":"Workspace Peer"})
+            ))["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        success(&peer.rpc_on(
+            port,
+            model,
+            "conversation_bookmark",
+            json!({"ids":[left],"message_id":message,"saved":true}),
+        ));
+        let saved = success(&peer.rpc_on(port, model, "conversation_saved", json!({})));
+        assert_eq!(saved["items"][0]["preview"], "Snapshot & detail");
+        assert_eq!(saved["items"][0]["channel_id"], left);
+        assert_eq!(saved["items"][0]["channel_name"], one(&peer)["name"]);
+        assert!(
+            success(&extra.rpc_on(port, model, "conversation_saved", json!({})))["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        success(&peer.rpc_on(
+            port,
+            model,
+            "conversation_seen",
+            json!({"ids":[left],"message_id":message}),
+        ));
+        assert_eq!(one(&peer)["unread"], 0);
+        assert_ne!(
+            a.rpc_on(port, model, "conversation_search", json!({"cursor":"bad"}))
+                .status,
+            200
         );
     });
 }

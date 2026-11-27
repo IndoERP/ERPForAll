@@ -1251,6 +1251,7 @@ fn server_orm_builder(
         .precommit_hook(erp_addon_mail::TRACKING_HOOK)
         .precommit_hook(erp_addon_mail::notification::DELIVERY_HOOK)
         .require_job_kinds(erp_addon_mail::job_kinds())
+        .require_job_kinds(crate::smtp::probe::job_kinds())
         .wasm_methods(wasm_methods)
         .computes(checks.computes)
         .constraints(checks.constraints)
@@ -1405,6 +1406,7 @@ pub(crate) async fn grant_vacuum_role_async(args: &GrantVacuumRoleArgs) -> Resul
 }
 
 struct RuntimeAuthConfig<'a> {
+    smtp: crate::smtp::RelayConfig,
     loaded: &'a Orm,
     node: AuthConfig,
     job_policy_pool: deadpool_postgres::Pool,
@@ -1446,7 +1448,18 @@ async fn runtime_auth(
             Arc::clone(&attachments),
         ))
         .build()?;
+    let smtp = Arc::new(configuration.smtp);
+    let service =
+        erp_addon_mail::outgoing::TransportService(Arc::new(crate::mail_outgoing::SmtpAdapter));
     let orm = server_request_orm_builder(loaded, runtime_pool, wasm_methods, checks, attachments)?
+        .generation_attachment(erp_orm::GenerationAttachment::new(
+            Arc::clone(registry),
+            smtp,
+        ))
+        .generation_attachment(erp_orm::GenerationAttachment::new(
+            Arc::clone(registry),
+            Arc::new(service),
+        ))
         .job_settings(
             erp_orm::jobs::JobSettings::builder()
                 .run_in_app(configuration.run_jobs)
@@ -1910,6 +1923,7 @@ impl NativeLifecycle {
             self.runtime_pool.clone(),
             self.policy_pool.clone(),
             RuntimeAuthConfig {
+                smtp: crate::smtp::RelayConfig::from_server(&self.config),
                 loaded: &loaded.orm,
                 node: self.config.auth(),
                 job_policy_pool: self.job_policy_pool.clone(),

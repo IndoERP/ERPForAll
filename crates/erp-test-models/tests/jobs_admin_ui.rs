@@ -437,3 +437,40 @@ async fn jobs_admin_technical_views_validate_and_compile() {
     assert!(menu_names.iter().any(|n| n == "Background Jobs"));
     assert!(menu_names.iter().any(|n| n == "Job Runs"));
 }
+
+#[tokio::test]
+async fn queue_health_separates_company_and_due_time() {
+    let h = harness(StaticPolicy::AllowAll).await;
+    let mut tx = h.begin().await.unwrap();
+    let env = tx.env().with_company(1).unwrap();
+    let kind = "test_jobs.ui_script";
+    for _ in 0..3 {
+        tx.enqueue(&env, EnqueueRequest::new(kind)).await.unwrap();
+    }
+    // The system test principal has no stored company. Set the captured company explicitly
+    // to model jobs from two resolved production sessions.
+    tx.execute(
+        "UPDATE erp_job SET run_as_company=1 WHERE kind=$1",
+        &[&kind],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "UPDATE erp_job SET run_as_company=2 WHERE id=(SELECT max(id) FROM erp_job WHERE kind=$1)",
+        &[&kind],
+    )
+    .await
+    .unwrap();
+    tx.execute("UPDATE erp_job SET run_after=statement_timestamp()+interval '1 day' WHERE run_as_company=1 AND kind=$1", &[&kind]).await.unwrap();
+    let status = tx.job_queue_health(&env, kind).await.unwrap();
+    assert_eq!(status["waiting"], 2);
+    assert_eq!(status["local_runner"], false);
+    assert!(status["oldest_due_seconds"].is_null());
+    tx.execute("UPDATE erp_job SET run_after=statement_timestamp()-interval '12 seconds' WHERE run_as_company=1 AND kind=$1", &[&kind]).await.unwrap();
+    assert!(
+        tx.job_queue_health(&env, kind).await.unwrap()["oldest_due_seconds"]
+            .as_i64()
+            .unwrap()
+            >= 12
+    );
+}

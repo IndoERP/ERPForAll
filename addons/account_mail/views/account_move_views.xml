@@ -6,6 +6,7 @@
         <field name="model">account.move</field>
         <field name="inherit_id" ref="account.view_invoice_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//header" position="inside"><button name="action_open_invoice_email" type="object" string="Send by Email" invisible="state != 'posted' or move_type != 'out_invoice'"/></xpath>
             <xpath expr="//sheet" position="after">
                 <chatter/>
             </xpath>
@@ -20,5 +21,13 @@
                 <chatter/>
             </xpath>
         </field>
+    </record>
+    <record id="invoice_email_form" model="ir.ui.view">
+      <field name="name">account.invoice.email.form</field><field name="model">account.invoice.email</field>
+      <field name="arch" type="xml"><form string="Email customer invoice"><group>
+        <field name="move_id" readonly="1"/><field name="email_to"/><field name="subject"/><field name="body"/>
+        <field name="attachment_ids" widget="many2many_tags" domain="[('res_model', '=', 'account.move'), ('res_id', '=', move_id), ('res_field', '=', False)]"/>
+      </group><footer><button name="action_preview_pdf" type="object" string="Preview PDF"/>
+          <button name="action_send_email" type="object" class="btn-primary" string="Queue email"/><button special="cancel" string="Discard"/></footer></form></field>
     </record>
 </erp>

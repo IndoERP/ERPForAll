@@ -47,7 +47,7 @@ class Bus {
   }
 }
 function find(root: HTMLElement, text: string) {
-  const found = Array.from(root.querySelectorAll("button")).find((b) => b.textContent === text);
+  const found = Array.from(root.querySelectorAll("button")).find((b) => b.getAttribute("aria-label") === text || b.textContent === text);
   if (!found) throw new Error(`Missing button ${text}`);
   return found;
 }
@@ -70,17 +70,19 @@ test("two tabs receive only wakes, reconcile duplicate deliveries, reconnect and
     unread: 0,
     bookmarks: 0,
     seen: 0,
-    owner: true,
+    owner: true, channel_type: "group", date: null, preview: "", sender: null,
   });
   let channels = [channel(2, "Planning")];
   let expired = false;
   const call = vi.fn(async (_model: string, method: string, args: Record<string, unknown>) => {
     if (expired) throw new ClientError("session", "Sign in again.");
-    if (method === "conversation_create") {
-      channels.push(channel(3, String(args["name"])));
+    if (method === "conversation_people") return [{ id: 9, name: "Purchasing" }];
+    if (method === "conversation_summary") return channels.find(row => row.id === (args["ids"] as number[])[0]) ?? null;
+    if (method === "conversation_start") {
+      channels.push(channel(3, "Purchasing"));
       return 3;
     }
-    if (method === "conversation_list") return channels.map((c) => ({ ...c }));
+    if (method === "conversation_search") return { items: channels.map((c) => ({ ...c })), next: null };
     throw new Error(`Unexpected ${method}`);
   });
   function tab() {
@@ -103,9 +105,10 @@ test("two tabs receive only wakes, reconcile duplicate deliveries, reconnect and
   const first = tab(),
     second = tab();
   await vi.waitFor(() => expect(second.node.textContent).toContain("Planning"));
-  const input = first.node.querySelector<HTMLInputElement>('[aria-label="Conversation name"]')!;
-  input.value = "Purchasing";
-  find(first.node, "Create conversation").click();
+  find(first.node, "New message").click();
+  await vi.waitFor(() => find(first.node, "Purchasing"));
+  find(first.node, "Purchasing").click();
+  find(first.node, "Start conversation").click();
   await vi.waitFor(() => expect(second.node.textContent).toContain("Purchasing"));
   for (const s of Socket.all) {
     s.replay();
@@ -113,13 +116,15 @@ test("two tabs receive only wakes, reconcile duplicate deliveries, reconnect and
   }
   await vi.waitFor(() => expect(second.store.local("DiscussSummary").ids()).toEqual(["2", "3"]));
   channels = [{ ...channel(3, "Purchasing"), unread: 1000 }];
+  const socketCount = Socket.all.length;
   Socket.all[1]!.dispatchEvent(new CloseEvent("close", { code: 1006 }));
-  await vi.waitFor(() => expect(Socket.all.length).toBe(3));
-  Socket.all[2]!.replay();
-  await vi.waitFor(() => expect(second.node.textContent).toContain("999+ unread"));
+  await vi.waitFor(() => expect(Socket.all.length).toBe(socketCount + 1));
+  const recovered = Socket.all.at(-1)!;
+  recovered.replay();
+  await vi.waitFor(() => expect(second.node.textContent).toContain("999+"));
   expect(second.node.textContent).not.toContain("Planning");
   expired = true;
-  Socket.all[2]!.replay();
+  recovered.replay();
   Socket.all[0]!.dispatchEvent(new CloseEvent("close", { code: 1008 }));
   await vi.waitFor(() => expect(second.node.textContent).toContain("Sign in again."));
   expect(second.store.local("DiscussSummary").ids()).toEqual([]);
@@ -136,15 +141,16 @@ test("Discuss, chat windows and messaging tabs share records and release them on
   const entry = (id: number, name: string) => ({
     id,
     name,
-    owner: true,
+    owner: true, channel_type: "group", date: null, preview: "", sender: null,
     unread: 0,
     bookmarks: 0,
     seen: 0,
     latest: 12,
   });
   let page = [entry(7, "Sales"), entry(9, "Warehouse")];
-  const call = vi.fn(async (_: string, method: string) => {
-    if (method === "conversation_list") return page;
+  const call = vi.fn(async (_: string, method: string, args: Record<string, unknown>) => {
+    if (method === "conversation_search") return { items: page, next: null };
+    if (method === "conversation_summary") return page.find(c => c.id === (args["ids"] as number[])[0]) ?? null;
     if (method === "conversation_receipts")
       return [
         { user: 5, seen: 12 },
@@ -171,19 +177,56 @@ test("Discuss, chat windows and messaging tabs share records and release them on
   document.body.append(view.node);
   find(view.node, "Discuss").click();
   await vi.waitFor(() => expect(view.node.textContent).toContain("Sales"));
-  find(view.node, "Sales · 0 unread · 0 saved").click();
-  find(view.node, "Read receipts").click();
-  await vi.waitFor(() => expect(view.node.textContent).toContain("1 of 2 participants"));
+  const choose = (id: number) => view.node.querySelector<HTMLButtonElement>(`button[data-id="${id}"]`)!.click();
+  choose(7);
   find(view.node, "Open chat window").click();
-  find(view.node, "Warehouse · 0 unread · 0 saved").click();
+  choose(9);
   find(view.node, "Open chat window").click();
   expect(view.node.querySelectorAll(".discuss-window")).toHaveLength(2);
   expect(mounts.every((m) => m.store === store)).toBe(true);
-  find(view.node, "Sales").click();
+  choose(7);
   find(view.node, "Leave conversation").click();
   await vi.waitFor(() => expect(view.node.querySelectorAll(".discuss-window")).toHaveLength(1));
   expect(store.local("DiscussSummary").ids()).toEqual(["9"]);
   expect(mounts.filter((m) => m.id === 7).every((m) => m.disposed)).toBe(true);
   view.dispose();
   expect(mounts.every((m) => m.disposed)).toBe(true);
+});
+
+test("workspace hands off the same active chat, reconciles filtered membership, and opens document notifications", async () => {
+  const store = new MessagingStore({ reportError: e => { throw e; } });
+  const context = { allowed_company_ids: [5] };
+  const direct = { id: 1, name: "Ada", channel_type: "direct", owner: false, latest: 80, seen: 0, unread: 1, bookmarks: 1, date: null, sender: "Ada", preview: "Hello" };
+  const call = vi.fn(async (_: string, method: string, args: Record<string, unknown>) => {
+    expect(args["context"]).toEqual(context);
+    if (method === "conversation_search") return { items: args["query"] ? [] : [direct], next: null };
+    if (method === "conversation_summary") return direct;
+    if (method === "messaging_inbox") return [
+      { message: 10, transport: "inbox", model: "sale.order", res_id: 44, subject: "Order ready" },
+      { message: 10, transport: "push", model: "sale.order", res_id: 44, subject: "Order ready" },
+    ];
+    throw new Error(method);
+  });
+  const openRecord = vi.fn();
+  const view = renderDiscuss({ store, rpc: { call } as unknown as RpcClient, uid: 5, userName: "Admin", context, openRecord });
+  const host = document.createElement("div");
+  document.body.append(view.node, host); find(view.node, "Discuss").click();
+  await vi.waitFor(() => expect(view.node.querySelector('[data-id="1"]')).toBeTruthy());
+  view.node.querySelector<HTMLButtonElement>('[data-id="1"]')!.click();
+  const original = mounts[0]!;
+  const exit = view.openWorkspace(host);
+  expect(host.querySelector(".discuss-workspace")).toBeTruthy();
+  expect(host.querySelectorAll('[title="Invite people"]')).toHaveLength(0);
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Search conversations"]')!;
+  input.value = "Nobody"; input.dispatchEvent(new Event("input"));
+  await vi.waitFor(() => expect(host.textContent).toContain("No conversations found."));
+  expect(host.querySelector(".discuss-identity h3")?.textContent).toBe("Ada");
+  expect(original.disposed).toBe(false);
+  find(host, "Notifications").click();
+  await vi.waitFor(() => expect(host.querySelectorAll('.discuss-row')).toHaveLength(1));
+  host.querySelector<HTMLButtonElement>(".discuss-row")!.click();
+  expect(openRecord).toHaveBeenCalledWith("sale.order", 44);
+  exit(); find(view.node, "Discuss").click();
+  expect(view.node.querySelector(".discuss-identity h3")?.textContent).toBe("Ada");
+  expect(mounts).toEqual([original]); view.dispose();
 });

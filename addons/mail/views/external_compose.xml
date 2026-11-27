@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="external_compose_form" model="ir.ui.view">
+    <field name="name">mail.external.compose.form</field>
+    <field name="model">mail.external.compose</field>
+    <field name="arch" type="xml"><form string="Send external email"><group>
+      <field name="model" invisible="1"/><field name="res_id" invisible="1"/>
+      <field name="recipient_ids" widget="many2many_tags"/><field name="email_to" placeholder="customer@example.com"/>
+      <field name="subject"/><field name="body"/>
+      <field name="attachment_ids" widget="many2many_tags" domain="[('res_model', '=', model), ('res_id', '=', res_id), ('res_field', '=', False)]"/>
+    </group><footer><button name="action_send_email" type="object" class="btn-primary" string="Queue email"/>
+    <button special="cancel" string="Discard"/></footer></form></field>
+  </record>
+  <record id="document_template_list" model="ir.ui.view">
+    <field name="name">mail.document.template.list</field><field name="model">mail.document.template</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="subject"/></list></field>
+  </record>
+  <record id="document_template_form" model="ir.ui.view">
+    <field name="name">mail.document.template.form</field><field name="model">mail.document.template</field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet><group>
+      <field name="name"/><field name="code" readonly="1"/><field name="subject"/><field name="body"/>
+    </group></sheet></form></field>
+  </record>
+  <record id="document_template_action" model="ir.actions.act_window">
+    <field name="name">Document Email Templates</field><field name="res_model">mail.document.template</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="document_template_list"/>
+  </record>
+  <menuitem id="document_template_menu" name="Document Email Templates" parent="base.technical_automation_menu" action="document_template_action" groups="base.group_system" sequence="40"/>
+  <record id="document_preview_form" model="ir.ui.view">
+    <field name="name">mail.document.preview.form</field><field name="model">mail.document.preview</field>
+    <field name="arch" type="xml"><form string="PDF for this email" edit="0" create="0"><group>
+      <field name="filename" readonly="1"/><field name="content" filename="filename" readonly="1"/>
+    </group><footer><button special="cancel" string="Back to email"/></footer></form></field>
+  </record>
+</erp>

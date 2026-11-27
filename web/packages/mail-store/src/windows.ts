@@ -74,14 +74,15 @@ export class ThreadWindows {
   }
 
   /**
-   * Install the latest page as the whole window, discarding any earlier run.
+   * Install a contiguous page as the whole window, discarding any earlier run.
    *
    * @param ref - the thread
    * @param ids - the page's message ids, strictly ascending (may be empty for a thread with no messages)
    * @param hasOlder - whether older messages exist on the server
+   * @param hasNewer - whether this page lies before the newest message on the server
    * @throws {@link MessagingStoreError} `window` for ids that are not strictly ascending positive integers
    */
-  replace(ref: ThreadRef, ids: readonly number[], hasOlder: boolean): void {
+  replace(ref: ThreadRef, ids: readonly number[], hasOlder: boolean, hasNewer = false): void {
     this.#checkIds(ref, "replace", ids);
     let run = [...ids];
     let older = hasOlder;
@@ -89,7 +90,7 @@ export class ThreadWindows {
       run = run.slice(run.length - this.#max);
       older = true;
     }
-    this.#write(ref, run, older, false);
+    this.#write(ref, run, older, hasNewer);
   }
 
   /**

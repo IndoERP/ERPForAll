@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+msgid ""
+msgstr ""
+"Language: id_ID\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+#: model:mail.document.template,subject:sale.email_template_quotation
+msgid "Quotation {document}"
+msgstr "Penawaran {document}"
+
+#: model:mail.document.template,body:sale.email_template_quotation
+msgid "Hello,\n\nPlease find attached your quotation {document} totaling {total}.\n\nBest regards,"
+msgstr "Halo,\n\nTerlampir penawaran {document} dengan total {total}.\n\nSalam,"

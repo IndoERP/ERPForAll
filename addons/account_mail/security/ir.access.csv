@@ -1,0 +1,2 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_invoice_email,Own invoice email drafts,account_mail.model_account_invoice_email,base.group_user,crud,"[('create_uid', '=', user.id)]"

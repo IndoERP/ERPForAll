@@ -643,6 +643,27 @@ pub struct MailThreadRpc {}
 
 #[methods(MailThread, addon = "mail")]
 impl MailThreadRpc {
+    /// Open an explicit external email draft on this business record.
+    #[method]
+    #[rpc(effect = read)]
+    async fn action_open_external_email(
+        this: &RecordSet<MailThread>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        let record = this.as_records().ensure_one()?;
+        if !matches!(standing(tx, record.env()).await?, Standing::Internal)
+            || record.model_name() == "discuss.channel"
+        {
+            return Err(Error::access(
+                "Only internal users may email business records.",
+            ));
+        }
+        record.check_access(tx, Operation::Write).await?;
+        Ok(Value::Json(Arc::new(
+            erp_sdk::serde_json::json!({"type":"ir.actions.act_window","res_model":"mail.external.compose","name":"Send external email","target":"new","views":[[false,"form"]],"context":{"default_model":record.model_name(),"default_res_id":record.ids()[0]}}),
+        )))
+    }
+
     /// Post a message on the record as the caller and answer with it. `post`
     /// is the closed object of [`PostWire`]. The caller needs the access `_mail_post_access`
     /// names; the author is the caller's partner; an author who may not write the record is not

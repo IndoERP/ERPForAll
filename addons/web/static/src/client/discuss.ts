@@ -1,442 +1,390 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { MessagingStore, type LocalModel } from "@erpforall/mail-store";
 import { forgetDraft } from "@erpforall/mail-thread-view";
-import { Chatter } from "./chatter.js";
+import { Chatter, type ChatterOptions } from "./chatter.js";
 import { watchChatterThread } from "./chatter-realtime.js";
+import { button, el } from "./dom.js";
+import { peoplePicker, type DiscussCall } from "./discuss-picker.js";
+import { icon, type IconName } from "./icons.js";
 import { ClientError, type RpcClient } from "./transport.js";
 
 interface Channel {
-  id: number;
-  name: string;
-  unread: number;
-  bookmarks: number;
-  latest: number | null;
-  seen: number;
-  owner: boolean;
+  id: number; name: string; unread: number; bookmarks: number; seen: number;
+  latest: number | null; owner: boolean; channel_type: "direct" | "group";
+  preview: string; date: string | null; sender: string | null;
 }
 interface Options {
-  rpc: RpcClient;
-  store: MessagingStore;
-  uid: number;
-  userName: string;
-  policy: { company: number; csrf: string; retry: readonly [number, number] };
+  rpc: RpcClient; store: MessagingStore; uid: number; userName: string;
+  policy?: ChatterOptions["threadSocket"]; context?: Record<string, unknown>;
+  openWorkspace?: () => void; openRecord?: (model: string, id: number) => void;
 }
-const summaries = new WeakMap<MessagingStore, LocalModel>();
-function records(store: MessagingStore): LocalModel {
-  const existing = summaries.get(store);
-  if (existing) return existing;
-  const model = store.defineLocalModel("DiscussSummary", ["channel"]);
-  summaries.set(store, model);
-  return model;
+export interface DiscussControl {
+  node: HTMLElement;
+  openWorkspace(host: HTMLElement): () => void;
+  dispose(): void;
 }
-
-function decode(value: unknown): Channel[] {
-  if (!Array.isArray(value) || value.length > 50)
-    throw new ClientError("server", "Invalid conversation page.");
-  let previous = 0;
-  for (const row of value) {
-    if (
-      !row ||
-      !Number.isSafeInteger(row.id) ||
-      row.id <= previous ||
-      typeof row.name !== "string" ||
-      typeof row.owner !== "boolean" ||
-      ![row.unread, row.bookmarks].every((n) => Number.isSafeInteger(n) && n >= 0 && n <= 1000) ||
-      !Number.isSafeInteger(row.seen) ||
-      row.seen < 0 ||
-      (row.latest !== null && (!Number.isSafeInteger(row.latest) || row.latest < 1))
-    ) {
-      throw new ClientError("server", "Invalid conversation summary.");
-    }
-    previous = row.id;
+interface Entry {
+  key: string; name: string; detail: string; initials?: string; unread?: number; date?: string | null;
+  open(): void; remove?(): void;
+}
+type Section = "all" | "unread" | "saved" | "inbox";
+const models = new WeakMap<MessagingStore, LocalModel>();
+const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+function channel(value: unknown): Channel {
+  if (typeof value !== "object" || !value) throw new Error("Invalid conversation summary.");
+  const c = value as Channel;
+  if (!positive(c.id) || typeof c.name !== "string" || !["direct", "group"].includes(c.channel_type) ||
+    ![c.seen, c.unread, c.bookmarks].every(n => Number.isSafeInteger(n) && n >= 0) ||
+    (c.latest !== null && !positive(c.latest)) || typeof c.owner !== "boolean" || typeof c.preview !== "string" ||
+    [c.sender, c.date].some(s => s !== null && typeof s !== "string")) throw new Error("Invalid conversation summary.");
+  return c;
+}
+function page(value: unknown): { items: unknown[]; next: unknown } {
+  if (!value || typeof value !== "object" || !("items" in value) || !Array.isArray(value.items) || value.items.length > 50 || !("next" in value)) {
+    throw new Error("Invalid Discuss page.");
   }
-  return value as Channel[];
+  return { items: value.items, next: value.next };
+}
+function iconButton(label: string, name: IconName, action: () => void) {
+  const b = button("", action, "discuss-icon");
+  b.append(icon(name)); b.title = label; b.setAttribute("aria-label", label);
+  return b;
+}
+const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join("").toLocaleUpperCase();
+function timeLabel(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) :
+    date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const button = (label: string, click: () => void) => {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.textContent = label;
-  b.addEventListener("click", click);
-  return b;
-};
-const count = (value: number) => (value === 1000 ? "999+" : String(value));
-
-/** Each tab fetches with its own current session. The browser channel only carries a wake-up. */
-export function renderDiscuss(options: Options): { node: HTMLElement; dispose(): void } {
-  const { rpc, store, uid, policy } = options;
-  const rows = records(store);
-  const node = document.createElement("div");
-  const panel = document.createElement("section");
-  panel.className = "discuss-panel";
-  panel.setAttribute("aria-label", "Discuss");
-  panel.hidden = true;
-  const status = document.createElement("p");
+export function renderDiscuss(options: Options): DiscussControl {
+  const { rpc, store, uid, policy, context } = options;
+  const rows = models.get(store) ?? store.defineLocalModel("DiscussSummary", ["channel"]);
+  models.set(store, rows);
+  const call: DiscussCall = (method, args, write = false) => rpc.call("discuss.channel", method,
+    { ...args, ...(context ? { context } : {}) }, { write, background: !write });
+  const node = el("div", undefined, "discuss-control");
+  const panel = el("section", undefined, "discuss-panel");
+  panel.setAttribute("aria-label", "Discuss"); panel.hidden = true;
+  const side = el("aside", undefined, "discuss-sidebar");
+  const top = el("header", undefined, "discuss-sidebar-head");
+  const newMessage = iconButton("New message", "plus", () => pick(null));
+  const expand = iconButton("Open workspace", "external-link", () => options.openWorkspace?.());
+  const close = iconButton("Close", "x", closeQuick);
+  top.append(el("h2", "Discuss"), newMessage);
+  if (options.openWorkspace) top.append(expand);
+  top.append(close);
+  const search = el("input");
+  search.type = "search"; search.maxLength = 120; search.placeholder = "Search conversations";
+  search.setAttribute("aria-label", search.placeholder);
+  const searchRow = el("div", undefined, "discuss-search");
+  searchRow.append(icon("search"), search);
+  const nav = el("nav", undefined, "discuss-nav");
+  nav.setAttribute("aria-label", "Discuss sections");
+  const list = el("div", undefined, "discuss-list");
+  list.setAttribute("aria-label", "Conversations");
+  const pages = el("div", undefined, "discuss-pages");
+  const backPage = iconButton("Previous", "chevron-left", () => { if (history.length > 1) { history.pop(); void refresh(); } });
+  const nextPage = iconButton("Next", "chevron-right", () => { if (next !== null) { history.push(next); void refresh(); } });
+  pages.append(backPage, nextPage);
+  const thread = el("section", undefined, "discuss-main");
+  const head = el("header", undefined, "discuss-thread-head");
+  const back = iconButton("Back to conversations", "arrow-left", () => {
+    panel.classList.remove("has-thread"); searchRow.hidden ? nav.querySelector("button")?.focus() : search.focus();
+  });
+  back.classList.add("discuss-back");
+  const identity = el("div", undefined, "discuss-identity");
+  const name = el("h3"), kind = el("span");
+  identity.append(name, kind);
+  const actions = el("div", undefined, "discuss-tools");
+  head.append(back, identity, actions);
+  const body = el("div", undefined, "discuss-thread-body");
+  const empty = el("div", undefined, "discuss-empty");
+  empty.append(icon("messages-square"), el("h3", "Select a conversation"), button("New message", () => pick(null)));
+  const picker = el("div", undefined, "discuss-picker-slot");
+  picker.hidden = true;
+  const status = el("div", undefined, "discuss-status");
   status.setAttribute("role", "status");
-  const list = document.createElement("div");
-  const controls = document.createElement("div");
-  const host = document.createElement("div");
-  const inbox = document.createElement("div");
-  inbox.setAttribute("aria-label", "Notifications");
-  let inboxOpen = false;
-  const title = document.createElement("h2");
-  title.textContent = "Discuss";
-  const toolbar = document.createElement("div");
-  toolbar.className = "discuss-tools";
-  const tabs = document.createElement("div");
-  tabs.setAttribute("aria-label", "Open conversations");
-  const current = document.createElement("h3");
-  const dock = document.createElement("div");
-  dock.className = "discuss-dock";
-  const windows = new Map<number, { chatter: Chatter; element: HTMLElement; latest: number | null }>();
+  thread.append(head, body, empty, picker);
+  side.append(top, searchRow, nav, list, pages);
+  panel.append(side, thread, status);
+  const dock = el("div", undefined, "discuss-dock");
+  const trigger = button("Discuss", () => {
+    if (workspace) { search.focus(); return; }
+    if (panel.hidden) show(); else closeQuick();
+  });
+  trigger.setAttribute("aria-expanded", "false"); trigger.setAttribute("aria-label", "Discuss");
+  node.append(trigger, panel, dock);
+  const visited = new Set<number>();
+  const windows = new Map<number, { element: HTMLElement; chatter: Chatter; latest: number | null }>();
+  let selected: Channel | null = null, chatter: Chatter | undefined, section: Section = "all";
+  const subscriptions = new Map<number, () => void>();
+  let workspace: HTMLElement | null = null, dead = false, generation = 0, selection = 0;
+  let history: (string | number | null)[] = [null], next: string | number | null = null;
+  let endPicker: (() => void) | undefined, endSocket: (() => void) | undefined;
+  let searchTimer: ReturnType<typeof setTimeout>;
+  const allowed = context?.["allowed_company_ids"];
+  const company = policy?.company ?? (Array.isArray(allowed) && positive(allowed[0]) ? allowed[0] : null);
+  const bus = company !== null && typeof BroadcastChannel === "function" ? new BroadcastChannel(`erp.discuss.${uid}.${company}`) : undefined;
+  if (bus) bus.onmessage = event => { if (event.data === "refresh") void refresh(); };
+  const links = new Map<Section, HTMLButtonElement>();
+  for (const [id, label] of [["all","Conversations"],["unread","Unread"],["saved","Saved"],["inbox","Notifications"]] as const) {
+    const b = button(label, () => {
+      section = id; history = [null]; list.replaceChildren(); next = null; void refresh();
+    });
+    links.set(id, b); nav.append(b);
+  }
+  search.addEventListener("input", () => {
+    ++generation; history = [null]; clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => void refresh(), 150);
+  });
+  panel.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !e.defaultPrevented && !workspace) { closeQuick(); trigger.focus(); }
+  });
+  function persist(c: Channel) {
+    const id = String(c.id);
+    if (rows.has(id)) rows.set(id, { channel: c }); else rows.create(id, { channel: c });
+  }
   function closeWindow(id: number) {
-    const w = windows.get(id);
-    w?.chatter.dispose();
-    w?.element.remove();
-    windows.delete(id);
+    const win = windows.get(id);
+    if (win) { win.chatter.dispose(); win.element.remove(); windows.delete(id); }
+    syncWatch();
+  }
+  function dropSelected() {
+    selected = null; chatter?.dispose(); chatter = undefined; body.replaceChildren();
+    head.hidden = true; empty.hidden = false; panel.classList.remove("has-thread");
+  }
+  function forget(id: number) {
+    if (selected?.id === id) dropSelected();
+    closeWindow(id);
+    const ref = { model: "discuss.channel", id };
+    forgetDraft(store, ref); store.forgetThread(ref); visited.delete(id);
+    if (rows.has(String(id))) rows.delete(String(id));
+  }
+  function clearPrivate() {
+    ++generation; ++selection; closePicker(false);
+    for (const id of new Set([...visited, ...rows.ids().map(Number)])) forget(id);
+    list.replaceChildren(); pages.hidden = true; store.collect();
+  }
+  function fail(e: unknown) {
+    if (dead) return;
+    if (e instanceof ClientError && (e.kind === "permission" || e.kind === "session")) clearPrivate();
+    status.textContent = e instanceof Error ? e.message : "Discuss could not be loaded.";
+  }
+  function syncWatch() {
+    const needed = !dead && (!panel.hidden || windows.size > 0);
+    if (!needed) { endSocket?.(); endSocket = undefined; }
+    const active = needed ? new Set(windows.keys()) : new Set<number>();
+    if (needed && !panel.hidden && selected) active.add(selected.id);
+    for (const [id, dispose] of subscriptions) {
+      if (!active.has(id)) { dispose(); subscriptions.delete(id); }
+    }
+    if (!needed || !policy || typeof WebSocket !== "function") return;
+    endSocket ??= watchChatterThread({ model: "discuss.channel.member", id: Number.MAX_SAFE_INTEGER }, policy, refresh, fail);
+    // An open conversation can fall outside the recent page. Recheck it independently on edits or loss of membership.
+    for (const id of active) if (!subscriptions.has(id)) {
+      subscriptions.set(id, watchChatterThread({ model: "discuss.channel", id }, policy, async () => {
+        const mounted = new Set([selected?.id === id ? chatter : undefined, windows.get(id)?.chatter]);
+        await Promise.all([...mounted].map(view => view?.refresh()));
+      }, error => {
+        if (error instanceof ClientError && error.kind === "permission") { forget(id); void refresh(); }
+        else fail(error);
+      }));
+    }
+  }
+  function show() {
+    panel.hidden = false; trigger.setAttribute("aria-expanded", "true"); syncWatch(); void refresh();
+  }
+  function closeQuick() {
+    if (workspace) return;
+    ++generation; ++selection; closePicker(false); panel.hidden = true; trigger.setAttribute("aria-expanded", "false"); syncWatch();
+  }
+  async function invalidate() { bus?.postMessage("refresh"); await refresh(); }
+  async function write(method: string, args: Record<string, unknown>) {
+    await call(method, args, true);
+    if (!dead) await invalidate();
+  }
+  function closePicker(restoreFocus = true) {
+    if (!endPicker) return;
+    endPicker(); endPicker = undefined; picker.hidden = true; thread.classList.remove("picking");
+    if (!selected) panel.classList.remove("has-thread");
+    if (restoreFocus) newMessage.focus();
+  }
+  function pick(invite: number | null) {
+    closePicker(false);
+    picker.hidden = false; thread.classList.add("picking"); panel.classList.add("has-thread");
+    endPicker = peoplePicker(picker, call, invite, async id => {
+      closePicker(false); section = "all"; history = [null]; search.value = "";
+      await openId(id); await invalidate();
+    }, () => closePicker(), fail);
+  }
+  function mount(c: Channel, host: HTMLElement) {
+    visited.add(c.id);
+    return new Chatter({ host, model: "discuss.channel", recordId: c.id, rpc, uid, store, userName: options.userName,
+      ...(context ? { context } : {}), reloadOnPost: true, reloadForm: invalidate,
+      conversation: {
+        markRead: message_id => write("conversation_seen", { ids: [c.id], message_id }),
+        save: async message_id => { await write("conversation_bookmark", { ids: [c.id], message_id, saved: true }); return "Message saved."; },
+        receipts: async message_id => {
+          const result = await call("conversation_receipts", { ids: [c.id] });
+          if (!Array.isArray(result) || result.length > 100 || result.some(r => !Number.isSafeInteger(r?.seen) || r.seen < 0)) throw new Error("Invalid read receipts.");
+          return `${result.filter(r => r.seen >= message_id).length} of ${result.length} participants have marked this message as read.`;
+        }
+      }
+    });
   }
   function openWindow(c: Channel) {
     const existing = windows.get(c.id);
-    if (existing) {
-      existing.element.focus();
-      return;
-    }
-    if (windows.size >= 3) {
-      status.textContent = "Close a chat window before opening another.";
-      return;
-    }
-    const element = document.createElement("section");
-    element.className = "discuss-window";
-    element.tabIndex = -1;
+    if (existing) { existing.element.focus(); return; }
+    if (windows.size >= 3) { status.textContent = "Close a chat window before opening another."; return; }
+    const element = el("section", undefined, "discuss-window"); element.tabIndex = -1;
     element.setAttribute("aria-label", `Chat with ${c.name}`);
-    const title = document.createElement("h3");
-    title.textContent = c.name;
-    const content = document.createElement("div");
-    element.append(
-      title,
-      button("Close chat", () => closeWindow(c.id)),
-      content,
-    );
-    dock.append(element);
-    windows.set(c.id, {
-      element,
-      latest: c.latest,
-      chatter: new Chatter({
-        host: content,
-        model: "discuss.channel",
-        recordId: c.id,
-        rpc,
-        store,
-        uid,
-        userName: options.userName,
-        reloadOnPost: true,
-        reloadForm: invalidate,
-      }),
-    });
-    element.focus();
+    const bar = el("header"); bar.append(el("h3", c.name), iconButton("Close chat", "x", () => closeWindow(c.id)));
+    const host = el("div", undefined, "discuss-thread-body"); element.append(bar, host); dock.append(element);
+    windows.set(c.id, { element, chatter: mount(c, host), latest: c.latest }); element.focus();
   }
-  let open = false,
-    dead = false,
-    version = 0,
-    after = 0,
-    selected = 0,
-    activeLatest: number | null = null;
-  let pending = false,
-    again = false;
-  const trail = [0];
-  const chats = new Set<number>();
-  let chatter: Chatter | undefined, stopSocket: (() => void) | undefined;
-  const bus =
-    typeof BroadcastChannel === "function"
-      ? new BroadcastChannel(`erp.discuss.${uid}.${policy.company}`)
-      : undefined;
-  const all = () => rows.ids().map((id) => rows.get(id, "channel") as Channel);
-  const channel = (id: number) => rows.get(String(id), "channel") as Channel | undefined;
-  function clearChat() {
-    chatter?.dispose();
-    chatter = undefined;
-    activeLatest = null;
-    selected = 0;
-    current.textContent = "";
-    host.replaceChildren();
-    controls.replaceChildren();
-  }
-  function clear(revoked = false) {
-    for (const id of windows.keys()) closeWindow(id);
-    clearChat();
-    chats.clear();
-    tabs.replaceChildren();
-    list.replaceChildren();
-    inbox.replaceChildren();
-    for (const id of rows.ids()) {
-      const ref = { model: "discuss.channel", id: Number(id) };
-      if (revoked) {
-        forgetDraft(store, ref);
-        store.forgetThread(ref);
-        rows.delete(id);
-      } else store.windows.drop(ref);
+  function header(c: Channel) {
+    name.textContent = c.name; kind.textContent = c.channel_type === "direct" ? "Direct message" : "Group conversation";
+    const key = `${c.id}:${c.channel_type}:${c.owner}`;
+    if (actions.dataset["key"] === key) return;
+    actions.dataset["key"] = key; actions.replaceChildren();
+    actions.append(iconButton("Open chat window", "external-link", () => openWindow(selected!)));
+    if (c.channel_type === "group") {
+      if (c.owner) actions.append(iconButton("Invite people", "users", () => pick(c.id)));
+      actions.append(iconButton("Leave conversation", "log-out", () => { void write("conversation_leave", { ids: [c.id] }).catch(fail); }));
     }
-    store.collect();
   }
-  function error(e: unknown) {
+  function select(c: Channel, target?: number) {
     if (dead) return;
-    version++;
-    clear(e instanceof ClientError && (e.kind === "permission" || e.kind === "session"));
-    status.textContent = e instanceof Error ? e.message : "Discuss could not be loaded.";
+    ++selection; closePicker(false); panel.classList.add("has-thread");
+    if (c.id !== selected?.id) {
+      chatter?.dispose(); body.replaceChildren(); chatter = mount(c, body);
+    }
+    selected = c; persist(c); head.hidden = false; empty.hidden = true; header(c); syncWatch();
+    if (list.contains(document.activeElement) && typeof matchMedia === "function" && matchMedia("(max-width: 700px)").matches) back.focus();
+    for (const b of list.querySelectorAll("button[data-id]")) b.setAttribute("aria-current", String(b.getAttribute("data-id") === String(c.id)));
+    if (target) void chatter?.focusMessage(target).catch(fail);
+  }
+  async function openId(id: number, message?: number) {
+    const token = ++selection;
+    try {
+      const raw = await call("conversation_summary", { ids: [id] });
+      if (dead || selection !== token) return;
+      if (!raw) { forget(id); status.textContent = "This conversation is no longer available."; return; }
+      select(channel(raw), message);
+    } catch (error) { if (token === selection) fail(error); }
+  }
+  function renderList(entries: Entry[]) {
+    const focus = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement.dataset["key"] : null;
+    list.replaceChildren();
+    for (const e of entries) {
+      const row = el("div", undefined, "discuss-entry");
+      const b = button("", e.open, "discuss-row"); b.dataset["key"] = e.key;
+      if (e.key.startsWith("c")) {
+        b.dataset["id"] = e.key.slice(1); b.setAttribute("aria-current", String(b.dataset["id"] === String(selected?.id)));
+      }
+      if (e.initials !== undefined) { const badge = el("span", e.initials, "discuss-avatar"); badge.setAttribute("aria-hidden", "true"); b.append(badge); }
+      const copy = el("span", undefined, "discuss-row-copy"); copy.append(el("strong", e.name), el("small", e.detail));
+      b.append(copy);
+      const meta = el("span", undefined, "discuss-meta");
+      if (e.date) { const time = el("time", timeLabel(e.date)); time.dateTime = e.date; meta.append(time); }
+      if (e.unread) { const badge = el("span", e.unread >= 1000 ? "999+" : String(e.unread), "discuss-unread"); badge.setAttribute("aria-label", `${e.unread} unread`); meta.append(badge); }
+      b.append(meta); row.append(b);
+      if (e.remove) { const remove = iconButton("Remove saved message", "x", e.remove); remove.dataset["key"] = "remove" + e.key; row.append(remove); }
+      list.append(row);
+    }
+    if (!entries.length) list.append(el("p", section === "saved" ? "No saved messages." : section === "inbox" ? "No notifications." :
+      section === "unread" ? "No unread conversations." : "No conversations found.", "discuss-list-empty"));
+    if (focus) Array.from(list.querySelectorAll<HTMLButtonElement>("button")).find(b => b.dataset["key"] === focus)?.focus({ preventScroll: true });
   }
   async function refresh() {
-    if (dead || !open) return;
-    if (pending) {
-      again = true;
-      return;
-    }
-    pending = true;
+    if (dead || (panel.hidden && !windows.size)) return;
+    const token = ++generation, cursor = history.at(-1), found = new Map<number, Channel>();
+    const sectionAtStart = section;
+    for (const [key, link] of links) link.setAttribute("aria-pressed", String(key === section));
+    searchRow.hidden = section === "inbox" || section === "saved";
+    const isCurrent = () => !dead && token === generation;
     try {
-      do {
-        again = false;
-        const generation = version;
-        const [page, notices] = await Promise.all([
-          rpc.call("discuss.channel", "conversation_list", { after }).then(decode),
-          inboxOpen ? rpc.call("discuss.channel", "messaging_inbox", {}) : Promise.resolve(null),
-        ]);
-        if (dead || !open || generation !== version) continue;
-        inbox.replaceChildren();
-        if (inboxOpen && notices !== null) {
-          if (!Array.isArray(notices) || notices.length > 50)
-            throw new ClientError("server", "Invalid notification list.");
-          const unique = new Set<number>();
-          for (const notice of notices) {
-            if (!Number.isSafeInteger(notice.message) || !["inbox", "push"].includes(notice.transport))
-              throw new ClientError("server", "Invalid message notification.");
-            if (unique.has(notice.message)) continue;
-            unique.add(notice.message);
-            const item = document.createElement("p");
-            item.textContent = `New message #${notice.message}`;
-            inbox.append(item);
-          }
-          if (!unique.size) inbox.textContent = "No notifications.";
+      let entries: Entry[] = [], nextCursor: number | string | null = null;
+      if (section === "all" || section === "unread") {
+        const response = page(await call("conversation_search", { query: search.value.trim(), filter: section, ...(cursor ? { cursor } : {}) }));
+        if (!isCurrent()) return;
+        if (response.next !== null && typeof response.next !== "string") throw new Error("Invalid conversation cursor.");
+        nextCursor = response.next;
+        for (const raw of response.items) {
+          const c = channel(raw); found.set(c.id, c);
+          entries.push({ key: "c" + c.id, name: c.name, detail: c.preview ? [c.sender, c.preview].filter(Boolean).join(" · ") : "No messages yet",
+            date: c.date, unread: c.unread, initials: initials(c.name), open: () => select(c) });
         }
-        const ids = new Set(page.map((c) => c.id));
-        for (const id of rows.ids())
-          if (!ids.has(Number(id))) {
-            if (selected === Number(id)) clearChat();
-            closeWindow(Number(id));
-            chats.delete(Number(id));
-            const ref = { model: "discuss.channel", id: Number(id) };
-            forgetDraft(store, ref);
-            store.forgetThread(ref);
-            rows.delete(id);
-          }
-        for (const c of page) {
-          const id = String(c.id);
-          if (rows.has(id)) rows.set(id, { channel: c });
-          else rows.create(id, { channel: c });
+      } else if (section === "saved") {
+        const response = page(await call("conversation_saved", cursor ? { cursor } : {}));
+        if (!isCurrent()) return;
+        if (response.next !== null && !positive(response.next)) throw new Error("Invalid saved message cursor.");
+        nextCursor = response.next;
+        for (const raw of response.items) {
+          const s = raw as { id: number; channel_id: number; channel_name: string; preview: string };
+          if (!s || !positive(s.id) || !positive(s.channel_id) || typeof s.channel_name !== "string" || typeof s.preview !== "string") throw new Error("Invalid saved message.");
+          entries.push({ key: "s" + s.id, name: s.channel_name, detail: s.preview, open: () => void openId(s.channel_id, s.id),
+            remove: () => { void write("conversation_bookmark", { ids: [s.channel_id], message_id: s.id, saved: false }).catch(fail); } });
         }
-        status.textContent = page.length ? "" : "No conversations on this page.";
-        draw();
-        const latest = channel(selected)?.latest ?? null;
-        const updates: Promise<void>[] = [];
-        if (chatter && latest !== activeLatest) {
-          activeLatest = latest;
-          updates.push(chatter.refresh());
+      } else {
+        const notices = await call("messaging_inbox", {});
+        if (!isCurrent()) return;
+        if (!Array.isArray(notices) || notices.length > 50) throw new Error("Invalid notifications.");
+        const seen = new Set<number>();
+        for (const n of notices) {
+          if (!positive(n?.message) || !["inbox", "push"].includes(n.transport)) throw new Error("Invalid notification.");
+          if (seen.has(n.message)) continue;
+          seen.add(n.message);
+          entries.push({ key: "n" + n.message, name: n.subject || "New message", detail: n.model && !n.channel_id ? n.model : "Conversation",
+            open: () => {
+              if (positive(n.channel_id)) void openId(n.channel_id, n.message);
+              else if (typeof n.model === "string" && positive(n.res_id) && options.openRecord) options.openRecord(n.model, n.res_id);
+              else status.textContent = "This notification has no available conversation or document.";
+            } });
         }
-        for (const [id, w] of windows) {
-          const now = channel(id)?.latest ?? null;
-          if (now !== w.latest) {
-            w.latest = now;
-            updates.push(w.chatter.refresh());
-          }
-        }
-        await Promise.all(updates);
-      } while (again && open && !dead);
-    } catch (e) {
-      error(e);
-    } finally {
-      pending = false;
-    }
-  }
-  function invalidate() {
-    bus?.postMessage("refresh");
-    return refresh();
-  }
-  if (bus)
-    bus.onmessage = (e) => {
-      if (e.data === "refresh") void refresh();
-    };
-  async function act(method: string, args: Record<string, unknown>) {
-    try {
-      await rpc.call("discuss.channel", method, args);
-      await invalidate();
-    } catch (e) {
-      error(e);
-    }
-  }
-  function openChannel(id: number) {
-    const c = channel(id);
-    if (!c) return;
-    clearChat();
-    selected = id;
-    activeLatest = c.latest;
-    chats.add(id);
-    chatter = new Chatter({
-      host,
-      model: "discuss.channel",
-      recordId: id,
-      rpc,
-      store,
-      uid,
-      userName: options.userName,
-      reloadOnPost: true,
-      reloadForm: invalidate,
-    });
-    draw();
-  }
-  function draw() {
-    list.replaceChildren();
-    tabs.replaceChildren();
-    controls.replaceChildren();
-    for (const c of all()) {
-      list.append(
-        button(`${c.name} · ${count(c.unread)} unread · ${count(c.bookmarks)} saved`, () =>
-          openChannel(c.id),
-        ),
-      );
-      if (chats.has(c.id)) {
-        const tab = button(c.name, () => openChannel(c.id));
-        tab.setAttribute("aria-pressed", String(c.id === selected));
-        tabs.append(tab);
       }
-    }
-    const c = channel(selected);
-    if (c) {
-      current.textContent = c.name;
-      controls.append(button("Open chat window", () => openWindow(c)));
-      if (c.latest !== null)
-        for (const [label, method, extra] of [
-          ["Mark read", "conversation_seen", {}],
-          ["Save latest", "conversation_bookmark", { saved: true }],
-          ["Unsave latest", "conversation_bookmark", { saved: false }],
-        ] as const)
-          controls.append(
-            button(label, () => void act(method, { ids: [c.id], message_id: c.latest, ...extra })),
-          );
-      if (c.latest !== null) {
-        const receipt = document.createElement("output");
-        controls.append(
-          button("Read receipts", () => {
-            void rpc
-              .call("discuss.channel", "conversation_receipts", { ids: [c.id] })
-              .then((result) => {
-                if (!receipt.isConnected || !open || selected !== c.id) return;
-                if (
-                  !Array.isArray(result) ||
-                  result.length > 100 ||
-                  result.some((r) => !Number.isSafeInteger(r?.seen) || r.seen < 0)
-                ) {
-                  throw new ClientError("server", "Invalid read receipts.");
-                }
-                const readers = result.filter((r) => r.seen >= c.latest!).length;
-                receipt.textContent = `${readers} of ${result.length} participants have marked the latest message as read.`;
-              })
-              .catch(error);
-          }),
-          receipt,
-        );
+      const activeIds = new Set(windows.keys());
+      if (selected) activeIds.add(selected.id);
+      const missing = [...activeIds].filter(id => !found.has(id));
+      const summaries = await Promise.all(missing.map(id => call("conversation_summary", { ids: [id] })));
+      if (!isCurrent()) return;
+      missing.forEach((id, index) => {
+        const raw = summaries[index];
+        if (raw) found.set(id, channel(raw)); else forget(id);
+      });
+      for (const id of rows.ids()) if (!found.has(Number(id))) rows.delete(id);
+      for (const c of found.values()) persist(c);
+      next = nextCursor; nextPage.disabled = next === null; backPage.disabled = history.length === 1; pages.hidden = nextPage.disabled && backPage.disabled;
+      status.textContent = ""; list.setAttribute("aria-label", links.get(sectionAtStart)!.textContent!); renderList(entries);
+      const updates: Promise<void>[] = [];
+      if (selected && found.has(selected.id)) {
+        const c = found.get(selected.id)!;
+        if (c.latest !== selected.latest && chatter) updates.push(chatter.refresh());
+        selected = c; header(c);
       }
-      if (c.owner) {
-        const user = document.createElement("input");
-        user.type = "number";
-        user.min = "1";
-        user.setAttribute("aria-label", "User ID to invite");
-        controls.append(
-          user,
-          button("Invite", () => {
-            if (user.valueAsNumber > 0)
-              void act("conversation_invite", { ids: [c.id], user_id: user.valueAsNumber });
-          }),
-        );
+      for (const [id, win] of windows) {
+        const c = found.get(id);
+        if (c && c.latest !== win.latest) { win.latest = c.latest; updates.push(win.chatter.refresh()); }
       }
-      controls.append(button("Leave conversation", () => void act("conversation_leave", { ids: [c.id] })));
-    }
-    prev.disabled = trail.length === 1;
-    next.disabled = rows.ids().length < 50;
+      await Promise.all(updates);
+    } catch (e) { if (isCurrent()) fail(e); }
   }
-  function watchPage() {
-    stopSocket?.();
-    if (typeof WebSocket === "function")
-      stopSocket = watchChatterThread(
-        { model: "discuss.channel.member", id: after + 1 },
-        policy,
-        refresh,
-        error,
-      );
-    void refresh();
-  }
-  function close() {
-    open = false;
-    version++;
-    stopSocket?.();
-    stopSocket = undefined;
-    clear();
-    panel.hidden = true;
-    trigger.setAttribute("aria-expanded", "false");
-  }
-  const trigger = button("Discuss", () => {
-    if (open) {
-      close();
-      return;
-    }
-    open = true;
-    panel.hidden = false;
-    trigger.setAttribute("aria-expanded", "true");
-    watchPage();
-  });
-  trigger.setAttribute("aria-expanded", "false");
-  const prev = button("Previous", () => {
-    if (trail.length > 1) {
-      trail.pop();
-      after = trail.at(-1)!;
-      version++;
-      watchPage();
-    }
-  });
-  const next = button("Next", () => {
-    const last = all().at(-1);
-    if (last) {
-      after = last.id;
-      trail.push(after);
-      version++;
-      watchPage();
-    }
-  });
-  const name = document.createElement("input");
-  name.setAttribute("aria-label", "Conversation name");
-  name.maxLength = 120;
-  toolbar.append(
-    button("Notifications", () => {
-      inboxOpen = !inboxOpen;
-      version++;
-      void refresh();
-    }),
-    name,
-    button("Create conversation", () => {
-      if (name.value.trim()) {
-        void act("conversation_create", { name: name.value.trim() });
-        name.value = "";
-      }
-    }),
-    button("Close", close),
-  );
-  panel.append(title, toolbar, inbox, list, prev, next, tabs, current, controls, host, status);
-  node.append(trigger, panel, dock);
+  head.hidden = true; pages.hidden = true;
   return {
     node,
-    dispose() {
-      dead = true;
-      close();
-      clear(true);
-      bus?.close();
-      node.remove();
+    openWorkspace(host) {
+      workspace = host; host.append(panel); panel.classList.add("discuss-workspace"); expand.hidden = true; close.hidden = true; show();
+      return () => {
+        if (workspace !== host || dead) return;
+        workspace = null; panel.classList.remove("discuss-workspace"); expand.hidden = false; close.hidden = false;
+        node.insertBefore(panel, dock); closeQuick();
+      };
     },
+    dispose() {
+      if (dead) return;
+      dead = true; clearTimeout(searchTimer); syncWatch(); bus?.close(); clearPrivate(); panel.remove(); node.remove();
+    }
   };
 }

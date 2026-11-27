@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="discuss_workspace_action" model="ir.actions.client">
+    <field name="name">Discuss</field>
+    <field name="tag">mail.discuss</field>
+  </record>
+  <menuitem id="discuss_workspace_menu" name="Discuss" action="discuss_workspace_action"
+            groups="base.group_user" web_icon="lucide:messages-square" sequence="12"/>
+</erp>

@@ -8,6 +8,7 @@ use erp_sdk::{Context, Operation, SearchOptions};
 
 pub(crate) const MAX_MEMBERS: usize = 100;
 const PAGE: u64 = 50;
+mod workspace;
 
 #[model(name = "discuss.channel", description = "Conversation", inherit = [MailThread], addon = "mail",
     company_access = direct(field = "company_id", branch = "exact", empty = "deny"))]
@@ -15,7 +16,7 @@ pub struct DiscussChannel {
     #[field(char, required = true)]
     pub name: Option<Arc<str>>,
     /// Addons extend this selection and override conversation methods on the same channel model.
-    #[field(selection, selection = [("group", "Group")], default = "group", required = true)]
+    #[field(selection, selection = [("group", "Group"),("direct","Direct message")], default = "group", required = true)]
     pub channel_type: Option<Arc<str>>,
     #[field(
         many2one,
@@ -31,6 +32,32 @@ pub struct DiscussChannel {
         inverse_name = "channel_id"
     )]
     pub member_ids: Vec<RecId>,
+}
+
+/// Private rendezvous for concurrent DM creation. Only the invitation workflow uses this model.
+#[model(name = "discuss.channel.pair", description = "Direct conversation pair", addon = "mail",
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    keys = [key(name = "_direct_pair", fields = ["company_id", "first_user_id", "second_user_id"],
+        message = "A direct conversation already exists for these participants.")])]
+pub struct DiscussChannelPair {
+    #[field(
+        many2one,
+        comodel = "res.company",
+        required = true,
+        ondelete = "cascade"
+    )]
+    pub company_id: Option<RecId>,
+    #[field(many2one, comodel = "res.users", required = true, ondelete = "cascade")]
+    pub first_user_id: Option<RecId>,
+    #[field(many2one, comodel = "res.users", required = true, ondelete = "cascade")]
+    pub second_user_id: Option<RecId>,
+    #[field(
+        many2one,
+        comodel = "discuss.channel",
+        ondelete = "cascade",
+        index = true
+    )]
+    pub channel_id: Option<RecId>,
 }
 
 #[model(name = "discuss.channel.member", description = "Conversation Member", addon = "mail",
@@ -175,7 +202,13 @@ impl DiscussChannel {
     ) -> Result<Value> {
         let channel = channel_id(this)?;
         this.as_records().check_access(tx, Operation::Read).await?;
-        let rows = tx.query("SELECT user_id::bigint, COALESCE(seen_message_id,0)::bigint FROM discuss_channel_member WHERE channel_id=$1::bigint ORDER BY id LIMIT 100", &[&channel]).await?;
+        let env = this.env();
+        let rows = tx.query(
+            "SELECT m.user_id::bigint, COALESCE(m.seen_message_id,0)::bigint FROM discuss_channel_member m
+             JOIN discuss_channel c ON c.id=m.channel_id JOIN discuss_channel_member me ON me.channel_id=c.id
+             WHERE c.id=$1::bigint AND me.user_id=$2::bigint AND c.company_id=$3::bigint ORDER BY m.id LIMIT 100",
+            &[&channel, &env.uid(), &env.company_id()?],
+        ).await?;
         let mut receipts = Vec::new();
         for row in rows {
             let user: i64 = row
@@ -199,6 +232,11 @@ impl DiscussChannel {
     ) -> Result<i64> {
         let env = this.env();
         internal(tx, env).await?;
+        if channel_type.as_deref() == Some("direct") {
+            return Err(Error::validation(
+                "Select a person to start a direct message.",
+            ));
+        }
         let name = name.trim();
         if name.is_empty() || name.len() > 120 {
             return Err(Error::validation(
@@ -242,10 +280,10 @@ impl DiscussChannel {
         let env = this.env();
         internal(tx, env).await?;
         tx.flush().await?;
-        let rows = tx.query("UPDATE discuss_channel c SET name=c.name FROM discuss_channel_member m WHERE m.channel_id=c.id AND c.id=$1::bigint AND m.user_id=$2::bigint AND m.is_owner RETURNING c.company_id::bigint", &[&channel, &env.uid()]).await?;
+        let rows = tx.query("UPDATE discuss_channel c SET name=c.name FROM discuss_channel_member m WHERE m.channel_id=c.id AND c.id=$1::bigint AND m.user_id=$2::bigint AND m.is_owner AND c.channel_type IS DISTINCT FROM 'direct' RETURNING c.company_id::bigint", &[&channel, &env.uid()]).await?;
         let Some(row) = rows.first() else {
             return Err(Error::access(
-                "Only a current conversation owner can invite members.",
+                "Only a current group conversation owner can invite members.",
             ));
         };
         let company: i64 = row
@@ -291,11 +329,15 @@ impl DiscussChannel {
         let uid = this.env().uid();
         tx.flush().await?;
         // Serialize owner succession with invitations and other departures.
-        tx.query(
-            "UPDATE discuss_channel SET name=name WHERE id=$1::bigint RETURNING id",
+        let group=tx.query(
+            "UPDATE discuss_channel SET name=name WHERE id=$1::bigint AND channel_type IS DISTINCT FROM 'direct' RETURNING id",
             &[&id],
-        )
-        .await?;
+        ).await?;
+        if group.is_empty() {
+            return Err(Error::validation(
+                "Direct conversations have a fixed pair of participants.",
+            ));
+        }
         let deleted = tx.query("DELETE FROM discuss_channel_member WHERE channel_id=$1::bigint AND user_id=$2::bigint RETURNING is_owner", &[&id,&uid]).await?;
         let member = deleted
             .first()
@@ -364,8 +406,18 @@ async fn checked_message(
         .check_access(tx, Operation::Read)
         .await?;
     tx.flush().await?;
-    if tx.query("SELECT 1 FROM mail_message WHERE id=$1::bigint AND model='discuss.channel' AND res_id=$2::bigint", &[&message_id,&channel]).await?.is_empty() {
-        return Err(Error::validation("Select a message in this conversation."));
+    let env = this.env();
+    let messages = tx.query(
+        "SELECT 1 FROM mail_message msg JOIN discuss_channel c ON msg.model='discuss.channel' AND msg.res_id=c.id
+         JOIN discuss_channel_member m ON m.channel_id=c.id AND m.user_id=$3::bigint
+         WHERE msg.id=$1::bigint AND c.id=$2::bigint AND c.company_id=$4::bigint AND msg.message_type<>'user_notification'
+         FOR KEY SHARE OF m",
+        &[&message_id, &channel, &env.uid(), &env.company_id()?],
+    ).await?;
+    if messages.is_empty() {
+        return Err(Error::validation(
+            "Select a visible message in your current conversation.",
+        ));
     }
     Ok(channel)
 }
@@ -410,6 +462,19 @@ async fn snapshot(
 /// A payload-free websocket rechecks the authenticated user’s page in a fresh transaction.
 pub(crate) async fn change_window(tx: &mut Transaction, page: i64) -> Result<Vec<i64>> {
     let env = tx.env();
+    // The workspace uses an explicit sentinel to track its recent-first list.
+    if page == 9_007_199_254_740_991 {
+        let mut window = workspace::recent_window(tx, &env).await?;
+        window.push(-1);
+        for notice in visible_notifications(tx, &env).await? {
+            window.push(
+                notice["id"]
+                    .as_i64()
+                    .ok_or_else(|| Error::invariant("Invalid notification id."))?,
+            );
+        }
+        return Ok(window);
+    }
     let mut window = Vec::new();
     for row in snapshot(
         tx,
@@ -448,34 +513,65 @@ async fn visible_notifications(
     tx: &mut Transaction,
     env: &Env,
 ) -> Result<Vec<erp_sdk::serde_json::Value>> {
-    let rows = tx.query("SELECT n.id::bigint,n.message_id::bigint,n.transport::text FROM mail_notification n JOIN res_users u ON u.partner_id=n.partner_id WHERE u.id=$1::bigint AND n.transport IN ('inbox','push') AND n.state='delivered' ORDER BY n.id DESC LIMIT 50", &[&env.uid()]).await?;
-    let mut notices = Vec::new();
-    let mut messages = Vec::new();
+    let rows = tx.query(
+        "SELECT n.id::bigint,n.message_id::bigint,n.transport::text,msg.model::text,msg.res_id::bigint,left(msg.subject::text,160)
+         FROM mail_notification n JOIN res_users u ON u.partner_id=n.partner_id JOIN mail_message msg ON msg.id=n.message_id
+         WHERE u.id=$1::bigint AND n.transport IN ('inbox','push') AND n.state='delivered'
+           AND (msg.model IS DISTINCT FROM 'discuss.channel' OR EXISTS (
+               SELECT FROM discuss_channel c JOIN discuss_channel_member cm ON cm.channel_id=c.id
+               WHERE c.id=msg.res_id AND c.company_id=$2::bigint AND cm.user_id=u.id))
+         ORDER BY n.id DESC LIMIT 50",
+        &[&env.uid(), &env.company_id()?],
+    ).await?;
+    let bad = || Error::invariant("Invalid delivery notification.");
+    let mut notices = Vec::with_capacity(rows.len());
     for row in rows {
-        let message: i64 = row
-            .try_get(1)
-            .map_err(|_| Error::invariant("Invalid delivery message."))?;
-        let id: i64 = row
-            .try_get(0)
-            .map_err(|_| Error::invariant("Invalid notification id."))?;
-        let transport: String = row
-            .try_get(2)
-            .map_err(|_| Error::invariant("Invalid delivery transport."))?;
-        notices.push((id, message, transport));
-        messages.push(message);
+        notices.push((
+            row.try_get::<_, i64>(0).map_err(|_| bad())?,
+            row.try_get::<_, i64>(1).map_err(|_| bad())?,
+            row.try_get::<_, String>(2).map_err(|_| bad())?,
+            row.try_get::<_, Option<String>>(3).map_err(|_| bad())?,
+            row.try_get::<_, Option<i64>>(4).map_err(|_| bad())?,
+            row.try_get::<_, Option<String>>(5).map_err(|_| bad())?,
+        ));
     }
-    if messages.is_empty() {
-        return Ok(vec![]);
+    let messages = workspace::readable(
+        tx,
+        env,
+        "mail.message",
+        notices.iter().map(|r| r.1).collect(),
+    )
+    .await?;
+    notices.retain(|v| messages.contains(&v.1));
+    let mut models = std::collections::BTreeMap::<String, Vec<i64>>::new();
+    for (_, _, _, model, record, _) in &notices {
+        if let (Some(model), Some(record)) = (model, record) {
+            models.entry(model.clone()).or_default().push(*record);
+        }
     }
-    let domain = Domain::condition("id", Operator::In, messages)?;
-    let visible = env
-        .records("mail.message")?
-        .search(tx, &domain)
-        .await?
-        .ids();
+    let mut readable_models = std::collections::BTreeMap::new();
+    for (model, ids) in models {
+        let visible = workspace::readable(tx, env, &model, ids).await?;
+        readable_models.insert(model, visible);
+    }
+    let see_subject = !notices.is_empty()
+        && tx
+            .has_field_access(env, "mail.message", "subject", erp_sdk::FieldOp::Read)
+            .await?;
     Ok(notices
         .into_iter()
-        .filter(|(_, message, _)| visible.contains(message))
-        .map(|(id, message, transport)| json!({"id":id,"message":message,"transport":transport}))
+        .map(|(id, message, transport, model, record, subject)| {
+            let available = model
+                .as_ref()
+                .and_then(|name| readable_models.get(name))
+                .is_some_and(|ids| record.is_some_and(|id| ids.contains(&id)));
+            let channel =
+                record.filter(|_| available && model.as_deref() == Some("discuss.channel"));
+            json!({
+                "id":id, "message":message, "transport":transport, "channel_id":channel,
+                "model":model.filter(|_| available), "res_id":record.filter(|_| available),
+                "subject":subject.filter(|_| see_subject),
+            })
+        })
         .collect())
 }

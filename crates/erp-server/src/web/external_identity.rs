@@ -101,6 +101,8 @@ impl WebApp {
             &[
                 "state",
                 "code",
+                // OIDC Session Management providers can include this alongside the authorization code.
+                "session_state",
                 "iss",
                 "error",
                 "error_description",
@@ -188,6 +190,33 @@ impl WebApp {
             .await
             .map_err(auth_error)?;
         redirect(routes::LOGIN)
+    }
+
+    pub(super) async fn external_provider_status(
+        &self,
+        headers: &HeaderMap,
+        auth: &Auth,
+    ) -> HttpResult<Response> {
+        let session = self.session(headers)?.ok_or_else(|| {
+            response(StatusCode::UNAUTHORIZED, "Sign in to view provider status.")
+        })?;
+        let provider = self.config.external_identity();
+        let (enabled, neutralized) = auth
+            .external_admin_status(&session, provider.map(ExternalProvider::issuer))
+            .await
+            .map_err(auth_error)?;
+        let data = match provider {
+            None => serde_json::json!({"configured":false, "neutralized":neutralized}),
+            Some(p) => serde_json::json!({
+                "configured":true, "enabled":enabled, "neutralized":neutralized, "issuer":p.issuer(),
+                "label":p.label(), "callback_url":self.external_callback_url(), "keys":p.key_diagnostics().await
+            }),
+        };
+        let mut result = json_response(StatusCode::OK, &data)?;
+        result
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        Ok(result)
     }
 
     pub(super) async fn external_provider_policy(

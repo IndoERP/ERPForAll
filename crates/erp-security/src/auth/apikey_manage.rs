@@ -178,6 +178,41 @@ pub async fn revoke(tx: &mut Transaction, key: &str) -> Result<bool> {
     gate(tx).await?;
     let hasher = hasher(tx).await?;
     let (id, mcp) = key_id(tx, &hasher, key, None, REVOKE_INVALID).await?;
+    delete_audited(tx, id, mcp).await
+}
+
+/// Self-service operates only under a resolved, non-elevated interactive user session. Ownership
+/// comes from that session even when the connection owner also administers the server.
+pub fn require_connection_owner(tx: &Transaction) -> Result<()> {
+    let env = tx.env();
+    let caller = env.principal();
+    if caller.kind() != PrincipalKind::User
+        || !caller.resolution().is_resolved()
+        || caller.scope().is_some()
+        || caller.actor().is_some()
+        || env.su()
+    {
+        return Err(Error::access(
+            "Manage MCP connections from your signed-in user session.",
+        ));
+    }
+    Ok(())
+}
+
+/// Revoke one owned MCP bearer, including expired credentials. A missing, foreign, legacy or
+/// other-audience id yields the same refusal. Owners can still revoke after new issuance is disabled.
+pub async fn revoke_mcp_connection(tx: &mut Transaction, id: i64) -> Result<bool> {
+    require_connection_owner(tx)?;
+    let actor = tx.env().user_id().get();
+    let rows = tx.query("SELECT id FROM res_users_apikeys WHERE id=$1 AND user_id=$2 AND kind='agent' AND scope='mcp'
+         AND capabilities='none' AND digest IS NOT NULL AND legacy_hash IS NULL FOR UPDATE", &[&id,&actor]).await?;
+    if rows.is_empty() {
+        return Err(Error::access("MCP connection is unavailable."));
+    }
+    delete_audited(tx, id, true).await
+}
+
+async fn delete_audited(tx: &mut Transaction, id: i64, mcp: bool) -> Result<bool> {
     let deleted = tx
         .execute("DELETE FROM res_users_apikeys WHERE id=$1", &[&id])
         .await?;

@@ -324,6 +324,7 @@ async fn preferences_end_to_end() {
         ("phone", "phone"),
         ("lang", "web.preference_choice"),
         ("color_scheme", "radio"),
+        ("login", "web.mcp_connections"),
         ("tz", "web.preference_choice"),
     ]
     .into_iter()
@@ -378,12 +379,15 @@ async fn preferences_end_to_end() {
     assert_eq!(field_at(title_kids[2])["field"]["name"], "phone");
     assert_eq!(field_at(title_kids[2])["widget"], "phone");
     let notebook = kids(sheet)[1];
-    assert_eq!(kinds(notebook), ["page", "page"]);
+    assert_eq!(kinds(notebook), ["page", "page", "page"]);
     let pages = kids(notebook);
     assert_eq!(arena[pages[0] as usize]["name"], "preferences_page");
     assert_eq!(arena[pages[0] as usize]["label"], "Preferences");
     assert_eq!(arena[pages[1] as usize]["name"], "calendar");
     assert_eq!(arena[pages[1] as usize]["label"], "Calendar");
+    assert_eq!(arena[pages[2] as usize]["label"], "Account Security");
+    assert_eq!(kinds(pages[2]), ["field"]);
+    assert_eq!(field_at(kids(pages[2])[0])["widget"], "web.mcp_connections");
     // Preferences page: an outer group with a left group (language) and a right group (colour scheme)
     assert_eq!(kinds(pages[0]), ["group"]);
     let outer = kids(pages[0])[0];

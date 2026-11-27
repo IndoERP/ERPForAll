@@ -172,10 +172,12 @@
           <field name="email_to" placeholder="customer@example.com"/>
           <field name="subject"/>
           <field name="is_proforma"/>
+          <field name="attachment_ids" widget="many2many_tags" domain="[('res_model', '=', 'sale.order'), ('res_id', '=', order_id), ('res_field', '=', False)]"/>
           <field name="body"/>
           <field name="company_id" invisible="1"/>
         </group>
         <footer>
+          <button name="action_preview_pdf" type="object" string="Preview PDF"/>
           <button name="action_send_mail" type="object" string="Send" class="btn-primary"/>
           <button special="cancel" string="Discard"/>
         </footer>

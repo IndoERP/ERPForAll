@@ -58,6 +58,76 @@ pub struct IssueRequest {
     subject: UserId,
     name: Box<str>,
     expiry: Expiry,
+    access: McpAccess,
+}
+/// Optional restrictions on an MCP connection. Absent allowlists permit every otherwise available
+/// model or method. A supplied list must be nonempty and contain exact identifiers.
+#[derive(Default)]
+pub struct McpAccess {
+    read_only: bool,
+    models: Option<Vec<String>>,
+    methods: Option<Vec<String>>,
+}
+
+impl McpAccess {
+    /// Validate and canonicalize the caller's requested bounds.
+    pub fn new(
+        read_only: bool,
+        models: Option<Vec<String>>,
+        methods: Option<Vec<String>>,
+    ) -> Result<Self> {
+        fn names(mut values: Vec<String>, model: bool) -> Result<Vec<String>> {
+            let valid = |part: &str| {
+                part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            };
+            if values.is_empty()
+                || values.len() > 64
+                || !values.iter().all(|v| {
+                    v.len() <= 128
+                        && if model {
+                            v.split('.').all(valid)
+                        } else {
+                            valid(v)
+                        }
+                })
+            {
+                return Err(Error::validation(
+                    "Allowlist requires 1 to 64 exact model or method names of at most 128 bytes.",
+                ));
+            }
+            values.sort_unstable();
+            if values.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(Error::validation("Allowlist entries must be distinct."));
+            }
+            Ok(values)
+        }
+        Ok(Self {
+            read_only,
+            models: models.map(|v| names(v, true)).transpose()?,
+            methods: methods.map(|v| names(v, false)).transpose()?,
+        })
+    }
+    pub(super) fn into_authority(
+        self,
+    ) -> Result<(erp_orm::ModelAllow, erp_orm::MethodAllow, bool)> {
+        let invalid = |_| Error::db("Invalid stored MCP authority");
+        let models = self
+            .models
+            .map(erp_orm::ModelAllow::named)
+            .transpose()
+            .map_err(invalid)?
+            .unwrap_or(erp_orm::ModelAllow::All);
+        let methods = self
+            .methods
+            .map(erp_orm::MethodAllow::named)
+            .transpose()
+            .map_err(invalid)?
+            .unwrap_or(erp_orm::MethodAllow::All);
+        Ok((models, methods, self.read_only))
+    }
 }
 /// When a requested key expires.
 #[derive(Clone, Copy)]
@@ -96,6 +166,17 @@ impl IssueRequest {
         Self::validated(subject, name, kind, scope, Expiry::PolicyMaximum)
     }
 
+    /// Apply restrictions to an MCP-only credential.
+    pub fn with_mcp_access(mut self, access: McpAccess) -> Result<Self> {
+        if self.scope != KeyScope::Mcp {
+            return Err(Error::validation(
+                "MCP restrictions require an MCP connection.",
+            ));
+        }
+        self.access = access;
+        Ok(self)
+    }
+
     fn validated(
         subject: UserId,
         name: &str,
@@ -130,6 +211,7 @@ impl IssueRequest {
             subject,
             name: name.into(),
             expiry,
+            access: McpAccess::default(),
         })
     }
 }
@@ -338,6 +420,13 @@ pub async fn issue(
                 &prefix.as_ref(),
                 &expires,
                 &(request.scope == KeyScope::Mcp),
+                &request.access.read_only,
+                &request.access.models.as_ref().map(|v| serde_json::json!(v)),
+                &request
+                    .access
+                    .methods
+                    .as_ref()
+                    .map(|v| serde_json::json!(v)),
             ],
         )
         .await?;
@@ -354,13 +443,11 @@ pub async fn issue(
     let read_only: bool = column(row, 5)?;
     let capabilities: String = column(row, 6)?;
     let stored_expiry: Option<DateTime> = column(row, 7)?;
-    let no_models: bool = column(row, 8)?;
-    let no_methods: bool = column(row, 9)?;
-    if !(no_models && no_methods) {
-        return Err(Error::programming(
-            "a later release issued a key with allowlists; user keys have none",
-        ));
-    }
+    let count = |index| -> Result<Option<u16>> {
+        column::<Option<i32>>(row, index)?
+            .map(|v| u16::try_from(v).map_err(|_| Error::db("Invalid stored API key scope length")))
+            .transpose()
+    };
     // built from the stored row, never from the request.
     // Ids, closed enums, flags and the expiry only: no secret, digest, prefix or name.
     tx.audit_auth(AuthEvent::ApiKeyIssued(ApiKeyIssued::new(
@@ -379,8 +466,8 @@ pub async fn issue(
         capabilities == "subject",
         read_only,
         stored_expiry.map(DateTime::micros),
-        None,
-        None,
+        count(8)?,
+        count(9)?,
     )))?;
     Ok(IssuedApiKey {
         id,
@@ -469,10 +556,10 @@ const INSERT_SQL: &str = "INSERT INTO res_users_apikeys
 (name,user_id,created_by,kind,scope,digest,digest_kid,prefix,models,methods,
  read_only,capabilities,expiration_date,create_date)
 VALUES($1,$2,$3,CASE WHEN $8::bool THEN 'agent' ELSE 'user' END,
-       CASE WHEN $8 THEN 'mcp' ELSE 'rpc' END,$4,$5,$6,NULL,NULL,false,
+       CASE WHEN $8 THEN 'mcp' ELSE 'rpc' END,$4,$5,$6,$10::jsonb,$11::jsonb,$9::bool,
        CASE WHEN $8 THEN 'none' ELSE 'subject' END,
        $7::timestamp,now() AT TIME ZONE 'utc') RETURNING id::int8, user_id::int8, created_by::int8, kind, scope, read_only,
- capabilities, expiration_date, models IS NULL, methods IS NULL";
+ capabilities, expiration_date, jsonb_array_length(models), jsonb_array_length(methods)";
 
 pub(super) const POLICY_SQL: &str = r#"
 WITH RECURSIVE effective(uid,gid) AS (

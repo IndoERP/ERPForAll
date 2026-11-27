@@ -181,6 +181,8 @@ pub(crate) struct Shared {
     pub(crate) precommit_hooks: Vec<crate::tracking::PrecommitHook>,
     /// Selection ondelete callbacks.
     pub(crate) selection_callbacks: Vec<crate::version::SelectionCallback>,
+    /// Ordinary runner loops currently alive on this serving registry.
+    pub(crate) ordinary_job_runners: AtomicU64,
     /// The job queue's settings.
     pub(crate) job_settings: Arc<crate::jobs::JobSettings>,
     pub(crate) job_settings_source: Option<Arc<dyn crate::jobs::JobSettingsSource>>,
@@ -1090,6 +1092,7 @@ impl OrmBuilder {
                     required_core_tables: self.required_core_tables,
                     required_job_kinds: self.required_job_kinds,
                 },
+                ordinary_job_runners: AtomicU64::new(0),
                 job_settings,
                 job_settings_compatibility: self
                     .job_settings_source
@@ -3695,17 +3698,17 @@ impl Transaction {
 
     /// The transaction's environment with `principal` (the resolver's at the start).
     pub(crate) fn replace_principal(&mut self, principal: Principal) {
+        self.replace_principal_in_context(principal, self.env.context().clone());
+    }
+
+    pub(crate) fn replace_principal_in_context(&mut self, principal: Principal, context: Context) {
         let identity = self.env.operation_identity().cloned().map(Arc::new);
         let request = self.env.request().cloned().map(Arc::new);
-        self.env = Env::new(
-            Arc::clone(&self.shared.registry),
-            principal,
-            self.env.context().clone(),
-        )
-        .with_lineage(Arc::clone(&self.shared.database.lineage))
-        .with_operation_identity(identity)
-        .with_request(request)
-        .with_generation_attachments(Arc::clone(&self.shared.generation_attachments));
+        self.env = Env::new(Arc::clone(&self.shared.registry), principal, context)
+            .with_lineage(Arc::clone(&self.shared.database.lineage))
+            .with_operation_identity(identity)
+            .with_request(request)
+            .with_generation_attachments(Arc::clone(&self.shared.generation_attachments));
     }
 
     /// After a rollback to a savepoint (or the end of an isolated scope): a private snapshot or

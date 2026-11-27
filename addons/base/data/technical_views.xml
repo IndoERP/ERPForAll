@@ -809,6 +809,12 @@
   </record>
   <menuitem id="technical_sessions_menu" name="Sessions and Devices" parent="technical_security_menu" action="technical_sessions_action" groups="base.group_system" sequence="40"/>
 
+  <record id="identity_provider_action" model="ir.actions.client">
+    <field name="name">Single Sign-On</field>
+    <field name="tag">base.identity_provider</field>
+  </record>
+  <menuitem id="identity_provider_menu" name="Single Sign-On" parent="technical_security_menu" action="identity_provider_action" groups="base.group_system" sequence="45"/>
+
   <!-- Automation Category & Menu -->
   <menuitem id="technical_automation_menu" name="Automation" parent="technical_menu" sequence="55"/>
 

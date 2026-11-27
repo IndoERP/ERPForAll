@@ -15,6 +15,7 @@ import type { EditorEnvironment } from "./editor-types.js";
 // Web-owned named widgets register with the builtins, so every form that loads fields sees them.
 import "./menu-icon-picker.js";
 import "./preference-choice.js";
+import "./mcp-connections.js";
 import "./dashboard-card.js";
 import { monetaryControl, type CurrencyDisplayCache } from "./field-currency.js";
 import { relationQuery } from "./field-relations.js";

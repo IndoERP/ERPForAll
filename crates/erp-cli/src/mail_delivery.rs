@@ -38,6 +38,7 @@ pub(crate) async fn handoff(owner: &Orm, maildir: &Path) -> Result<()> {
         JOIN discuss_channel c ON c.id=cm.channel_id JOIN res_company_users_rel co ON co.user_id=u.id AND co.cid=c.company_id
         WHERE cm.channel_id=msg.res_id AND u.partner_id=p.id AND u.active AND NOT u.share))),msg.message_id::text, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'Dy, DD Mon YYYY HH24:MI:SS') || ' +0000'
         FROM mail_notification n JOIN res_partner p ON p.id=n.partner_id JOIN mail_message msg ON msg.id=n.message_id WHERE n.transport='email' AND n.state='pending'
+        AND NOT EXISTS (SELECT 1 FROM ir_config_parameter WHERE key='database.neutralized' AND value='true')
         ORDER BY n.id LIMIT 16 FOR UPDATE OF n SKIP LOCKED", &[]).await?;
     for row in rows {
         let invalid = |_| Error::invariant("Invalid mail delivery row.");
@@ -167,6 +168,62 @@ mod tests {
         assert!(!valid_address(
             "first@example.invalid\r\nBcc: other@example.invalid"
         ));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn legacy_pending_receipts_wait_while_a_copy_is_neutralized()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let h = erp_testkit::Harness::builder([&erp_addon_base::ADDON, &erp_addon_mail::ADDON])
+            .build()
+            .await?;
+        let mut tx = h.begin().await?;
+        tx.execute(
+            "INSERT INTO ir_config_parameter(key,value) VALUES ('database.neutralized','true')",
+            &[],
+        )
+        .await?;
+        let rows=tx.query(
+            "WITH partner AS (
+                 INSERT INTO res_partner(name,email,active) VALUES ('Legacy recipient','recipient@example.test',true) RETURNING id
+             ), msg AS (
+                 INSERT INTO mail_message(model,res_id,message_type,message_id,is_internal)
+                 VALUES ('res.partner',1,'comment','<legacy@example.test>',false) RETURNING id
+             )
+             INSERT INTO mail_notification(message_id,partner_id,transport,state)
+             SELECT msg.id,partner.id,'email','pending' FROM msg,partner RETURNING id::bigint",&[]).await?;
+        let id: i64 = rows[0].try_get(0)?;
+        tx.commit().await?;
+        let directory = tempfile::tempdir()?;
+        handoff(h.orm(), directory.path()).await?;
+        assert!(!directory.path().join("new").exists());
+        let mut tx = h.begin().await?;
+        assert_eq!(
+            tx.query(
+                "SELECT state::text FROM mail_notification WHERE id=$1::bigint",
+                &[&id]
+            )
+            .await?[0]
+                .try_get::<_, String>(0)?,
+            "pending"
+        );
+        tx.execute(
+            "DELETE FROM ir_config_parameter WHERE key='database.neutralized'",
+            &[],
+        )
+        .await?;
+        tx.commit().await?;
+        handoff(h.orm(), directory.path()).await?;
+        let mut tx = h.begin().await?;
+        assert_eq!(
+            tx.query(
+                "SELECT state::text FROM mail_notification WHERE id=$1::bigint",
+                &[&id]
+            )
+            .await?[0]
+                .try_get::<_, String>(0)?,
+            "delivered"
+        );
+        assert_eq!(directory.path().join("new").read_dir()?.count(), 1);
         Ok(())
     }
 }

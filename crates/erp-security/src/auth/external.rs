@@ -15,6 +15,10 @@ use subtle::ConstantTimeEq;
 use url::Url;
 use zeroize::Zeroizing;
 
+mod keys;
+use keys::KeyStore;
+pub use keys::{KeyDiagnostics, SigningKeys};
+
 const MAX_RESPONSE: usize = 65_536;
 const MAX_TOKEN: usize = 16_384;
 
@@ -54,7 +58,7 @@ pub struct ExternalProvider {
     authorization: Url,
     token: Url,
     secret: Zeroizing<String>,
-    keys: Vec<SigningKey>,
+    keys: KeyStore,
     http: reqwest::Client,
     fingerprint: [u8; 32],
 }
@@ -69,7 +73,7 @@ impl fmt::Debug for ExternalProvider {
 
 #[derive(Deserialize)]
 struct KeySet {
-    keys: Vec<JsonKey>,
+    keys: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +153,81 @@ fn valid_text(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control)
 }
 
+fn parse_keys(jwks: &[u8]) -> Result<Vec<SigningKey>> {
+    if jwks.len() > MAX_RESPONSE {
+        return Err(invalid_config());
+    }
+    let KeySet { keys } = serde_json::from_slice(jwks).map_err(|_| invalid_config())?;
+    if keys.is_empty() || keys.len() > 16 {
+        return Err(invalid_config());
+    }
+    let decode = |s: &str| URL_SAFE_NO_PAD.decode(s).map_err(|_| invalid_config());
+    let mut selected: Vec<SigningKey> = Vec::with_capacity(keys.len());
+    for entry in keys {
+        // Issuers commonly publish encryption keys alongside signing keys.
+        if entry.get("use").is_some_and(|v| v.as_str() != Some("sig"))
+            || entry
+                .get("alg")
+                .is_some_and(|v| !matches!(v.as_str(), Some("RS256" | "EdDSA")))
+            || !matches!(
+                entry.get("kty").and_then(|v| v.as_str()),
+                Some("RSA" | "OKP")
+            )
+            || entry.get("kty").and_then(|v| v.as_str()) == Some("OKP")
+                && entry.get("crv").and_then(|v| v.as_str()) != Some("Ed25519")
+            || entry.get("key_ops").is_some_and(|ops| {
+                !ops.as_array()
+                    .is_some_and(|items| items.iter().any(|v| v.as_str() == Some("verify")))
+            })
+        {
+            continue;
+        }
+        let key: JsonKey = serde_json::from_value(entry).map_err(|_| invalid_config())?;
+        let key = match key {
+            JsonKey::Rsa {
+                kid,
+                n,
+                e,
+                alg,
+                purpose,
+            } if alg.as_deref().is_none_or(|s| s == "RS256")
+                && purpose.as_deref().is_none_or(|s| s == "sig") =>
+            {
+                let (n, e) = (decode(&n)?, decode(&e)?);
+                if !(256..=1024).contains(&n.len()) || !(1..=8).contains(&e.len()) {
+                    return Err(invalid_config());
+                }
+                SigningKey::Rsa(kid, RsaPublicKeyComponents { n, e })
+            }
+            JsonKey::Ed {
+                kid,
+                crv,
+                x,
+                alg,
+                purpose,
+            } if crv == "Ed25519"
+                && alg.as_deref().is_none_or(|s| s == "EdDSA")
+                && purpose.as_deref().is_none_or(|s| s == "sig") =>
+            {
+                let x = decode(&x)?;
+                if x.len() != 32 {
+                    return Err(invalid_config());
+                }
+                SigningKey::Ed(kid, x)
+            }
+            _ => return Err(invalid_config()),
+        };
+        if !valid_text(key.id(), 128) || selected.iter().any(|k| k.id() == key.id()) {
+            return Err(invalid_config());
+        }
+        selected.push(key);
+    }
+    if selected.is_empty() {
+        return Err(invalid_config());
+    }
+    Ok(selected)
+}
+
 impl ExternalProvider {
     /// Admit bounded issuer configuration, a private client secret and public verification keys.
     /// Endpoints are fixed for the lifetime of this configuration and redirects are refused.
@@ -160,7 +239,21 @@ impl ExternalProvider {
         secret: Zeroizing<String>,
         jwks: &[u8],
     ) -> Result<Self> {
-        endpoint(&cfg.issuer)?;
+        Self::with_signing_keys(cfg, secret, SigningKeys::File(jwks), None)
+    }
+
+    /// Configure a fixed key set or periodic verification against a pinned key endpoint.
+    /// The optional certificate bundle augments the system's trusted TLS roots.
+    ///
+    /// # Errors
+    /// Returns a validation error for invalid key sources, issuer policy or CA bundles.
+    pub fn with_signing_keys(
+        cfg: ExternalProviderConfig,
+        secret: Zeroizing<String>,
+        source: SigningKeys<'_>,
+        ca: Option<&[u8]>,
+    ) -> Result<Self> {
+        let issuer = endpoint(&cfg.issuer)?;
         let authorization = endpoint(&cfg.authorization_endpoint)?;
         let token = endpoint(&cfg.token_endpoint)?;
         // Never send secrets over HTTP except for an isolated loopback development provider.
@@ -183,65 +276,39 @@ impl ExternalProvider {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
             })
-            || jwks.len() > MAX_RESPONSE
         {
             return Err(invalid_config());
         }
-        let KeySet { keys } = serde_json::from_slice(jwks).map_err(|_| invalid_config())?;
-        if keys.is_empty() || keys.len() > 16 {
-            return Err(invalid_config());
-        }
-        let decode = |s: &str| URL_SAFE_NO_PAD.decode(s).map_err(|_| invalid_config());
-        let mut selected: Vec<SigningKey> = Vec::with_capacity(keys.len());
-        for key in keys {
-            let key = match key {
-                JsonKey::Rsa {
-                    kid,
-                    n,
-                    e,
-                    alg,
-                    purpose,
-                } if alg.as_deref().is_none_or(|s| s == "RS256")
-                    && purpose.as_deref().is_none_or(|s| s == "sig") =>
-                {
-                    let (n, e) = (decode(&n)?, decode(&e)?);
-                    if !(256..=1024).contains(&n.len()) || !(1..=8).contains(&e.len()) {
-                        return Err(invalid_config());
-                    }
-                    SigningKey::Rsa(kid, RsaPublicKeyComponents { n, e })
-                }
-                JsonKey::Ed {
-                    kid,
-                    crv,
-                    x,
-                    alg,
-                    purpose,
-                } if crv == "Ed25519"
-                    && alg.as_deref().is_none_or(|s| s == "EdDSA")
-                    && purpose.as_deref().is_none_or(|s| s == "sig") =>
-                {
-                    let x = decode(&x)?;
-                    if x.len() != 32 {
-                        return Err(invalid_config());
-                    }
-                    SigningKey::Ed(kid, x)
-                }
-                _ => return Err(invalid_config()),
-            };
-            if !valid_text(key.id(), 128) || selected.iter().any(|k| k.id() == key.id()) {
-                return Err(invalid_config());
-            }
-            selected.push(key);
-        }
-        let http = reqwest::Client::builder()
+        let keys = KeyStore::new(&source, &issuer)?;
+        let mut http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .timeout(Duration::from_secs(8))
-            .build()
-            .map_err(|_| invalid_config())?;
+            .timeout(Duration::from_secs(8));
+        if let Some(pem) = ca {
+            if pem.is_empty() || pem.len() > MAX_RESPONSE {
+                return Err(invalid_config());
+            }
+            let roots = reqwest::Certificate::from_pem_bundle(pem).map_err(|_| invalid_config())?;
+            if roots.is_empty() {
+                return Err(invalid_config());
+            }
+            http = http.tls_certs_merge(roots);
+        }
+        let http = http.build().map_err(|_| invalid_config())?;
         let settings = serde_json::to_vec(&cfg).map_err(|_| invalid_config())?;
         let mut fingerprint = Sha256::new();
-        for part in [settings.as_slice(), jwks, secret.as_bytes()] {
+        let remote;
+        let key_policy = match source {
+            SigningKeys::File(bytes) => bytes,
+            SigningKeys::Remote { url, ttl_seconds } => {
+                remote = format!("remote:{ttl_seconds}:{url}");
+                remote.as_bytes()
+            }
+        };
+        for part in [settings.as_slice(), key_policy, secret.as_bytes()]
+            .into_iter()
+            .chain(ca)
+        {
             fingerprint.update((part.len() as u64).to_be_bytes());
             fingerprint.update(part);
         }
@@ -250,10 +317,15 @@ impl ExternalProvider {
             authorization,
             token,
             secret,
-            keys: selected,
+            keys,
             http,
             fingerprint: fingerprint.finalize().into(),
         })
+    }
+
+    /// Return key cache diagnostics without initiating a network fetch.
+    pub async fn key_diagnostics(&self) -> KeyDiagnostics {
+        self.keys.diagnostics().await
     }
 
     /// Exact issuer used as the account-link namespace.
@@ -358,10 +430,10 @@ impl ExternalProvider {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| denied())?
             .as_secs();
-        self.verify(&Zeroizing::new(id_token), nonce, now)
+        self.verify(&Zeroizing::new(id_token), nonce, now).await
     }
 
-    fn verify(&self, jwt: &str, nonce: &str, now: u64) -> Result<Claims> {
+    async fn verify(&self, jwt: &str, nonce: &str, now: u64) -> Result<Claims> {
         if jwt.len() > MAX_TOKEN {
             return Err(denied());
         }
@@ -379,8 +451,11 @@ impl ExternalProvider {
         if header.typ.as_deref().is_some_and(|kind| kind != "JWT") {
             return Err(denied());
         }
-        let key = self
-            .keys
+        if !valid_text(&header.kid, 128) || !matches!(header.alg.as_str(), "EdDSA" | "RS256") {
+            return Err(denied());
+        }
+        let keys = self.keys.select(&self.http, &header.kid).await?;
+        let key = keys
             .iter()
             .find(|key| key.id() == header.kid)
             .ok_or_else(denied)?;
@@ -456,8 +531,8 @@ mod tests {
     };
     use serde_json::json;
 
-    #[test]
-    fn verifies_signature_and_issuer_audience_nonce_and_mfa() {
+    #[tokio::test]
+    async fn verifies_signature_and_issuer_audience_nonce_and_mfa() {
         let generated = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let signer = Ed25519KeyPair::from_pkcs8(generated.as_ref()).unwrap();
         let keys = json!({"keys":[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"fixture","x":URL_SAFE_NO_PAD.encode(signer.public_key().as_ref())}]});
@@ -490,6 +565,7 @@ mod tests {
         assert_eq!(
             provider
                 .verify(&signed(&claims), "issued-once", 1005)
+                .await
                 .unwrap()
                 .sub,
             "person"
@@ -497,11 +573,13 @@ mod tests {
         assert!(
             provider
                 .verify(&signed(&claims), "another-browser", 1005)
+                .await
                 .is_err()
         );
         assert!(
             provider
                 .verify(&signed(&claims), "issued-once", 1100)
+                .await
                 .is_err()
         );
         for (field, value) in [
@@ -514,6 +592,7 @@ mod tests {
             assert!(
                 provider
                     .verify(&signed(&wrong), "issued-once", 1005)
+                    .await
                     .is_err()
             );
         }
@@ -523,12 +602,14 @@ mod tests {
         assert!(
             provider
                 .verify(&signed(&array_audience), "issued-once", 1005)
+                .await
                 .is_ok()
         );
         array_audience["aud"] = json!(["fixture", "untrusted-client"]);
         assert!(
             provider
                 .verify(&signed(&array_audience), "issued-once", 1005)
+                .await
                 .is_err()
         );
         let token = signed(&claims);
@@ -538,6 +619,7 @@ mod tests {
         assert!(
             provider
                 .verify(std::str::from_utf8(&tampered).unwrap(), "issued-once", 1005)
+                .await
                 .is_err()
         );
     }

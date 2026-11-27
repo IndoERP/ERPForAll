@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="smtp_relay_list" model="ir.ui.view">
+    <field name="name">mail.smtp.relay.list</field><field name="model">mail.smtp.relay</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="company_id"/><field name="profile"/><field name="sender"/></list></field>
+  </record>
+  <record id="smtp_relay_form" model="ir.ui.view">
+    <field name="name">mail.smtp.relay.form</field><field name="model">mail.smtp.relay</field>
+    <field name="arch" type="xml"><form><header>
+      <button name="action_test_connection" type="object" string="Test connection"/>
+      <button name="action_send_test" type="object" string="Send test email"/>
+    </header><sheet><group><field name="name"/><field name="company_id"/><field name="profile"/>
+      <field name="sender"/><field name="reply_to"/><field name="test_recipient"/>
+    </group></sheet></form></field>
+  </record>
+  <record id="smtp_relay_action" model="ir.actions.act_window">
+    <field name="name">Outgoing Mail Servers</field><field name="res_model">mail.smtp.relay</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="smtp_relay_list"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <menuitem id="smtp_relay_menu" name="Outgoing Mail Servers" parent="technical_mail_menu" action="smtp_relay_action" groups="base.group_system" sequence="50"/>
+</erp>

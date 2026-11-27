@@ -600,9 +600,18 @@ async fn outbox_job_delivery(
 ) -> std::io::Result<()> {
     let mut ticks = tokio::time::interval(Duration::from_secs(2));
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut next_mail_recovery = tokio::time::Instant::now();
     loop {
         ticks.tick().await;
         let auth = app.current_auth().await;
+        if auth.orm().registry().model("mail.outgoing").is_some()
+            && tokio::time::Instant::now() >= next_mail_recovery
+        {
+            next_mail_recovery = tokio::time::Instant::now() + Duration::from_secs(60);
+            if let Err(error) = crate::mail_outgoing::recover_stopped(owner).await {
+                tracing::error!(kind=?error.kind(), "could not reconcile stopped outgoing email jobs");
+            }
+        }
         if auth.orm().registry().model("mail.notification").is_some() {
             if let Err(error) = crate::mail_delivery::replay(owner).await {
                 tracing::error!(kind=?error.kind(), cause=%sanitized_cause(&error), "mail fan-out failed and will retry");

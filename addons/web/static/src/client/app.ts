@@ -75,6 +75,7 @@ import { WizardDialog } from "./wizard-dialog.js";
 import type { ActionResult } from "../generated/human-ui.js";
 import { RecordForm, formFocus } from "./record-form.js";
 import { renderDiscuss } from "./discuss.js";
+import { DISCUSS_ACTION } from "./discuss-action.js";
 import { MessagingStore } from "@erpforall/mail-store";
 import { ClientError, RpcClient, newRequestId, type CallOptions } from "./transport.js";
 import { attachSubviews } from "./x2many.js";
@@ -313,6 +314,24 @@ export class HumanApp {
   private mobileDrawer?: MobileDrawer;
   private userDropdownOpen = false;
   private messagingStore?: MessagingStore;
+  private discuss?: ReturnType<typeof renderDiscuss>;
+
+  private getDiscuss(): ReturnType<typeof renderDiscuss> {
+    if (!this.discuss) {
+      this.discuss = renderDiscuss({
+        rpc: this.rpc, store: this.getMessagingStore(), uid: this.userId, userName: this.userName,
+        context: this.context,
+        ...(this.threadReconnect ? { policy: { ...this.threadReconnect, company: this.activeCompanyIds[0]! } } : {}),
+        openWorkspace: () => this.run(async () => {
+          const menu = [...this.menus.values()].find(item => item.parentId === null && item.module === "mail" && item.kind === "client" && item.action !== null);
+          if (!menu?.action) throw new ClientError("permission", "The Discuss workspace is unavailable for this user.");
+          await this.navigate({ action: String(menu.action), menu: String(menu.id) });
+        }),
+        openRecord: (model, id) => this.run(() => this.openRelatedRecord(model, id)),
+      });
+    }
+    return this.discuss;
+  }
 
   private getMessagingStore(): MessagingStore {
     if (!this.messagingStore) {
@@ -738,9 +757,7 @@ export class HumanApp {
     }
 
     if (this.threadReconnect) {
-      const discuss = renderDiscuss({rpc:this.rpc, store:this.getMessagingStore(), uid:this.userId, userName:this.userName, policy:this.threadReconnect});
-      systray.append(discuss.node);
-      this.disposeHeader.push(discuss.dispose);
+      systray.append(this.getDiscuss().node);
     }
     systray.append(customSystrayContainer);
     const userMenuContainer = el("div", undefined, "user-menu");
@@ -1118,6 +1135,7 @@ export class HumanApp {
     const release = (stop: () => void): void => { try { stop(); } catch (error) { errors.push(error); } };
     release(() => this.lifetime.abort());
     release(() => this.wizard?.dispose()); this.wizard = undefined;
+    release(() => this.discuss?.dispose()); this.discuss = undefined;
     release(() => this.loading.dispose());
     release(() => this.errors.dispose());
     release(() => this.mobileDrawer?.dispose());
@@ -4860,6 +4878,7 @@ export class HumanApp {
     stagedDisposers.push(mounted.dispose);
     const handle = await factory.create({
       ...this.pageNavigation(generation, route, () => result.name),
+      ...(result.tag === DISCUSS_ACTION ? { mountDiscuss: (host: HTMLElement) => this.getDiscuss().openWorkspace(host) } : {}),
       host: staging, panel: mounted.panel, controls: mounted.actions, rpc: this.rpc, companies: this.companies, run: this.run,
       notice: this.notice, messages: this.messages, editorLocale: this.editorLocale,
       // ORM company context and the assistant dock both use the first selected company.
@@ -5796,7 +5815,9 @@ export class HumanApp {
       runFormAction(save);
     });
 
-    surface = new RecordForm({ numericLocale: this.numericLocale, signal: this.lifetime.signal, form, state, view, headerHost, smartHost, asideHost, chatterHost, rpc: this.rpc, context: context,
+    surface = new RecordForm({
+      composeEmail: () => runFormAction(() => clickButton({ kind: "button", name: "action_open_external_email", label: "Email", variant: "secondary", confirm: null, invisible: null })),
+      numericLocale: this.numericLocale, signal: this.lifetime.signal, form, state, view, headerHost, smartHost, asideHost, chatterHost, rpc: this.rpc, context: context,
       canEdit, recordEvents: true,
       ...(this.threadReconnect && { threadSocket: this.threadReconnect }),
       messagingStore: this.getMessagingStore(), uid: this.userId, userName: this.userName,

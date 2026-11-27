@@ -187,6 +187,8 @@ pub struct PostRequest {
     pub mail_activity_type_id: Option<i64>,
     /// Context options.
     pub options: PostOptions,
+    /// The external composer persists its own explicitly addressed delivery rows.
+    pub(crate) external_delivery: bool,
 }
 
 impl PostRequest {
@@ -206,6 +208,7 @@ impl PostRequest {
             client_uid: None,
             mail_activity_type_id: None,
             options: PostOptions::default(),
+            external_delivery: false,
         }
     }
 }
@@ -979,7 +982,9 @@ async fn message_post_inner(
     )
     .await?;
     tx.flush().await?;
-    let notified = if model == "discuss.channel" {
+    let notified = if request.external_delivery {
+        Vec::new()
+    } else if model == "discuss.channel" {
         crate::thread_discuss::recipient_partners(
             tx,
             res_id,

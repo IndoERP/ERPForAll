@@ -7,8 +7,7 @@
        region; the Preferences page has two columns, the right one is the group other_preferences
        and the Calendar page has the group calendar_preferences: an addon adds its own preference
        with a view that inherits this one and an xpath on those group names (mail adds the
-       notification choice). Signature, the avatar picture and the Security page
-       are deferred,
+       notification choice). Signature and avatar picture are deferred.
   -->
   <record id="users_preferences_form" model="ir.ui.view">
     <field name="name">res.users.preferences.form</field>
@@ -39,6 +38,9 @@
                   <field name="tz" widget="web.preference_choice"/>
                 </group>
               </group>
+            </page>
+            <page name="account_security" string="Account Security">
+              <field name="login" widget="web.mcp_connections" string="MCP connections" readonly="1"/>
             </page>
           </notebook>
         </sheet>

@@ -102,6 +102,12 @@ static PREFERENCE_CHOICE_WIDGET: erp_sdk::views::WidgetDecl =
 static STATUSBAR_WIDGET: erp_sdk::views::WidgetDecl =
     erp_sdk::views::WidgetDecl::new("statusbar", &["selection"]);
 
+/// My Preferences control for delegations owned by the authenticated user.
+#[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::FIELD_WIDGETS)]
+#[linkme(crate = erp_sdk::__private::linkme)]
+static MCP_CONNECTIONS_WIDGET: erp_sdk::views::WidgetDecl =
+    erp_sdk::views::WidgetDecl::new("web.mcp_connections", &["char"]);
+
 /// Native admission for the password field adapter.
 #[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::FIELD_WIDGETS)]
 #[linkme(crate = erp_sdk::__private::linkme)]

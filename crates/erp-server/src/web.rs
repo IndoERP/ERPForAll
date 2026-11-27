@@ -1453,6 +1453,9 @@ impl WebApp {
             (&Method::POST, routes::EXTERNAL_REVOKE) => {
                 self.external_revoke(headers, body, &auth).await
             }
+            (&Method::GET, routes::EXTERNAL_PROVIDER) => {
+                self.external_provider_status(headers, &auth).await
+            }
             (&Method::POST, routes::EXTERNAL_PROVIDER) => {
                 self.external_provider_policy(headers, body, &auth).await
             }
@@ -2953,12 +2956,32 @@ fn form(input: &str, allowed: &[&str]) -> HttpResult<BTreeMap<String, String>> {
     }
     Ok(values)
 }
+fn utf8_form_media_type(value: &str) -> bool {
+    let mut parts = value.split(';').map(str::trim);
+    if !parts
+        .next()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("application/x-www-form-urlencoded"))
+    {
+        return false;
+    }
+    let Some(parameter) = parts.next() else {
+        return true;
+    };
+    let Some((name, charset)) = parameter.split_once('=') else {
+        return false;
+    };
+    let charset = charset.trim();
+    parts.next().is_none()
+        && name.trim().eq_ignore_ascii_case("charset")
+        && (charset.eq_ignore_ascii_case("utf-8") || charset.eq_ignore_ascii_case("\"utf-8\""))
+}
+
 async fn read_form(
     headers: &HeaderMap,
     body: Body,
     allowed: &[&str],
 ) -> HttpResult<BTreeMap<String, String>> {
-    if one(headers, "content-type")? != Some("application/x-www-form-urlencoded") {
+    if !one(headers, "content-type")?.is_some_and(utf8_form_media_type) {
         return Err(response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "expected application/x-www-form-urlencoded",
@@ -3334,6 +3357,39 @@ fn rpc_response(reply: erp_rpc::RpcResponse) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    async fn authentication_forms_accept_only_url_encoding_with_optional_utf8() {
+        for kind in [
+            "application/x-www-form-urlencoded",
+            "application/x-www-form-urlencoded;charset=UTF-8",
+            "Application/X-Www-Form-Urlencoded ; Charset = \"utf-8\"",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+            let values = read_form(&headers, Body::from("name=J%C3%BA"), &["name"])
+                .await
+                .unwrap();
+            assert_eq!(values["name"], "Jú");
+        }
+        for kind in [
+            "application/json",
+            "application/x-www-form-urlencoded;charset=iso-8859-1",
+            "application/x-www-form-urlencoded;",
+            "application/x-www-form-urlencoded;other=UTF-8",
+            "application/x-www-form-urlencoded;charset",
+            "application/x-www-form-urlencoded;charset=\"UTF-8",
+            "application/x-www-form-urlencoded;charset=UTF-8;charset=UTF-8",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+            let refusal = read_form(&headers, Body::from("name=x"), &["name"])
+                .await
+                .unwrap_err();
+            assert_eq!(refusal.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+    }
 
     /// confirmation)
     #[test]

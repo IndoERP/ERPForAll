@@ -153,12 +153,27 @@ This release rejects encryption and non-off scanner modes at startup.
 
 ### Assistant connections
 
-Request a delegated key at `POST /erp/session/api-key` with `"audience":"mcp"` and
-the ordinary API-key issuance fields. Use the resulting bearer key at `POST /erp/mcp`.
-The endpoint supports MCP initialization, tool listing and tool calls. Each request uses
-the delegated user's current company and model access. Only methods explicitly declared
-as assistant tools can be called. Eligible mutations go through the installed approval
-policy. The owner can revoke the delegation through the existing API-key management method.
+Open **My Preferences → Account Security → Manage MCP connections** to name a
+connection and copy its bearer token once. The default is read only. A connection
+may have exact model and method allowlists and an earlier expiry. An omitted expiry
+uses the maximum lifetime configured for the user's groups. Issuance uses the password
+exchange and honors its MFA, quota and issuance policies. A sign-in that requires an
+additional factor cannot issue through this exchange. The owner can see expiry and
+last use, and revoke a connection by name without presenting its token. Revocation
+takes effect on the next authenticated request.
+
+Connect a streamable HTTP client to `POST /erp/mcp` on the ERP origin with the
+`Authorization: Bearer <MCP_TOKEN>` header. The UI shows a client configuration
+template. Only registered assistant tools within the connection's scope and the user's
+current access can appear. Eligible mutations also go through the tool's approval policy.
+
+Native clients can request a connection at `POST /erp/session/api-key` with the usual
+`db`, `login`, `password`, and `device_name` fields and `"audience":"mcp"`.
+To narrow a connection, include an `mcp_access` object, for example
+`{"read_only":true,"models":["sale.order"],"methods":["search_read"]}`.
+An optional `expires_at` inside this object takes a UTC timestamp such as
+`2027-01-15T08:00:00Z`. The server validates the date against issuance policy.
+Omitting the access object retains the existing delegated tool and approval behavior.
 
 ### Signed provider callbacks
 
@@ -526,7 +541,23 @@ label = "Company identity"
 required_acr = "urn:example:mfa"
 ```
 
-Set `required_acr` to the identity provider's exact signed assurance claim for MFA. Omit it to use the provider's own sign-in policy. Apply compatible provider configuration to every node before serving traffic. To rotate signing keys, stage the new public key alongside the current one on each node before the provider begins signing with the new key.
+Settings administrators can open **Settings → Technical → Security → Single Sign-On** to check
+the issuer, callback URI, signing-key source and cache state of the serving node. **Refresh status**
+reads the current cache. Disabling the provider ends its active ERP sessions. A neutralized
+database displays its disabled state and keeps external sign-in unavailable.
+
+Set `required_acr` to the identity provider's exact signed assurance claim for MFA. Omit it to use the provider's own sign-in policy. Apply compatible provider configuration to every node before serving traffic. For a local key file, stage the new public key alongside the current one on each node before the provider begins signing with the new key.
+
+To follow the issuer's rotation automatically, replace `signing_keys_file` with these settings in the existing `[external_identity]` table.
+
+```toml
+signing_keys_url = "https://id.example.com/realms/company/protocol/openid-connect/certs"
+signing_keys_ttl_seconds = 300
+# Optional trust anchor for an issuer with a private certificate authority:
+# ca_certificate_file = "company-root-ca.pem"
+```
+
+The key URL must use HTTPS and the issuer's exact origin. The server verifies TLS for both token and key requests and refuses redirects. Each node retrieves its first key set when it verifies a sign-in. An unfamiliar key ID can trigger one extra refresh every ten seconds. The cache lifetime defaults to five minutes and accepts values from 30 to 3600 seconds. During a provider outage, cached keys work until their configured expiry. A sign-in that needs a new or expired key requires a successful refresh. The provider may publish signing and encryption keys together. ERPForAll uses RS256 and Ed25519 signing keys.
 
 Sign in to an existing ERP account and open `/erp/login` to connect the provider to that account. Connecting requires both a current ERP session and a fresh provider sign-in. Existing accounts are identified by the linked issuer and subject. Email is used for eligibility only when you opt into provisioning. The following configuration permits new portal accounts for verified addresses in one domain and grants access to one company.
 
@@ -554,3 +585,42 @@ directory and configure the same shared directory on each node that performs han
 contain a sign-in prompt. The database keeps addressed e-mail pending until a Maildir is
 configured, and marks recipients without a usable address as failed. Relaying Maildir messages to
 external mail systems is an operator transport choice.
+
+### Company SMTP relays
+
+On existing databases, follow the deployment upgrade procedure for `base`, `mail`, and the
+installed `sale` and `account_mail` addons to load the associated models and views. Deploy the
+matching web assets for Discuss, MCP connections and Single Sign-On. Existing Maildir
+notifications keep their recorded transport.
+Enable the job runner on at least one serving node using `jobs_run_in_app = true`. Declare the
+same named profiles on every node for the database. A profile identifies the SMTP server and the
+companies allowed to use its credentials. TLS modes are `starttls` (mandatory upgrade) and
+`implicit` (TLS on connect). The `loopback` mode accepts a literal local IP for an
+unauthenticated test relay. Omit both credential fields for an unauthenticated relay.
+
+```toml
+[smtp_profiles.sales]
+host = "smtp.example.com"
+port = 587
+tls = "starttls"
+companies = [1]
+username = "erp-mail"
+password_file = "credentials/sales-smtp"
+```
+
+The password file must be a regular mode-600 file, relative to the server configuration or
+absolute. In **Technical → Messaging → Outgoing Mail Servers**, create a route for the
+company, enter its profile name, sender address and optional Reply-To address. A shared
+deployment profile such as `default` requires an explicit route in each authorized company.
+
+Use **Test connection** to check the handshake and authentication. To verify delivery, enter a test
+recipient, save the route, then use **Send test email**. Follow the job in **Job Runs**.
+For document messages, SMTP acceptance records the relay's final successful response. When the
+connection closes after submission and that response is lost, check the relay log for the
+message ID before choosing to resend. Neutralized database copies disable outbound mail.
+
+In **Settings → Technical → Messaging → Outgoing Mail Queue**, select a company to see its waiting
+jobs, the age of the oldest due email, and its most recent delivery error. Worker status refers
+to the server handling the request. The **Outgoing Email** form links a recipient's delivery
+to the source document, job, and individual attempts. Before enabling a second company, send a
+quotation and a posted invoice to a test mailbox and verify the sender, document, and PDF.

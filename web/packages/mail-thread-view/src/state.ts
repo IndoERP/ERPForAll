@@ -37,7 +37,7 @@ export function uiModels(store: MessagingStore): UiModels {
   const known = defined.get(store);
   if (known !== undefined) return known;
   const models: UiModels = {
-    thread: defineOrGet(store, THREAD_UI_MODEL, ["text", "kind", "mentions", "reply_to", "pending"]),
+    thread: defineOrGet(store, THREAD_UI_MODEL, ["text", "kind", "mentions", "attachments", "reply_to", "pending"]),
     pending: defineOrGet(store, PENDING_MODEL, ["thread", "text", "kind", "mentions", "parent_id", "extras", "client_uid", "state", "error"]),
   };
   defined.set(store, models);
@@ -68,7 +68,7 @@ export function threadState(store: MessagingStore, ref: ThreadRef): { readonly m
   const { thread } = uiModels(store);
   const id = threadKey(ref);
   if (!thread.has(id)) {
-    thread.create(id, { text: "", kind: "message", mentions: [], reply_to: null, pending: [] });
+    thread.create(id, { text: "", kind: "message", mentions: [], attachments: [], reply_to: null, pending: [] });
   }
   return { model: thread, id };
 }

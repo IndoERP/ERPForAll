@@ -2,7 +2,8 @@
 //! Send Quotation by Email (`sale.quotation.send`) and Customer Online Signature & Confirmation
 //! (`sale.order.sign.wizard`).
 
-use erp_addon_mail::{Body, PostRequest, PostSubtype, PostType, Posted};
+use erp_addon_mail::external_compose::{self, DocumentPdf, Draft};
+use erp_addon_mail::{Body, PostRequest, Posted};
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
 use erp_sdk::{Operation, ValueMap};
@@ -48,6 +49,15 @@ pub struct SaleQuotationSend {
     /// Attach pro-forma invoice instead of standard quotation.
     #[field(boolean, default = false, string = "Send as Pro-Forma Invoice")]
     pub is_proforma: bool,
+    /// Additional files explicitly approved for external sharing.
+    #[field(
+        many2many,
+        comodel = "ir.attachment",
+        relation = "sale_quotation_send_attachment_rel",
+        column1 = "wizard_id",
+        column2 = "attachment_id"
+    )]
+    pub attachment_ids: Vec<RecId>,
     /// Email body.
     #[field(text, string = "Message")]
     pub body: Option<Arc<str>>,
@@ -125,22 +135,62 @@ impl SaleQuotationSend {
                     }
                 }
             }
-            if names.iter().any(|n| n == "subject") && !values.contains_key("subject") {
-                values.insert(
-                    "subject".to_owned(),
-                    Value::Str(Arc::from(format!("Quotation {oname}"))),
-                );
-            }
-            if names.iter().any(|n| n == "body") && !values.contains_key("body") {
-                values.insert(
-                    "body".to_owned(),
-                    Value::Str(Arc::from(format!(
-                        "Hello,\n\nPlease find attached your quotation {oname} totaling {total}.\n\nBest regards,"
-                    ))),
-                );
+            if names.iter().any(|n| n == "subject" || n == "body") {
+                let lang = external_compose::partner_language(tx, partner_id).await?;
+                let (subject, body) = external_compose::document_text(
+                    tx,
+                    "quotation",
+                    lang.as_deref(),
+                    &oname,
+                    &total,
+                )
+                .await?;
+                for (key, text) in [("subject", subject), ("body", body)] {
+                    if names.iter().any(|n| n == key) {
+                        values
+                            .entry(key.to_owned())
+                            .or_insert(Value::Str(text.into()));
+                    }
+                }
             }
         }
         Ok(values)
+    }
+
+    /// Render and retain the approved PDF before sending.
+    #[method]
+    #[rpc(effect = write)]
+    async fn action_preview_pdf(
+        this: &RecordSet<SaleQuotationSend>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        let wizard = this.ensure_one()?;
+        let order_id = wizard
+            .get(tx, SaleQuotationSend::ORDER_ID)
+            .await?
+            .ok_or_else(|| Error::validation("Choose a quotation."))?
+            .get();
+        let order = wizard.env().records("sale.order")?.browse([order_id])?;
+        let partner = wizard
+            .get(tx, SaleQuotationSend::PARTNER_ID)
+            .await?
+            .map(|id| id.get());
+        let language = external_compose::partner_language(tx, partner).await?;
+        let report = if wizard.get(tx, SaleQuotationSend::IS_PROFORMA).await? {
+            "sale.action_report_saleorder_pro_forma"
+        } else {
+            "sale.action_report_saleorder"
+        };
+        erp_addon_mail::external_preview::open(
+            tx,
+            &order,
+            DocumentPdf {
+                wizard: wizard.as_records(),
+                report,
+                language: language.as_deref(),
+            },
+        )
+        .await
     }
 
     /// Logs the email in the order chatter, marks a draft quotation as Sent, and closes the modal.
@@ -155,6 +205,7 @@ impl SaleQuotationSend {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        wizard.as_records().lock_for_update(tx, true).await?;
         let order_id = wizard
             .get(tx, SaleQuotationSend::ORDER_ID)
             .await?
@@ -163,7 +214,7 @@ impl SaleQuotationSend {
         let email_to = wizard
             .get(tx, SaleQuotationSend::EMAIL_TO)
             .await?
-            .unwrap_or_else(|| Arc::from("customer"));
+            .ok_or_else(|| Error::user("Enter a recipient email address."))?;
         let subject = wizard
             .get(tx, SaleQuotationSend::SUBJECT)
             .await?
@@ -198,12 +249,37 @@ impl SaleQuotationSend {
             if state == Cell::Str("draft".into()) {
                 let _: () = order.call(tx, "action_quotation_sent", ()).await?;
             }
-            let note_body = format!("{doc_kind} logged for {email_to}\n\n{body}");
-            let mut req = PostRequest::new(Body::Text(note_body));
-            req.subject = Some(subject.to_string());
-            req.message_type = PostType::Comment;
-            req.subtype = PostSubtype::Comment;
-            let _: Posted = order.call(tx, "message_post", (req,)).await?;
+            let partner = wizard
+                .get(tx, SaleQuotationSend::PARTNER_ID)
+                .await?
+                .map(|id| id.get());
+            let language = external_compose::partner_language(tx, partner).await?;
+            let report = if is_proforma {
+                "sale.action_report_saleorder_pro_forma"
+            } else {
+                "sale.action_report_saleorder"
+            };
+            let attachment_ids = wizard
+                .as_records()
+                .related(tx, "attachment_ids")
+                .await?
+                .ids();
+            external_compose::send(
+                tx,
+                &order,
+                Draft {
+                    email_to: &email_to,
+                    subject: &subject,
+                    body: &body,
+                    attachment_ids,
+                    document: Some(DocumentPdf {
+                        wizard: wizard.as_records(),
+                        report,
+                        language: language.as_deref(),
+                    }),
+                },
+            )
+            .await?;
             wizard.as_records().unlink(tx).await
         })
         .await?;
@@ -212,7 +288,7 @@ impl SaleQuotationSend {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
-                "message": format!("{doc_kind} logged and marked sent for {email_to}."),
+                "message": format!("{doc_kind} queued for {email_to}."),
                 "type": "success",
                 "next": {"type": "ir.actions.act_window_close"},
             },

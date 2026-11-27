@@ -21,3 +21,10 @@ access_mail_scheduled_message_system,mail.scheduled.message.system,model_mail_sc
 access_discuss_channel_member_read,Conversation participant,model_discuss_channel,base.group_user,r,"[('member_ids.user_id', '=', user.id)]"
 access_discuss_channel_member_own,Own membership,model_discuss_channel_member,base.group_user,r,"[('user_id', '=', user.id)]"
 access_mail_delivery_admin,Delivery status administration,model_mail_notification,base.group_system,r,"[('message_id.model', '!=', 'discuss.channel')]"
+access_mail_smtp_relay,Company SMTP settings,model_mail_smtp_relay,base.group_system,crud,
+access_mail_outgoing_system,Outgoing email administration,model_mail_outgoing,base.group_system,r,
+access_mail_external_compose,Own external email drafts,mail.model_mail_external_compose,base.group_user,crud,"[('create_uid', '=', user.id)]"
+access_mail_document_template,Read email templates,mail.model_mail_document_template,base.group_user,r,
+access_mail_document_template_admin,Manage email templates,mail.model_mail_document_template,base.group_system,crud,
+access_mail_outgoing_attempt_system,Outgoing email attempts,model_mail_outgoing_attempt,base.group_system,r,
+access_mail_document_preview,Own approved PDF,mail.model_mail_document_preview,base.group_user,r,"[('create_uid', '=', user.id), ('res_id', 'email_preview_access', 'read')]"

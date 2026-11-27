@@ -57,7 +57,7 @@ export class Composer {
   readonly #listId = uniqueId("erp-mail-suggestions");
   readonly #stops: (() => void)[] = [];
   readonly #refusedProviders = new Set<string>();
-  #attachments: Array<{ id: number; name: string; size?: number; mimetype?: string }> = [];
+
   #hidden: { id: string; reason: string }[] = [];
   #items: Suggestion[] = [];
   #trigger: Trigger | null = null;
@@ -127,6 +127,7 @@ export class Composer {
     this.#field.addEventListener("blur", () => this.#closeSuggestions());
     this.#list.addEventListener("mousedown", (event) => event.preventDefault());
     this.#stops.push(effect(() => this.#syncDraft()));
+    this.#stops.push(effect(() => this.#renderAttachmentChips()));
     this.#stops.push(effect(() => this.#syncKind()));
     this.#stops.push(effect(() => this.#syncReply()));
     this.#stops.push(effect(() => this.#syncActions()));
@@ -136,7 +137,7 @@ export class Composer {
 
   /** Whether the draft can be sent: it holds text other than whitespace or staged attachments. */
   canSend(): boolean {
-    return untrack(() => this.#text().trim() !== "" || this.#attachments.length > 0);
+    return untrack(() => this.#text().trim() !== "" || this.attachments.length > 0);
   }
 
   /** Whether a key event is the send chord: Ctrl/Cmd+Enter, or Enter alone with `sendOnEnter`. IME composition never sends. */
@@ -159,7 +160,7 @@ export class Composer {
       mentions: state.mentions,
       kind: state.kind,
       replyTo: state.replyTo,
-      attachmentIds: this.#attachments.map((a) => a.id),
+      attachmentIds: this.attachments.map((a) => a.id),
       ...(this.#options.silent === true ? { silent: true } : {}),
     };
   }
@@ -178,30 +179,25 @@ export class Composer {
 
   /** The current staged attachments on this composer. */
   get attachments(): readonly { id: number; name: string; size?: number; mimetype?: string }[] {
-    return [...this.#attachments];
+    const { model, id } = threadState(this.#view.store, this.#view.ref);
+    const stored = model.get(id, "attachments");
+    return Array.isArray(stored) ? stored.slice() : [];
   }
 
   /** Stage an attachment onto the draft. */
   attach(attachment: { id: number; name: string; size?: number; mimetype?: string }): void {
     this.#alive();
-    if (this.#attachments.length >= MAX_ATTACHMENTS) {
+    if (this.attachments.length >= MAX_ATTACHMENTS) {
       this.#showError(t(this.#view, "Cannot attach more than %s files", MAX_ATTACHMENTS));
       return;
     }
-    this.#attachments.push(attachment);
-    this.#renderAttachmentChips();
-    this.#syncDraft();
+    this.#write({ attachments: [...this.attachments, attachment] });
   }
 
   /** Remove a staged attachment from the draft. */
   removeAttachment(id: number): void {
     this.#alive();
-    const idx = this.#attachments.findIndex((a) => a.id === id);
-    if (idx !== -1) {
-      this.#attachments.splice(idx, 1);
-      this.#renderAttachmentChips();
-      this.#syncDraft();
-    }
+    this.#write({ attachments: this.attachments.filter(a => a.id !== id) });
   }
 
   /** Trigger file selection dialog. */
@@ -286,16 +282,14 @@ export class Composer {
   }
 
   #clearDraft(): void {
-    this.#attachments = [];
-    this.#renderAttachmentChips();
-    this.#write({ text: "", mentions: [], reply_to: null });
+    this.#write({ text: "", mentions: [], attachments: [], reply_to: null });
   }
 
   #syncDraft(): void {
     const { model, id } = threadState(this.#view.store, this.#view.ref);
     const text = String(model.get(id, "text") ?? "");
     if (this.#field.value !== text) this.#field.value = text;
-    const sendable = (text.trim() !== "" || this.#attachments.length > 0) && this.canSend();
+    const sendable = (text.trim() !== "" || this.attachments.length > 0) && this.canSend();
     this.#send.setAttribute("aria-disabled", sendable ? "false" : "true");
   }
 
@@ -386,7 +380,7 @@ export class Composer {
     this.#fileInput.value = "";
     if (files.length === 0) return;
 
-    if (this.#attachments.length + files.length > MAX_ATTACHMENTS) {
+    if (this.attachments.length + files.length > MAX_ATTACHMENTS) {
       this.#showError(t(this.#view, "Cannot attach more than %s files", MAX_ATTACHMENTS));
       return;
     }
@@ -401,15 +395,13 @@ export class Composer {
       this.#showError(null);
       for (const file of files) {
         const result = await upload(file);
-        this.#attachments.push({
+        if (this.#disposed) return;
+        this.attach({
           id: result.id,
           name: result.name,
           size: result.size ?? file.size,
           mimetype: result.mimetype ?? file.type,
         });
-        // Per file: a later file that fails must not leave an earlier one attached without a chip.
-        this.#renderAttachmentChips();
-        this.#syncDraft();
       }
     } catch (error) {
       this.#showError(error instanceof Error ? error.message : String(error));
@@ -420,12 +412,12 @@ export class Composer {
   #renderAttachmentChips(): void {
     const doc = this.#view.document;
     this.#attachmentsArea.replaceChildren();
-    if (this.#attachments.length === 0) {
+    if (this.attachments.length === 0) {
       this.#attachmentsArea.hidden = true;
       return;
     }
     this.#attachmentsArea.hidden = false;
-    for (const att of this.#attachments) {
+    for (const att of this.attachments) {
       const chip = h(doc, "div", { class: "erp-mail-attachment-chip", "data-id": String(att.id) });
       const name = h(doc, "span", { class: "erp-mail-attachment-chip-name" }, att.name);
       chip.append(name);

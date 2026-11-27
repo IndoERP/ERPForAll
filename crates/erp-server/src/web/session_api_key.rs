@@ -10,7 +10,7 @@ use erp_fields::{DateTime, ErrorKind};
 use erp_orm::{CorrelationId, OperationIdentity, audit::AuditOrigin};
 use erp_security::auth::{
     Login, Mfa, apikey_manage,
-    apikey_store::{IssueRequest, IssuedSecret, KeyKind, issue},
+    apikey_store::{IssueRequest, IssuedSecret, KeyKind, McpAccess, issue},
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -39,6 +39,84 @@ struct Exchange {
     login: String,
     password: String,
     device_name: String,
+    #[serde(default, deserialize_with = "access_if_present")]
+    mcp_access: Option<RequestedAccess>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestedAccess {
+    read_only: bool,
+    #[serde(default, deserialize_with = "when_present")]
+    models: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "when_present")]
+    methods: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "when_present")]
+    expires_at: Option<String>,
+}
+
+// serde also supports positional structs. This public JSON contract uses named restrictions so a
+// client that accidentally sends an array cannot mint a broader credential.
+fn access_if_present<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<RequestedAccess>, D::Error> {
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Option<RequestedAccess>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an MCP access object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                .map(Some)
+        }
+    }
+    de.deserialize_map(Object)
+}
+
+// An explicitly malformed restriction must never turn into an unrestricted credential.
+fn when_present<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(de).map(Some)
+}
+
+struct RequestedConnection {
+    access: McpAccess,
+    expires: Option<DateTime>,
+}
+impl RequestedAccess {
+    fn checked(self, audience: Audience) -> HttpResult<RequestedConnection> {
+        if !matches!(audience, Audience::Mcp) {
+            return Err(refuse(
+                StatusCode::BAD_REQUEST,
+                "MCP restrictions require the MCP audience.",
+            ));
+        }
+        let expires = self
+            .expires_at
+            .map(|raw| {
+                let stamp = raw
+                    .strip_suffix('Z')
+                    .and_then(|v| v.split_once('T'))
+                    .filter(|(d, t)| d.len() == 10 && t.len() == 8);
+                stamp
+                    .and_then(|(d, t)| DateTime::parse_odoo(&format!("{d} {t}")))
+                    .filter(|v| iso_utc(*v) == raw)
+                    .ok_or_else(|| {
+                        refuse(
+                            StatusCode::BAD_REQUEST,
+                            "expires_at must be an exact UTC date and time.",
+                        )
+                    })
+            })
+            .transpose()?;
+        Ok(RequestedConnection {
+            access: McpAccess::new(self.read_only, self.models, self.methods)
+                .map_err(issue_refusal)?,
+            expires,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Default, serde::Deserialize)]
@@ -88,6 +166,11 @@ pub(super) async fn exchange(
         return Err(refuse(StatusCode::BAD_REQUEST, "Database not found."));
     }
     validate_device_name(&request.device_name)?;
+    let restrictions = request
+        .mcp_access
+        .take()
+        .map(|scope| scope.checked(request.audience))
+        .transpose()?;
     let agent = header(headers, "user-agent")?.map(str::to_owned);
     let correlation = request_id.map(|id| id.as_str().to_owned());
     // Authentication, key issuance and ending the temporary browser session all run inside one
@@ -125,6 +208,7 @@ pub(super) async fn exchange(
                 &login,
                 &device_name,
                 audience,
+                restrictions,
                 correlation.as_deref(),
             )
             .await
@@ -175,6 +259,7 @@ async fn issue_key(
     login: &Login,
     device_name: &str,
     audience: Audience,
+    restrictions: Option<RequestedConnection>,
     request_id: Option<&str>,
 ) -> HttpResult<(IssuedSecret, DateTime)> {
     require_single_factor(login.auth().mfa())?;
@@ -182,8 +267,20 @@ async fn issue_key(
         Audience::Rpc => (KeyKind::User, super::KeyScope::Rpc),
         Audience::Mcp => (KeyKind::Agent, super::KeyScope::Mcp),
     };
-    let request = IssueRequest::at_policy_maximum(login.uid(), device_name, kind, scope)
-        .map_err(issue_refusal)?;
+    let expires = restrictions.as_ref().and_then(|r| r.expires);
+    let request = if expires.is_some() {
+        IssueRequest::new(login.uid(), device_name, kind, scope, expires)
+    } else {
+        IssueRequest::at_policy_maximum(login.uid(), device_name, kind, scope)
+    }
+    .map_err(issue_refusal)?;
+    let request = if let Some(restrictions) = restrictions {
+        request
+            .with_mcp_access(restrictions.access)
+            .map_err(issue_refusal)?
+    } else {
+        request
+    };
     let identity = match request_id.and_then(|raw| CorrelationId::parse(raw).ok()) {
         Some(corr) => OperationIdentity::new(corr).map_err(failure)?,
         None => OperationIdentity::generate().map_err(failure)?,

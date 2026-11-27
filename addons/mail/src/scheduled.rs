@@ -96,14 +96,14 @@ erp_sdk::jobs::register_job_kind!(
 pub fn job_kinds() -> &'static [erp_sdk::jobs::JobKindRequirement] {
     // the reference pulls the registration's object file into the binary
     std::hint::black_box(&SEND_JOB_KIND);
+    crate::outgoing::link_kind();
     &REQUIRED_KINDS
 }
 
-const REQUIRED_KINDS: [erp_sdk::jobs::JobKindRequirement; 1] =
-    [erp_sdk::jobs::JobKindRequirement::new(
-        SEND_KIND,
-        "erp-addon-mail",
-    )];
+const REQUIRED_KINDS: [erp_sdk::jobs::JobKindRequirement; 2] = [
+    erp_sdk::jobs::JobKindRequirement::new(SEND_KIND, "erp-addon-mail"),
+    erp_sdk::jobs::JobKindRequirement::new(crate::outgoing::KIND, "erp-addon-mail"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

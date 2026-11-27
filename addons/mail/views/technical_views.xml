@@ -178,4 +178,28 @@
   </record>
   <menuitem id="technical_activity_types_menu" name="Activity Types" parent="technical_mail_menu" action="technical_activity_types_action" groups="base.group_system" sequence="40"/>
 
+  <record id="outgoing_queue_health_action" model="ir.actions.client">
+    <field name="name">Outgoing Mail Queue</field>
+    <field name="tag">mail.queue_health</field>
+  </record>
+  <menuitem id="outgoing_queue_health_menu" name="Outgoing Mail Queue" parent="technical_mail_menu" action="outgoing_queue_health_action" groups="base.group_system" sequence="55"/>
+  <record id="outgoing_list" model="ir.ui.view">
+    <field name="name">mail.outgoing.list</field><field name="model">mail.outgoing</field>
+    <field name="arch" type="xml"><list create="false" edit="false" delete="false"><field name="company_id"/><field name="subject"/><field name="recipient"/><field name="state"/><field name="attempts"/><field name="last_error"/></list></field>
+  </record>
+  <record id="outgoing_form" model="ir.ui.view">
+    <field name="name">mail.outgoing.form</field><field name="model">mail.outgoing</field>
+    <field name="arch" type="xml"><form record_mode="record" create="false" edit="false" delete="false">
+      <header><button name="action_open_document" type="object" string="Source document"/><button name="action_open_job" type="object" string="Job history"/><button name="action_retry" type="object" string="Retry delivery" confirm="If the outcome is uncertain, check the relay logs first. Retrying an accepted email may send it twice."/></header>
+      <sheet><group><field name="company_id"/><field name="recipient"/><field name="subject"/><field name="state"/><field name="last_error"/></group>
+        <group><field name="source_model"/><field name="source_id"/><field name="message_id"/><field name="smtp_message_id"/><field name="job_uuid"/><field name="attempts"/></group>
+        <field name="attempt_ids"><list create="false" edit="false" delete="false"><field name="started"/><field name="job_uuid"/><field name="attempt"/><field name="outcome"/><field name="detail"/></list></field>
+      </sheet></form></field>
+  </record>
+  <record id="outgoing_action" model="ir.actions.act_window">
+    <field name="name">Outgoing Email</field><field name="res_model">mail.outgoing</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="outgoing_list"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <menuitem id="outgoing_menu" name="Outgoing Email" parent="technical_mail_menu" action="outgoing_action" groups="base.group_system" sequence="45"/>
 </erp>

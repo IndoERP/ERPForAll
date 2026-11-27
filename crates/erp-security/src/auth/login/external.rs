@@ -385,6 +385,40 @@ impl Auth {
         }
     }
 
+    /// Read provider policy and neutralization for the Settings administrator's live session.
+    ///
+    /// # Errors
+    /// A missing or unauthorized session, or an unavailable policy database.
+    pub async fn external_admin_status(
+        &self,
+        secret: &SessionSecret,
+        issuer: Option<&str>,
+    ) -> Result<(bool, bool)> {
+        let mut tx = self.orm.begin(SUPERUSER_ID).await?;
+        let result = async {
+            let identity = self.check_session_in(&mut tx, secret).await?;
+            if !identity.has_groups("base.group_system")? {
+                return Err(refused());
+            }
+            let neutralized = database_neutralized(&mut tx).await?;
+            let rows = tx
+                .query(
+                    "SELECT enabled FROM erp_external_provider WHERE issuer=$1",
+                    &[&issuer],
+                )
+                .await?;
+            let enabled = rows
+                .first()
+                .map(|row| col(row, 0))
+                .transpose()?
+                .unwrap_or(true);
+            Ok((enabled, neutralized))
+        }
+        .await;
+        tx.rollback().await?;
+        result
+    }
+
     /// Whether the named provider may appear on the browser login screen.
     ///
     /// # Errors

@@ -4,9 +4,11 @@ summary = "Messages, followers, activities and chatter for invoices, bills and j
 category = "Accounting"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.0.0"
+version = "1.1.0"
 depends = ["base", "account", "mail"]
 auto_install = true
 data = [
     "views/account_move_views.xml",
+    "data/email_template.xml",
+    "security/ir.access.csv",
 ]

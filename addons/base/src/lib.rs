@@ -54,6 +54,7 @@ pub mod ir_ui_menu;
 pub mod ir_ui_view;
 mod jobs_settings;
 pub mod jobs_settings_source;
+mod mcp_connections;
 pub mod migrations;
 pub mod money;
 pub mod partition_upkeep_settings;

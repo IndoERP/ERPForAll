@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp><data noupdate="1">
+  <record id="email_template_invoice" model="mail.document.template">
+    <field name="name">Customer invoice</field><field name="code">customer_invoice</field>
+    <field name="subject">Invoice {document}</field>
+    <field name="body">Hello,
+
+Please find attached your invoice {document} totaling {total}.
+
+Best regards,</field>
+  </record>
+</data></erp>

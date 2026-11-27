@@ -16,11 +16,10 @@ static TECHNICAL_ATTACHMENT_WIDGET: erp_sdk::views::WidgetDecl =
     erp_sdk::views::WidgetDecl::new("technical_attachment", &["char"]);
 
 fn tags() -> Result<Vec<ClientActionDecl>> {
-    Ok(vec![ClientActionDecl::new(
-        TAG,
-        "Sessions and Devices",
-        check_action,
-    )?])
+    Ok(vec![
+        ClientActionDecl::new(TAG, "Sessions and Devices", check_action)?,
+        ClientActionDecl::new("base.identity_provider", "Single Sign-On", check_action)?,
+    ])
 }
 erp_sdk::client_action_declarations!(tags);
 
@@ -49,7 +48,7 @@ fn check_action<'a>(
         authorize(env, tx).await?;
         if !params.is_empty() {
             return Err(Error::validation(
-                "Sessions and Devices takes no action parameters",
+                "This security screen takes no action parameters",
             ));
         }
         Ok(Map::new())

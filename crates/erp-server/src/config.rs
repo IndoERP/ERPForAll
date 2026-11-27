@@ -19,6 +19,9 @@ use std::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+mod smtp;
+pub use smtp::{SmtpProfile, SmtpProfiles, SmtpTls};
+
 /// A configuration refusal that never includes secret input or database parser diagnostics.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -106,6 +109,8 @@ struct RawConfig {
     /// Run the job queue's runner in this process (4); absent means off.
     jobs_run_in_app: Option<bool>,
     attachment_maintenance_run_in_app: Option<bool>,
+    #[serde(default)]
+    smtp_profiles: BTreeMap<String, smtp::RawProfile>,
     mail_delivery_dir: Option<PathBuf>,
     outbox_retention_days: Option<u32>,
     audit_retention_days: Option<u16>,
@@ -129,9 +134,54 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct ExternalIdentityFiles {
     client_secret_file: PathBuf,
-    signing_keys_file: PathBuf,
+    signing_keys_file: Option<PathBuf>,
+    signing_keys_url: Option<String>,
+    signing_keys_ttl_seconds: Option<u64>,
+    ca_certificate_file: Option<PathBuf>,
     provider: erp_security::auth::external::ExternalProviderConfig,
 }
+impl ExternalIdentityFiles {
+    fn load(
+        self,
+        resolve: impl Fn(&Path) -> PathBuf,
+    ) -> Result<erp_security::auth::external::ExternalProvider, ConfigError> {
+        use erp_security::auth::external::{ExternalProvider, SigningKeys};
+        let read_public = |path: &Path| -> Result<Vec<u8>, ConfigError> {
+            let mut bytes = Vec::new();
+            File::open(resolve(path))
+                .map_err(|_| ConfigError::Invalid)?
+                .take(65_537)
+                .read_to_end(&mut bytes)
+                .map_err(|_| ConfigError::Invalid)?;
+            Ok(bytes)
+        };
+        let file;
+        let source = match (
+            &self.signing_keys_file,
+            &self.signing_keys_url,
+            self.signing_keys_ttl_seconds,
+        ) {
+            (Some(path), None, None) => {
+                file = read_public(path)?;
+                SigningKeys::File(&file)
+            }
+            (None, Some(url), ttl) => SigningKeys::Remote {
+                url,
+                ttl_seconds: ttl.unwrap_or(300),
+            },
+            _ => return Err(ConfigError::Invalid),
+        };
+        let ca = self
+            .ca_certificate_file
+            .as_deref()
+            .map(read_public)
+            .transpose()?;
+        let secret = read_secret(&resolve(&self.client_secret_file))?;
+        ExternalProvider::with_signing_keys(self.provider, secret, source, ca.as_deref())
+            .map_err(|_| ConfigError::Invalid)
+    }
+}
+
 /// The `[report]` table: the font store and the render pool's settings, each `name = integer`.
 #[derive(Debug, Clone, Default)]
 pub struct ReportConfig {
@@ -242,6 +292,7 @@ pub struct ServerConfig {
     connections: ConnectionLimits,
     jobs_run_in_app: bool,
     attachment_maintenance_run_in_app: bool,
+    smtp_profiles: SmtpProfiles,
     mail_delivery_dir: Option<PathBuf>,
     outbox_retention_days: Option<u32>,
     audit_retention_days: Option<u16>,
@@ -494,21 +545,7 @@ impl ServerConfig {
         .map_err(|_| ConfigError::Invalid)?;
         let external_identity = raw
             .external_identity
-            .map(|files| {
-                let mut signing_keys = Vec::new();
-                File::open(resolve(&files.signing_keys_file))
-                    .map_err(|_| ConfigError::Invalid)?
-                    .take(65_537)
-                    .read_to_end(&mut signing_keys)
-                    .map_err(|_| ConfigError::Invalid)?;
-                let secret = read_secret(&resolve(&files.client_secret_file))?;
-                erp_security::auth::external::ExternalProvider::new(
-                    files.provider,
-                    secret,
-                    &signing_keys,
-                )
-                .map_err(|_| ConfigError::Invalid)
-            })
+            .map(|files| files.load(resolve))
             .transpose()?;
         let callbacks = crate::web::callback::Callbacks::load(raw.callbacks, resolve)?;
         Ok(Self {
@@ -533,6 +570,7 @@ impl ServerConfig {
             attachment_maintenance_run_in_app: raw
                 .attachment_maintenance_run_in_app
                 .unwrap_or(false),
+            smtp_profiles: SmtpProfiles::load(raw.smtp_profiles, resolve)?,
             mail_delivery_dir: raw.mail_delivery_dir.as_deref().map(resolve),
             outbox_retention_days: raw.outbox_retention_days,
             audit_retention_days: raw.audit_retention_days,
@@ -655,6 +693,11 @@ impl ServerConfig {
         self.attachment_maintenance_run_in_app
     }
 
+    /// Deployment-approved SMTP endpoints and company grants.
+    pub fn smtp_profiles(&self) -> &SmtpProfiles {
+        &self.smtp_profiles
+    }
+
     /// Private local Maildir to receive outgoing message notices.
     pub fn mail_delivery_dir(&self) -> Option<&Path> {
         self.mail_delivery_dir.as_deref()
@@ -722,6 +765,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             connections,
             jobs_run_in_app: _,
             attachment_maintenance_run_in_app: _,
+            smtp_profiles,
             mail_delivery_dir: _,
             outbox_retention_days,
             audit_retention_days,
@@ -739,6 +783,9 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             field_keys,
             external_identity,
         } = self;
+        if let Some(digest) = smtp_profiles.fingerprint() {
+            out.shared_secret("server.smtp_profiles", &digest)?;
+        }
         out.shared_str("server.database", database)?;
         out.shared_str("server.public_origin", origin)?;
         out.shared_duration("server.shutdown_deadline", *shutdown_deadline)?;
@@ -866,6 +913,55 @@ mod tests {
 
     fn table(text: &str) -> Option<toml::Value> {
         Some(toml::from_str(text).unwrap())
+    }
+
+    #[tokio::test]
+    async fn external_signing_keys_require_one_source_and_bind_issuer_and_lifetime() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(secret)
+            .unwrap();
+        writeln!(f, "generated-fixture-value").unwrap();
+        std::fs::write(dir.path().join("certs.json"), br#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"fixture","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}"#).unwrap();
+        let load = |mode: &str| {
+            let files: ExternalIdentityFiles = toml::from_str(&format!(
+                r#"client_secret_file = "secret"
+{mode}
+[provider]
+issuer = "https://issuer.example.test"
+authorization_endpoint = "https://issuer.example.test/auth"
+token_endpoint = "https://issuer.example.test/token"
+client_id = "erp"
+label = "Example"
+"#
+            ))
+            .unwrap();
+            files.load(|path| dir.path().join(path))
+        };
+        let file = load(r#"signing_keys_file = "certs.json""#).unwrap();
+        assert_eq!(file.key_diagnostics().await.key_count, 1);
+        let remote = r#"signing_keys_url = "https://issuer.example.test/certs""#;
+        let provider = load(remote).unwrap();
+        assert_eq!(provider.key_diagnostics().await.status, "not_loaded");
+        let shorter = load(&format!("{remote}\nsigning_keys_ttl_seconds = 60")).unwrap();
+        assert_ne!(
+            provider.configuration_fingerprint(),
+            shorter.configuration_fingerprint()
+        );
+        for invalid in [
+            "",
+            &format!("{remote}\nsigning_keys_file = 'certs.json'"),
+            &format!("{remote}\nsigning_keys_ttl_seconds = 5"),
+            &format!("{remote}\nca_certificate_file = 'certs.json'"),
+            "signing_keys_file = 'certs.json'\nsigning_keys_ttl_seconds = 60",
+        ] {
+            assert!(load(invalid).is_err());
+        }
     }
 
     /// like `font_directory` against the configuration file's directory, and a non-path is refused

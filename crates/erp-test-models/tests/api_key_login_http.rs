@@ -39,6 +39,7 @@ impl erp_rpc::RpcHost for Host {
 
 struct Fixture {
     router: Router,
+    auth: Arc<erp_security::auth::Auth>,
     pool: &'static HashPool,
     uid: i64,
     h: erp_testkit::Harness,
@@ -87,6 +88,7 @@ async fn fixture() -> Fixture {
     app.set_login_available(true);
     Fixture {
         router: app.router("127.0.0.1".parse().unwrap()),
+        auth,
         pool,
         uid,
         h,
@@ -736,4 +738,113 @@ mod log_capture {
         });
         Capture
     }
+}
+
+#[tokio::test]
+async fn mcp_connection_restrictions_and_owner_lifecycle() {
+    use erp_security::auth::{
+        ApiKeyRequest, CredentialOptions, apikey_manage, apikey_store::KeyScope,
+    };
+    use serde_json::json;
+    let f = fixture().await;
+    support::set_param(&f.h, "base.enable_programmatic_api_keys", "True").await;
+    let exchange = async |access: serde_json::Value| {
+        f.send(f.post(ROUTE, 9).body(Body::from(json!({
+            "db":"test","login":"device-user","password":PASSWORD,"device_name":"Assistant","audience":"mcp","mcp_access":access
+        }).to_string())).unwrap()).await
+    };
+    let start = f.keys().await;
+    for invalid in [
+        json!(null),
+        json!([false]),
+        json!({}),
+        json!({"read_only":false,"models":[]}),
+        json!({"read_only":true,"methods":null}),
+        json!({"read_only":true,"methods":["read","read"]}),
+        json!({"read_only":true,"models":["sale.*"]}),
+        json!({"read_only":true,"capabilities":"subject"}),
+        json!({"read_only":true,"expires_at":"2000-01-01T00:00:00Z"}),
+    ] {
+        let (response, _) = exchange(invalid).await;
+        assert!(response.status().is_client_error());
+    }
+    assert_eq!(f.keys().await, start);
+    let mut tx = f.h.begin().await.unwrap();
+    let expiry:String = tx.query("SELECT to_char((now() AT TIME ZONE 'utc') + interval '1 hour','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')", &[]).await.unwrap()[0].get(0);
+    tx.rollback().await.unwrap();
+    let (res, bytes) = exchange(json!({"read_only":true,"models":["res.users"],"methods":["search_read"],"expires_at":expiry})).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["cache-control"], "no-store");
+    let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(data["expires_at"], expiry);
+    let token = data["api_key"].as_str().unwrap();
+    let check = async |audience| {
+        f.auth
+            .begin_api_key(
+                ApiKeyRequest::new(token, audience, "192.0.2.70".parse().unwrap()),
+                CredentialOptions::new(),
+            )
+            .await
+    };
+    assert!(check(KeyScope::Rpc).await.is_err());
+    let mut session = check(KeyScope::Mcp).await.unwrap();
+    let env = session.tx.env();
+    let scope = env.principal().scope().unwrap();
+    assert!(
+        scope.read_only()
+            && scope.models().allows("res.users")
+            && scope.methods().allows("search_read")
+    );
+    assert!(!scope.models().allows("res.partner") && !scope.methods().allows("create"));
+    assert!(apikey_manage::require_connection_owner(&session.tx).is_err());
+    let id = scope.key().get();
+    session.tx.rollback().await.unwrap();
+    drop(session.last_use.take());
+
+    let as_user = async |login: &str| {
+        let actor = support::login(&f.auth, login, PASSWORD).await.unwrap();
+        f.auth
+            .begin_session(
+                actor.session().secret(),
+                CredentialOptions::new()
+                    .operation_identity(erp_orm::OperationIdentity::generate().unwrap()),
+            )
+            .await
+            .unwrap()
+            .tx
+    };
+    support::user_with_password(&f.h, "mcp-peer", PASSWORD).await;
+    let mut peer = as_user("mcp-peer").await;
+    let result: Value = peer
+        .env()
+        .records("res.users")
+        .unwrap()
+        .call(&mut peer, "erp_mcp_connections", (None::<i64>,))
+        .await
+        .unwrap();
+    assert!(matches!(result, Value::Json(doc) if doc["items"].as_array().unwrap().is_empty()));
+    assert!(
+        apikey_manage::revoke_mcp_connection(&mut peer, id)
+            .await
+            .is_err()
+    );
+    peer.rollback().await.unwrap();
+    let mut owner = as_user("device-user").await;
+    let users = owner.env().records("res.users").unwrap();
+    let result: Value = users
+        .call(&mut owner, "erp_mcp_connections", (None::<i64>,))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, Value::Json(doc) if doc["items"][0]["name"] == "Assistant" &&
+        doc["items"][0]["models"] == json!(["res.users"]) && doc["items"][0]["id"] == id &&
+        !doc.to_string().contains(token) && doc["items"][0].as_object().unwrap().len() == 8)
+    );
+    let removed: bool = users
+        .call(&mut owner, "erp_revoke_mcp_connection", (id,))
+        .await
+        .unwrap();
+    assert!(removed);
+    owner.commit().await.unwrap();
+    assert!(check(KeyScope::Mcp).await.is_err());
 }

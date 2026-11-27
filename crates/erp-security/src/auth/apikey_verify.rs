@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use erp_fields::{Error, ErrorKind, Result};
 use erp_orm::{
-    AccessPolicy, ApiKeyId, CredentialCheck, CredentialVerdict, MethodAllow, ModelAllow, Orm,
-    PrincipalBuilder, ResolverStatement, Scope, Transaction, UserId,
+    AccessPolicy, ApiKeyId, CredentialCheck, CredentialVerdict, Orm, PrincipalBuilder,
+    ResolverStatement, Scope, Transaction, UserId,
 };
 use erp_sql::param::{Param, Scalar};
 use tokio_postgres::Row;
@@ -197,7 +197,7 @@ pub(super) enum KeyRefused {
 /// in the other rows); the tag column at `first + 4` distinguishes rows, so an absent
 /// key still permits checking a presented cookie before refusing the key. At most two rows
 /// per digest are returned, allowing duplicate corruption to fail loudly without unbounded
-/// transfer. Stored JSON allowlists are tested in PostgreSQL and never transferred.
+/// transfer. Only bounded JSON allowlists are transferred for a key.
 pub(super) fn check_sql(resolver: &Resolver, plan: &super::token_plan::TokenPlan) -> String {
     let cookie = super::session::check_sql(resolver, plan).replace("$1", "$4");
     let pad = ", NULL::text".repeat(plan.len());
@@ -216,10 +216,14 @@ SELECT {},
        k.id::int8,
        CASE WHEN octet_length(k.name) BETWEEN 1 AND 128 AND length(btrim(k.name))>0 THEN k.name ELSE NULL END,
        CASE WHEN octet_length(k.kind)<=7 THEN k.kind ELSE NULL END,
-       (k.models IS NULL AND k.methods IS NULL AND k.read_only IS FALSE AND ((k.kind='user' AND k.scope='rpc' AND k.capabilities='subject') OR (k.kind='agent' AND k.scope='mcp' AND k.capabilities='none'))),
+       ((k.kind='user' AND k.scope='rpc' AND k.capabilities='subject' AND k.models IS NULL AND k.methods IS NULL AND k.read_only IS FALSE)
+        OR (k.kind='agent' AND k.scope='mcp' AND k.capabilities='none' AND k.legacy_hash IS NULL
+            AND coalesce(octet_length(k.models::text),0)<=16384 AND coalesce(octet_length(k.methods::text),0)<=16384)),
        0::int4, NULL::int4, NULL::float8,
        (k.last_used_at IS NULL
-        OR k.last_used_at < (now() AT TIME ZONE 'utc') - make_interval(secs => {secs}))
+        OR k.last_used_at < (now() AT TIME ZONE 'utc') - make_interval(secs => {secs})),
+       CASE WHEN octet_length(k.models::text)<=16384 THEN k.models END,
+       CASE WHEN octet_length(k.methods::text)<=16384 THEN k.methods END, k.read_only
   FROM (SELECT * FROM res_users_apikeys
          WHERE EXISTS(SELECT FROM eligible)
            AND scope=$3::text
@@ -230,12 +234,12 @@ SELECT {},
          LIMIT 2) k
   JOIN res_users u ON u.id=k.user_id
 UNION ALL
-SELECT cookie.*, NULL::int8, NULL::text, NULL::text, NULL::boolean, 1::int4, NULL::int4, NULL::float8, NULL::boolean FROM cookie
+SELECT cookie.*, NULL::int8, NULL::text, NULL::text, NULL::boolean, 1::int4, NULL::int4, NULL::float8, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::boolean FROM cookie
 UNION ALL
 SELECT NULL::int8, NULL::boolean, NULL::int8, NULL::int8[], NULL::int8[],
        NULL::text, NULL::int8, NULL::text, NULL::bytea, NULL::int2,
        NULL::float8, NULL::float8, NULL::float8, NULL::float8, NULL::text, NULL::text{pad},
-       NULL::int8, NULL::text, NULL::text, NULL::boolean, 2::int4, failures, elapsed, NULL::boolean
+       NULL::int8, NULL::text, NULL::text, NULL::boolean, 2::int4, failures, elapsed, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::boolean
   FROM address_throttle"#,
         resolver.subject_columns()
     )
@@ -441,10 +445,22 @@ impl CredentialCheck for KeyCheck<'_> {
             .ok_or_else(|| Error::db("API key evidence lacks the last-use flag"))?;
         let name: Option<String> = col(row, first + 1)?;
         let name = name.ok_or_else(stored_authority)?;
+        let list = |index| -> Result<Option<Vec<String>>> {
+            col::<Option<serde_json::Value>>(row, index)?
+                .map(|v| serde_json::from_value(v).map_err(|_| stored_authority()))
+                .transpose()
+        };
+        let (models, methods, read_only) = super::apikey_store::McpAccess::new(
+            col(row, first + 10)?,
+            list(first + 8)?,
+            list(first + 9)?,
+        )
+        .map_err(|_| stored_authority())?
+        .into_authority()?;
         let scope = Scope::builder(id, name)
-            .models(ModelAllow::All)
-            .methods(MethodAllow::All)
-            .read_only(false)
+            .models(models)
+            .methods(methods)
+            .read_only(read_only)
             .build()
             .map_err(|_| stored_authority())?;
         if cookie_user.is_some_and(|uid| uid != principal.subject()) {

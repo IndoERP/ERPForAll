@@ -1377,7 +1377,10 @@ fn oidc_post(path: &str, cookie: &str, body: String) -> Request<Body> {
         .header("cookie", cookie)
         .header("origin", "https://erp.example.test")
         .header("accept", "application/json")
-        .header("content-type", "application/x-www-form-urlencoded")
+        .header(
+            "content-type",
+            "application/x-www-form-urlencoded;charset=UTF-8",
+        )
         .body(Body::from(body))
         .unwrap()
 }
@@ -1469,6 +1472,24 @@ async fn external_web_login_links_explicitly_checks_mfa_and_revokes_sessions() {
         admin_login.session().secret().to_cookie().as_str()
     );
 
+    let status_path = "/erp/session/external/provider";
+    assert_eq!(
+        send(&app, get(status_path, None)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(&app, get(status_path, Some(&with_native))).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, headers, body) = send(&app, get(status_path, Some(&with_admin))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "no-store");
+    let diagnostics: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(diagnostics["enabled"], true);
+    assert_eq!(diagnostics["keys"]["mode"], "file");
+    assert_eq!(diagnostics["keys"]["key_count"], 1);
+    assert_eq!(diagnostics["keys"]["status"], "ready");
+
     let unlinked = oidc_start(&app, &prefs, &csrf, false).await;
     let callback = issuer.callback(
         &unlinked,
@@ -1502,8 +1523,10 @@ async fn external_web_login_links_explicitly_checks_mfa_and_revokes_sessions() {
         "fixture-mfa",
         "person@example.test",
     );
-    let (status, _, _) = send(&app, get(&callback, Some(&with_native))).await;
+    let callback = format!("{callback}&session_state=issuer-browser-session");
+    let (status, headers, _) = send(&app, get(&callback, Some(&with_native))).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(oauth_cookie(&headers).is_some());
 
     let weak = oidc_start(&app, &prefs, &csrf, false).await;
     let callback = issuer.callback(

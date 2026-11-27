@@ -1290,3 +1290,78 @@ async fn post_inputs_are_validated() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn external_email_requires_document_write_even_when_internal_notes_allow_a_reader() {
+    let h = harness_with(true).await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "external-email-reader", false).await;
+    let contact = partner(&mut tx, "Restricted contact").await;
+    let mine = tx.env().with_user(42);
+    let record = record_of(&mine, "res.partner", contact);
+    let err = erp_addon_mail::external_compose::send(
+        &mut tx,
+        &record,
+        erp_addon_mail::external_compose::Draft {
+            email_to: "customer@example.com",
+            subject: "Document",
+            body: "Please review.",
+            attachment_ids: Vec::new(),
+            document: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access);
+    assert!(
+        tx.query("SELECT id FROM mail_outgoing", &[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        tx.query("SELECT id FROM mail_message", &[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn document_email_templates_keep_document_names_literal_and_fields_editable() {
+    use erp_addon_mail::external_compose::document_text;
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    create(
+        &mut tx,
+        "mail.document.template",
+        RawVals::new()
+            .set_cell("code", text("test_invoice"))
+            .set_cell("name", text("Invoice"))
+            .set_cell("subject", text("Invoice {document}"))
+            .set_cell("body", text("{total} for {document}")),
+    )
+    .await;
+    let result = document_text(&mut tx, "test_invoice", None, "INV/{total}", "9.50")
+        .await
+        .unwrap();
+    assert_eq!(
+        result,
+        (
+            "Invoice INV/{total}".to_owned(),
+            "9.50 for INV/{total}".to_owned()
+        )
+    );
+    assert!(
+        document_text(&mut tx, "missing", None, "sample", "0")
+            .await
+            .is_err()
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

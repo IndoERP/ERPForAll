@@ -906,3 +906,44 @@ the original start tag's line and column. A missing compiler produces an explici
   </restricted_templates>
 </kanban>
 ```
+
+### Sending documents by email
+
+A user with write access to a business record can open **Email…** from its chatter, select contacts or enter email addresses, and attach files from that record. Internal notes and the Discuss composer have their own posting paths. Quotation and posted customer invoice forms offer **Send by Email** with a PDF from the document's installed report. **Preview PDF** retains the exact PDF bytes for that draft, report and language. Discard the draft and open a new one to render a changed document.
+
+Settings administrators can edit **Document Email Templates** under technical automation. The subject and body support the literal placeholders `{document}` and `{total}`. Their translatable fields use the contact's language when available. After enabling Indonesian, import the supplied `i18n/id_ID.po` catalogues from the sale and account_mail addons through the translation catalogue importer. The operator can change the subject and body before queuing. The queue keeps a copy of the approved message and attachments for each recipient.
+
+
+For a two-company SMTP acceptance run, use `python3 scripts/check-outgoing-documents.py --help`.
+The fixture needs a disposable ERP database with Sales and customer invoicing installed, a posted-invoice
+journal, two configured company relays pointing to separate local Mailpit instances, and `pdftotext`.
+It creates a quotation and a posted customer invoice, previews each PDF, and matches the received
+attachment byte-for-byte. It also changes the quotation after preview and checks both mailboxes for routing.
+
+### Discuss workspace
+
+Internal users can open **Discuss** from the application menu or expand quick chat using **Open workspace**. The workspace shares its current conversation and drafts with quick chat for the current session and active company. Choose **New message** and one colleague for a direct conversation, or select multiple colleagues and enter a group name. The **Saved** section lists individual messages the user bookmarked. **Notifications** opens the associated conversation or business record under the current user's access rights.
+
+### MCP client acceptance
+
+To exercise the delegated MCP endpoint with the official Python SDK, install `uv` and run
+`ERP_TEST_MCP_SDK=1 cargo test -p erp-cli --test human_attachment_content the_content_route_serves_readers`
+against the test PostgreSQL instance. The fixture uses separate requester and reviewer sessions,
+executes the approved action twice with one idempotency key, and checks immediate key revocation.
+
+### Browser acceptance against Keycloak
+
+Run `web/scripts/browser-oidc-keycloak.mjs` with the repository's Node toolchain against a disposable loopback ERP database and a separate local Keycloak realm. The ERP must have an internal Settings user and an HTTPS-backed OpenID Connect provider configured with remote signing keys. Register its exact callback in a confidential Keycloak client and create an external user with a password. Give the test's Keycloak administrator access to manage keys in the test realm.
+
+Pass a private mode-600 JSON file on standard input. It contains the ERP `origin`, `erpLogin` and `erpPassword`, the configured `issuer`, `clientId` and provider `label`, and the Keycloak `externalLogin`, `externalPassword`, `adminLogin` and `adminPassword`. Set `caFile` to the test CA's PEM and `serverCertFile` to the issuer's TLS certificate. The test checks code flow with S256, rotates a temporary RS256 signing key, checks the provider diagnostics, disables and enables SSO, and disconnects the test account. It removes the generated key afterward. Set `OIDC_OUTPUT` to an existing private directory to capture the provider status screen.
+
+```sh
+eval "$(scripts/web-toolchain.sh env)"
+node web/scripts/browser-oidc-keycloak.mjs < /private/fixture/oidc-input.json
+```
+
+### Communications backlog
+
+- External inbox. Ingest inbound email, deduplicate provider deliveries and route replies to an
+  authorized record thread. Discuss notifications already use the internal messaging store.
+- LDAP. Add directory sign-in and identity mapping with an explicit group and company policy.

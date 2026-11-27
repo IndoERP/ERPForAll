@@ -114,6 +114,8 @@ export interface ClientActionDescriptor { readonly id: number | null; readonly n
 export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   host: HTMLElement; panel: HTMLElement; controls: HTMLElement; rpc: RpcClient; companies: readonly Company[];
   run: (job: () => Promise<void>) => void; notice: (message: string) => void; messages: MessageServices; editorLocale: EditorLocale;
+  /** Mount the current session's Discuss controller into its installed workspace action. */
+  mountDiscuss?: (host: HTMLElement) => () => void;
   /** Active interactive identity for first-party, session-bound client actions. */
   readonly userId?: number; readonly currentCompanyId?: number; readonly csrfToken?: string;
   action: ClientActionDescriptor;

@@ -1638,3 +1638,42 @@ test("a chatter whose store holds an older schema renews it once and loads a thr
   expect(articles[0]!.textContent).toContain("Sales Order created");
   chatter.dispose();
 });
+
+test("Discuss keeps a focused message, draft and earlier history during wakes and targets the selected message actions", async () => {
+  let newest = [80, 81];
+  let snap = 20;
+  const context = { allowed_company_ids: [2] };
+  const call = vi.fn(async (model, method, args) => {
+    expect([model, method, args.context]).toEqual(["mail.store", "store_fetch", context]);
+    const older = args.topics.find((t: { name: string }) => t.name === "thread.messages");
+    const ids = older ? [older.params.before - 2, older.params.before - 1] : newest;
+    return {
+      store: answerPayload(++snap, { "mail.message": ids.map((id: number) => ({
+        id, body: `Message ${id}`, message_type: "comment", date: "2026-11-10 10:00:00", author_id: null,
+      })) }),
+      topics: [{ topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) }, older ?
+        { topic: "thread.messages", ok: true, data: { message_ids: ids, has_more_before: true } } :
+        { topic: "thread", ok: true, data: { messages: { message_ids: ids, has_more_before: true } } }],
+    };
+  });
+  const save = vi.fn(async () => "Message saved.");
+  const chatter = new Chatter({ host, rpc: { call } as unknown as RpcClient, context, recordId: 42, model: "res.partner",
+    conversation: { markRead: async () => {}, save, receipts: async () => "1 of 2 participants" } });
+  await vi.waitFor(() => expect(chatter.thread?.displayedIds()).toEqual([80, 81]));
+  const draft = chatter.composer!.field;
+  draft.value = "Send later"; draft.dispatchEvent(new Event("input")); draft.focus();
+  newest = [81, 83]; await chatter.refresh();
+  expect(chatter.thread!.displayedIds()).toEqual([80, 81, 83]);
+  expect(document.activeElement).toBe(draft); expect(draft.value).toBe("Send later");
+  await chatter.focusMessage(19);
+  expect(chatter.thread!.displayedIds()).toEqual([18, 19]);
+  expect(document.activeElement).toBe(chatter.thread!.message(19)?.element);
+  chatter.thread!.message(18)?.element.querySelector<HTMLButtonElement>('[data-action="discuss-save"]')?.click();
+  await vi.waitFor(() => expect(save).toHaveBeenCalledWith(18));
+  await chatter.refresh();
+  expect(chatter.thread!.displayedIds()).toEqual([18, 19]);
+  host.querySelector<HTMLButtonElement>(".erp-mail-jump-latest")!.click();
+  await vi.waitFor(() => expect(chatter.thread!.displayedIds()).toEqual([81, 83]));
+  expect(draft.value).toBe("Send later");
+  chatter.dispose();
+});

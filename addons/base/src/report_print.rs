@@ -352,6 +352,19 @@ fn runs_of(ids: &[i64], companies: Vec<Option<i64>>) -> Vec<(Option<i64>, Vec<i6
 /// profile, over a limit), data it cannot print, or records of several companies; the caller's
 /// `Access` refusal of a read; a database error.
 pub async fn prepare(tx: &mut Transaction, report: &PrintReport, ids: &[i64]) -> Result<DocTree> {
+    prepare_for_language(tx, report, ids, None).await
+}
+
+/// Prepare the approved document using an installed recipient language and the caller's rights.
+///
+/// # Errors
+/// Returns the same validation, database and access errors as [`prepare`].
+pub async fn prepare_for_language(
+    tx: &mut Transaction,
+    report: &PrintReport,
+    ids: &[i64],
+    language: Option<&str>,
+) -> Result<DocTree> {
     let company = match company_runs(tx, report, ids).await?.as_slice() {
         [] => tx.env().company_id()?,
         [(company, _)] => *company,
@@ -363,7 +376,7 @@ pub async fn prepare(tx: &mut Transaction, report: &PrintReport, ids: &[i64]) ->
             )));
         }
     };
-    let locale = locale(tx, report).await?;
+    let locale = locale(tx, report, language).await?;
     let program = compile(tx, report, &report.report_name, None, &locale.language).await?;
     let (_, mut documents) = evaluate_run(
         tx,
@@ -393,7 +406,7 @@ pub async fn prepare_runs(
     ids: &[i64],
 ) -> Result<Vec<DocTree>> {
     let runs = company_runs(tx, report, ids).await?;
-    let locale = locale(tx, report).await?;
+    let locale = locale(tx, report, None).await?;
     let mut program = compile(tx, report, &report.report_name, None, &locale.language).await?;
     let mut documents = Vec::with_capacity(runs.len());
     for (company, run) in runs {
@@ -467,7 +480,11 @@ struct Locale {
 ///
 /// `Validation` naming the report when the user's language is not installed, its formats are not
 /// printable or the user's timezone is unknown; a database error.
-async fn locale(tx: &mut Transaction, report: &PrintReport) -> Result<Locale> {
+async fn locale(
+    tx: &mut Transaction,
+    report: &PrintReport,
+    language: Option<&str>,
+) -> Result<Locale> {
     let uid = tx.env().user_id();
     let context = user_context(tx, uid).await?.ok_or_else(|| {
         Error::missing(format!(
@@ -476,7 +493,7 @@ async fn locale(tx: &mut Transaction, report: &PrintReport) -> Result<Locale> {
             uid.get()
         ))
     })?;
-    let code = context.lang();
+    let code = language.unwrap_or(context.lang());
     let rows = tx
         .query(
             "SELECT decimal_point, thousands_sep, grouping, date_format, time_format \

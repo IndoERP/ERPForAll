@@ -183,3 +183,63 @@ test("a record opened in the page from a client action keeps a link back to that
   expect(new URL(location.href).searchParams.get("id")).toBeNull();
   expect(new URL(location.href).pathname).toBe("/erp/action-30");
 });
+
+test("Discuss opens from the app menu without realtime and uses the active company for its action and conversations", async () => {
+  history.replaceState(null, "", "/erp/action-45?menu=12");
+  const requested: Array<{ path: string; params: Record<string, unknown> }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    const params = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requested.push({ path, params });
+    if (path.endsWith("erp_load_web_menus")) return json({
+      ...menus, roots: [12], nodes: [{ module: "mail", id: 12, parent_id: null, label: "Discuss", action_id: 45, action_kind: "client", children: [], icon: null }]
+    });
+    if (path.endsWith("erp_load_web_client_action")) return json({
+      wire_major: 1, result: { kind: "client", id: 45, name: "Discuss", tag: "mail.discuss", params: {} }
+    });
+    if (path.endsWith("conversation_search")) return json({ items: [], next: null });
+    return json([]);
+  }));
+  const root = host();
+  app = new HumanApp(root, {
+    ...bootstrap, companies: [...bootstrap.companies, { id: 2, name: "Jakarta" }],
+    allowed_company_ids: [1, 2], active_company_ids: [2], current_company_id: 2,
+  });
+  await app.start();
+  const workspace = root.querySelector<HTMLElement>("[data-client-content] .discuss-workspace");
+  expect(workspace?.hidden).toBe(false);
+  await vi.waitFor(() => expect(workspace?.textContent).toContain("No conversations found."));
+  for (const method of ["erp_load_web_client_action", "conversation_search"]) {
+    expect(requested.find(request => request.path.endsWith(method))?.params["context"]).toMatchObject({ allowed_company_ids: [2] });
+  }
+  app.dispose();
+  expect(document.querySelector(".discuss-workspace")).toBeNull();
+});
+
+test("expanding quick chat navigates to the authorized Discuss menu and keeps the same panel when returning home", async () => {
+  history.replaceState(null, "", "/erp");
+  const discussMenu = { module: "mail", id: 12, parent_id: null, label: "Discuss", action_id: 45, action_kind: "client", children: [], icon: null };
+  vi.stubGlobal("WebSocket", undefined);
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path.endsWith("erp_load_web_menus")) return json({ ...menus, roots: [12], nodes: [discussMenu] });
+    if (path.endsWith("erp_load_web_client_action")) return json({
+      wire_major: 1, result: { kind: "client", id: 45, name: "Discuss", tag: "mail.discuss", params: {} }
+    });
+    if (path.endsWith("conversation_search")) return json({ items: [], next: null });
+    return json([]);
+  }));
+  const root = host();
+  app = new HumanApp(root, { ...bootstrap, thread_reconnect_ms: [100, 800] });
+  await app.start();
+  root.querySelector<HTMLButtonElement>('[data-client-header] button[aria-label="Discuss"]')!.click();
+  const panel = root.querySelector<HTMLElement>("[data-client-header] .discuss-panel")!;
+  expect(panel.hidden).toBe(false);
+  panel.querySelector<HTMLInputElement>('[aria-label="Search conversations"]')!.value = "Purchasing";
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Open workspace"]')!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-client-content] .discuss-workspace")).toBe(panel));
+  expect(location.pathname).toBe("/erp/action-45");
+  expect(new URLSearchParams(location.search).get("menu")).toBe("12");
+  expect(panel.querySelector<HTMLInputElement>('[aria-label="Search conversations"]')!.value).toBe("Purchasing");
+  root.querySelector<HTMLButtonElement>("button.brand")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-client-header] .discuss-panel")).toBe(panel));
+  expect(panel.hidden).toBe(true);
+});

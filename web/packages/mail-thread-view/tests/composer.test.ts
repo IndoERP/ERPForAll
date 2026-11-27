@@ -2,7 +2,7 @@
 // The composer: draft, kind, send chords, the post DTO and the placement of its answer, failure with Retry, refusals.
 import { flushSync } from "@erpforall/elang";
 import { expect, test } from "vitest";
-import { MAX_PENDING, ThreadViewError } from "../src/index";
+import { forgetDraft, MAX_PENDING, ThreadViewError } from "../src/index";
 import { Rig, message, key, settle, type } from "./support";
 
 const ann = { "res.partner": [{ id: 1, name: "Ann" }, { id: 2, name: "Bob" }] };
@@ -566,4 +566,21 @@ test("the composer paperclip describes the upload limit through aria-describedby
   const id = attachBtn.getAttribute("aria-describedby")!;
   expect(composer.element.querySelector(`#${id}`)?.textContent).toBe("Each file can be up to 128 MiB.");
   expect(attachBtn.querySelector(`#${id}`)).toBeNull(); // next to the button: inside it the hint would be part of the button's name
+});
+
+test("a mounted chat window shares the attachment draft with a rebuilt workspace and dropping the draft clears both", () => {
+  const rig = new Rig();
+  const quick = rig.composer();
+  quick.attach({ id: 9, name: "plan.pdf" });
+  const workspace = rig.composer();
+  expect(workspace.buildPost().attachmentIds).toEqual([9]);
+  workspace.attach({ id: 11, name: "map.pdf" });
+  flushSync();
+  expect(quick.element.querySelector(".erp-mail-composer-attachments")?.textContent).toContain("map.pdf");
+  quick.removeAttachment(9);
+  expect(workspace.buildPost().attachmentIds).toEqual([11]);
+  quick.dispose();
+  workspace.dispose();
+  forgetDraft(rig.store, rig.ref);
+  expect(rig.composer().attachments).toEqual([]);
 });

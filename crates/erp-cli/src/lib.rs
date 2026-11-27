@@ -26,6 +26,7 @@ mod human;
 pub mod identity;
 mod live;
 mod mail_delivery;
+mod mail_outgoing;
 pub mod module;
 pub mod native_addons;
 pub mod node;
@@ -40,6 +41,7 @@ mod reporting_export;
 mod restricted_cards;
 pub mod scaffold;
 mod server_runtime;
+mod smtp;
 
 pub use args::{
     AccessAction, AccessArgs, AccessCommand, AddonAction, AddonBuildArgs, AddonCommand,

@@ -7,6 +7,8 @@ import { configureClientTemplates, systrayItems } from "./registry.js";
 import { registerBuiltinSystrayItems } from "./activity-menu.js";
 import { HumanApp } from "./app.js";
 import "./technical-sessions.js";
+import "./identity-provider.js";
+import "./mail-queue.js";
 import "./translation-catalog.js";
 import { el, errorMessage } from "./dom.js";
 import { guardSubmit, setSubmitBusy, togglePasswordReveal, updateCapsLockHint } from "./login.js";

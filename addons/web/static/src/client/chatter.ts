@@ -41,6 +41,12 @@ export interface ChatterOptions {
   readonly threadSocket?: { company: number; csrf: string; retry: readonly [number, number] };
   /** The RPC client to fetch store topics and post messages. */
   readonly rpc: RpcClient;
+  readonly context?: Record<string, unknown>;
+  readonly conversation?: {
+    markRead(id: number): Promise<void>;
+    save(id: number): Promise<string>;
+    receipts(id: number): Promise<string>;
+  };
   /** Optional shared tab messaging store. If omitted, a scoped store is created. */
   readonly store?: MessagingStore;
   /** Optional translator for labels and aria descriptions. */
@@ -52,6 +58,8 @@ export interface ChatterOptions {
   readonly reportError?: (error: unknown) => void;
   /** Reload the parent form when a message is posted (from the reload_on_post node attribute). */
   readonly reloadOnPost?: boolean;
+  /** Open an explicit external email draft for this saved record. */
+  readonly composeEmail?: () => void;
   /** Whether the model has activities (the `has_activities` flag of the node); only then the card and button exist. */
   readonly hasActivities?: boolean;
   /** Reload the parent form after an activity change (the `reload_on_activity` node attribute). */
@@ -194,12 +202,13 @@ async function uploadFile(
   ref: ThreadRef,
   method: "thread_upload" | "thread_attach",
   file: File,
-  active: () => boolean
+  active: () => boolean,
+  context?: Record<string, unknown>
 ): Promise<UploadedFile> {
   await checkAttachmentFile(rpc, file);
   if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
   const args = {
-    ids: [ref.id], name: file.name,
+    ids: [ref.id], name: file.name, ...(context ? { context } : {}),
     ...(file.type === "" ? {} : { mimetype: file.type }),
     data: await readFileAsBase64(file),
   };
@@ -248,6 +257,7 @@ export class Chatter {
   followers?: Followers;
   #pager?: ThreadPager;
   #ref?: ThreadRef;
+  #locate?: (id: number) => Promise<void>;
   private statusArea?: HTMLElement;
   private disposed = false;
   private stopRealtime?: () => void;
@@ -270,6 +280,8 @@ export class Chatter {
     }
 
     const ref: ThreadRef = { model: options.model, id: options.recordId };
+    const scoped = options.context ? { context: options.context } : {};
+    const chat = options.conversation;
     const reportError = options.reportError ?? ((err: unknown) => console.error(err));
     const store = options.store ?? getOrCreateStore(options.host, reportError);
     this.store = store;
@@ -339,6 +351,13 @@ export class Chatter {
     composerSlot.append(statusArea);
     const header = el("div", undefined, "erp-mail-chatter-header");
     const tools = el("div", undefined, "erp-mail-chatter-tools");
+    if (options.composeEmail && options.recordId !== undefined) {
+      const email = el("button", String((options.translate ?? defaultTranslate)("Email…")), "erp-chatter-btn");
+      email.type = "button";
+      email.setAttribute("aria-label", String((options.translate ?? defaultTranslate)("Compose external email")));
+      email.addEventListener("click", options.composeEmail);
+      tools.append(email);
+    }
     // Reserved for the planned-activities card: rendered only once the client pieces for activities exist.
     const activitiesSlot = el("div", undefined, "erp-mail-chatter-activities");
     activitiesSlot.hidden = true;
@@ -347,7 +366,7 @@ export class Chatter {
     skeleton.setAttribute("aria-hidden", "true");
     for (let i = 0; i < 3; i++) skeleton.append(el("div", undefined, "erp-mail-skeleton-row"));
     bodyArea.append(skeleton);
-    this.followers = new Followers({
+    if (!chat) this.followers = new Followers({
       rpc: options.rpc,
       store,
       model: options.model,
@@ -367,9 +386,26 @@ export class Chatter {
       activitiesSlot.append(this.activities.element);
       tools.append(this.activities.button);
     }
-    tools.append(topbarArea, this.followers.element);
+    tools.append(topbarArea);
+    if (this.followers) tools.append(this.followers.element);
     header.append(tools);
-    this.element.append(header, composerSlot, activitiesSlot, filesPanel, bodyArea, recordFileInput);
+    const jumpLatest = el("button", "Return to latest messages", "erp-mail-jump-latest");
+    jumpLatest.type = "button";
+    jumpLatest.hidden = true;
+    if (chat) {
+      this.element.classList.add("discuss-chatter");
+      this.element.append(bodyArea, jumpLatest, composerSlot);
+      statusArea.setAttribute("role", "status");
+      const feedback = async (action: Promise<string>) => {
+        const text = await action;
+        if (!this.disposed) statusArea.textContent = text;
+      };
+      const actions = registries.messageActions;
+      actions.remove("bookmark");
+      actions.add("discuss-save", { label: () => "Save message", glyph: "*", run: ({ message }) => feedback(chat.save(message.id)) }, { sequence: 80 });
+      actions.add("discuss-read", { label: () => "Mark read", glyph: "✓", run: ({ message }) => feedback(chat.markRead(message.id).then(() => "Marked as read.")) }, { sequence: 81 });
+      actions.add("discuss-receipts", { label: () => "Read receipts", glyph: "✓✓", run: ({ message }) => feedback(chat.receipts(message.id)) }, { sequence: 82 });
+    } else this.element.append(header, composerSlot, activitiesSlot, filesPanel, bodyArea, recordFileInput);
     options.host.append(this.element);
 
     const clearInline = (): void => {
@@ -624,7 +660,7 @@ export class Chatter {
           ...(options.timeZone ? { timeZone: options.timeZone } : {}),
           uploadLimitHint: () => attachmentLimitHint(options.rpc),
           uploadAttachment: async (file: File): Promise<AttachmentUploadResult> => {
-            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file, () => !this.disposed);
+            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file, () => !this.disposed, options.context);
             return {
               id: uploaded.id,
               name: uploaded.name,
@@ -636,15 +672,24 @@ export class Chatter {
         document: doc,
       };
 
-      this.composer = new Composer({ ...baseOptions, platform: "other" });
-      this.thread = new Thread({ ...baseOptions, order: "desc" });
+      this.composer = new Composer({ ...baseOptions, platform: "other", sendOnEnter: Boolean(chat) });
+      this.thread = new Thread({ ...baseOptions, order: chat ? "asc" : "desc" });
       skeleton.remove();
-      this.mountComposerChrome(header, composerSlot, this.composer, options.userName, doc);
+      if (chat) {
+        this.composer.setKind("message");
+        this.composer.field.placeholder = "Write a message…";
+        composerSlot.prepend(this.composer.element);
+      } else this.mountComposerChrome(header, composerSlot, this.composer, options.userName, doc);
       bodyArea.append(this.thread.element);
     };
 
     // Answers of overlapping loads arrive in any order: only the latest request may replace the thread state.
     let latestLoad = 0;
+    let reloadLatest = false;
+    jumpLatest.addEventListener("click", () => {
+      reloadLatest = true;
+      void pager.loadLatest(ref).catch(error => showInline(error));
+    });
     const pager: ThreadPager = {
       loadLatest: async (threadRef) => {
         const request = ++latestLoad;
@@ -653,10 +698,10 @@ export class Chatter {
           if (withSchema) topics.push({ name: "schema" });
           topics.push({
             name: "thread",
-            params: { model: threadRef.model, id: threadRef.id, messages: true, attachments: true, limit: 30 },
+            params: { model: threadRef.model, id: threadRef.id, messages: true, attachments: !chat, limit: 30 },
           });
           return requireRecord(
-            await options.rpc.call("mail.store", "store_fetch", { wire: 1, topics }),
+            await options.rpc.call("mail.store", "store_fetch", { wire: 1, topics, ...scoped }),
             "store_fetch"
           );
         };
@@ -682,16 +727,16 @@ export class Chatter {
           store.setSchema(typeof schemaTopic["data"] === "string" ? schemaTopic["data"] : JSON.stringify(schemaTopic["data"]));
         }
 
-        // Once schema is loaded, components can safely mount
-        if (store.generation !== null && (!this.composer || !this.thread)) {
-          mountComponents();
-        }
-
         const threadTopic = topicNamed("thread");
         if (!threadTopic) throw new ClientError("server", "store_fetch answered no thread topic");
         if (threadTopic["ok"] === false) {
           const err = threadTopic["error"] as { message?: string } | undefined;
           throw new ClientError("permission", err?.message ?? "You are not allowed to read this thread: it does not exist or you may not read it.");
+        }
+
+        // Once schema is loaded, components can safely mount
+        if (store.generation !== null && (!this.composer || !this.thread)) {
+          mountComponents();
         }
 
         const threadData = requireRecord(threadTopic["data"], "the thread topic");
@@ -700,7 +745,18 @@ export class Chatter {
         const attachmentsDoc = threadData["attachments"] as Record<string, unknown> | undefined;
 
         const result = applyStorePayload(store, storePayloadOf(res["store"], "store_fetch"), () => {
-          store.windows.replace(threadRef, ascending, hasOlder);
+          const held = store.windows.get(threadRef);
+          if (chat && !reloadLatest && held?.ids.length && held.hasNewer) {
+            jumpLatest.hidden = false;
+          } else {
+            // Keep the earlier, contiguous pages while reconciling deletions inside the latest page.
+            const first = ascending[0];
+            const keep = chat && !reloadLatest && first !== undefined && held?.ids.includes(first) && hasOlder
+              ? held.ids.filter(id => id < first) : [];
+            store.windows.replace(threadRef, [...keep, ...ascending], keep.length ? held!.hasOlder : hasOlder);
+            jumpLatest.hidden = true;
+            reloadLatest = false;
+          }
 
           if (typeof threadFacts?.["attachment_count"] === "number") {
             attachmentCount = threadFacts["attachment_count"];
@@ -735,36 +791,49 @@ export class Chatter {
         }
       },
 
-      loadOlder: async (threadRef, before) => {
-        const res = requireRecord(
-          await options.rpc.call("mail.store", "store_fetch", {
-            wire: 1,
-            topics: [
-              {
-                name: "thread.messages",
-                params: { model: threadRef.model, id: threadRef.id, before, limit: 30 },
-              },
-            ],
-          }),
-          "store_fetch"
-        );
+      loadOlder: (threadRef, before) => loadPage(threadRef, before, false),
+    };
+    const loadPage = async (threadRef: ThreadRef, before: number, locate: boolean): Promise<void> => {
+      const res = requireRecord(
+        await options.rpc.call("mail.store", "store_fetch", {
+          wire: 1, ...scoped,
+          topics: [
+            {
+              name: "thread.messages",
+              params: { model: threadRef.model, id: threadRef.id, before, limit: 30 },
+            },
+          ],
+        }),
+        "store_fetch"
+      );
 
-        if (this.disposed) return;
-        const messagesTopic = topicsOf(res)("thread.messages");
-        if (!messagesTopic) throw new ClientError("server", "store_fetch answered no thread.messages topic");
-        if (messagesTopic["ok"] === false) {
-          const err = messagesTopic["error"] as { message?: string } | undefined;
-          throw new ClientError("permission", err?.message ?? "You are not allowed to read this thread: it does not exist or you may not read it.");
-        }
+      if (this.disposed) return;
+      const messagesTopic = topicsOf(res)("thread.messages");
+      if (!messagesTopic) throw new ClientError("server", "store_fetch answered no thread.messages topic");
+      if (messagesTopic["ok"] === false) {
+        const err = messagesTopic["error"] as { message?: string } | undefined;
+        throw new ClientError("permission", err?.message ?? "You are not allowed to read this thread: it does not exist or you may not read it.");
+      }
 
-        const { ids: ascending, hasOlder } = messageIdsOf(messagesTopic["data"], "the older messages");
-        const result = applyStorePayload(store, storePayloadOf(res["store"], "store_fetch"), () => {
+      const { ids: ascending, hasOlder } = messageIdsOf(messagesTopic["data"], "the older messages");
+      const result = applyStorePayload(store, storePayloadOf(res["store"], "store_fetch"), () => {
+        if (locate) {
+          if (!ascending.includes(before - 1)) throw new ClientError("validation", "This message is no longer available.");
+          store.windows.replace(threadRef, ascending, hasOlder, true);
+        } else if (store.windows.get(threadRef)?.ids[0] === before) {
           store.windows.prependOlder(threadRef, ascending, hasOlder);
-        });
-        if (result.status !== "applied") {
-          throw new ClientError("server", `The older messages could not be added: the store answer was ${result.status}.`);
         }
-      },
+        jumpLatest.hidden = !chat || !store.windows.get(threadRef)?.hasNewer;
+      });
+      if (result.status !== "applied") {
+        throw new ClientError("server", `The older messages could not be added: the store answer was ${result.status}.`);
+      }
+    };
+    this.#locate = async id => {
+      if (!this.thread) await pager.loadLatest(ref);
+      if (this.disposed) return;
+      if (!this.thread?.message(id)) await loadPage(ref, id + 1, true);
+      if (!this.disposed) this.thread?.focusMessage(id);
     };
 
     const transport: ThreadTransport = {
@@ -775,7 +844,7 @@ export class Chatter {
             "thread_post",
             {
               ids: [threadRef.id],
-              post: postDto,
+              post: postDto, ...scoped,
             },
             { write: true }
           ),
@@ -821,6 +890,11 @@ export class Chatter {
     if (options.threadSocket && typeof WebSocket === "function") {
       this.stopRealtime = watchChatterThread(ref, options.threadSocket, () => pager.loadLatest(ref), error => showInline(error));
     }
+  }
+
+  /** Focus a saved or notified message, loading one bounded historical page when necessary. */
+  async focusMessage(id: number): Promise<void> {
+    await this.#locate?.(id);
   }
 
   /** Reload the thread and attachments from the server. */

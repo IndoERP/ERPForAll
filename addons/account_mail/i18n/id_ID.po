@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+msgid ""
+msgstr ""
+"Language: id_ID\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+#: model:mail.document.template,subject:account_mail.email_template_invoice
+msgid "Invoice {document}"
+msgstr "Faktur {document}"
+
+#: model:mail.document.template,body:account_mail.email_template_invoice
+msgid "Hello,\n\nPlease find attached your invoice {document} totaling {total}.\n\nBest regards,"
+msgstr "Halo,\n\nTerlampir faktur {document} dengan total {total}.\n\nSalam,"

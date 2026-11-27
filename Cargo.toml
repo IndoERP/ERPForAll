@@ -201,6 +201,8 @@ object_store = { version = "0.14", default-features = false, features = ["aws"] 
 # Stream adapters of that store (MIT; already in the graph through object_store and reqwest).
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+# SMTP envelope submission and MIME encoding (MIT), with mandatory TLS for remote relays.
+lettre = { version = "0.11.24", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 # Packages (erpaddon format; MIT).
 zip = { version = "9.1", default-features = false, features = ["deflate"] }
 # Spreadsheet download of the pivot view (MIT OR Apache-2.0). No optional features.

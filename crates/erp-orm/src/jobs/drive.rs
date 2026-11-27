@@ -579,6 +579,19 @@ impl JobRunner {
         // outage at startup must not strand retention until a process restart.
         let needs_core_schedules = self.admits_kind(&super::retention::history_retention_decl())
             || self.admits_kind(&super::retention::dead_expiry_decl());
+        // Elevated, attachment-only workers must not make the mail queue appear staffed.
+        // Drop also runs when the task panics or is aborted during shutdown.
+        struct ActiveLoop<'a>(&'a std::sync::atomic::AtomicU64);
+        impl Drop for ActiveLoop<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let _active_loop = needs_core_schedules.then(|| {
+            let counter = &self.inner.orm.shared.ordinary_job_runners;
+            counter.fetch_add(1, Ordering::Relaxed);
+            ActiveLoop(counter)
+        });
         let mut core_schedules_ready = !needs_core_schedules;
         // one more claim a notify interval after a wake-up covers the hints that were suppressed
         // inside that interval

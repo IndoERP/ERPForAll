@@ -3,15 +3,18 @@ summary = "Document chatter, private conversations, activities and message deliv
 category = "Productivity/Discuss"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.2.0"
+version = "1.4.0"
 depends = ["base"]
 data = [
     "security/ir.access.csv",
     "data/mail_message_subtype_data.xml",
     "data/mail_activity_type_data.xml",
     "views/mail_activity_views.xml",
+    "views/discuss_workspace.xml",
     "views/res_partner_views.xml",
     "views/res_company_views.xml",
     "views/res_users_views.xml",
     "views/technical_views.xml",
+    "views/external_compose.xml",
+    "views/smtp_relay.xml",
 ]

@@ -86,6 +86,7 @@ export class RecordForm {
     /** Signed-in user id (chatter followers). */
     uid?: number;
     userName?: string;
+    composeEmail?: () => void;
     run(job: () => Promise<void>): void; report(error: unknown): void;
     openRecord(model: string, id: number): Promise<void>;
     /** The page's cached view loader, handed to the field widgets (a relation dialog, the lines of a one2many). */
@@ -429,6 +430,7 @@ export class RecordForm {
         model: state.model,
         recordId: state.id,
         rpc: this.env.rpc,
+        ...(this.env.composeEmail && state.model !== "discuss.channel" ? { composeEmail: this.env.composeEmail } : {}),
         store: this.env.messagingStore,
         reportError: this.env.report,
         reloadOnPost: node.reloadOnPost,

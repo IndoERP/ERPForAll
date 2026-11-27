@@ -1062,6 +1062,24 @@ async fn acceptance() {
         r#"{"jsonrpc":"2.0","id":22,"method":"tools/list"}"#,
     );
     assert_eq!(retired.status, 401);
+    if std::env::var_os("ERP_TEST_MCP_SDK").is_some() {
+        let mut child = Command::new("uv")
+            .arg("run")
+            .arg("--script")
+            .arg(source.parent().unwrap().join("scripts/check-mcp-client.py"))
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let fixture = json!({
+            "port":port, "database":db.name(), "owner":one, "reviewer":admin,
+            "login":"content-reader-one", "password":"fixture-content-reader", "user":one_id, "company":main
+        });
+        serde_json::to_writer(child.stdin.take().unwrap(), &fixture).unwrap();
+        assert!(
+            child.wait().unwrap().success(),
+            "official MCP client acceptance failed"
+        );
+    }
     let local_alias = |target: i64| {
         let created = call(
             &admin,

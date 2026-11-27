@@ -59,6 +59,15 @@ const mount = (rpc: RpcClient, extra: Partial<ConstructorParameters<typeof Chatt
 const alertText = (): string => host.querySelector(".erp-mail-chatter-error")?.textContent ?? "";
 const path = (p: unknown): string => String(p);
 
+test("external email opens an explicit draft without posting to the thread", () => {
+  const composeEmail = vi.fn();
+  const rpc = new RpcClient(async () => threadAnswer(), () => {});
+  const chatter = mount(rpc, { composeEmail });
+  host.querySelector<HTMLButtonElement>('button[aria-label="Compose external email"]')!.click();
+  expect(composeEmail).toHaveBeenCalledTimes(1);
+  chatter.dispose();
+});
+
 // A malformed store_fetch answer fails loudly instead of showing defaults (a parameterised test carries no SPEC tag).
 test.each([
   ["no topics list", () => json({ store: payload({}) }), "no topics list"],
