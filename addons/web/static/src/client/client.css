@@ -3534,27 +3534,234 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .list-group-page-count { margin-inline: var(--list-cell-x); font-variant-numeric: tabular-nums; }
 .list-table tbody tr.list-group-row > td.list-number { padding: 0 var(--list-cell-x); }
 
-/* Declarative list dashboard: compact controls and values on the existing office surface. */
-.dashboard-strip { margin: 0 var(--list-page-gutter) 12px; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
-.dashboard-controls { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-.dashboard-controls select { max-width: 100%; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-control); padding: 4px 8px; }
-.dashboard-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
-.dashboard-count, .dashboard-kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 12px; text-align: left; color: var(--text); background: var(--surface-subtle); border: 1px solid var(--line); border-radius: var(--radius-control); min-width: 0; }
+/* Declarative list dashboard: scannable metric cards with semantic icon badges and inline period picker. */
+.dashboard-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 4px var(--list-page-gutter) 16px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.dashboard-strip[hidden] { display: none; }
+.dashboard-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 176px), 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+.dashboard-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+}
+.dashboard-period-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--motion-fast) ease-out, background-color var(--motion-fast) ease-out;
+}
+.dashboard-period-field:hover {
+  border-color: var(--input-line);
+  background: var(--hover);
+}
+.dashboard-period-field:focus-within {
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.dashboard-period-icon {
+  position: absolute;
+  inset-inline-start: 11px;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.dashboard-period-caret {
+  position: absolute;
+  inset-inline-end: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.dashboard-controls select {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 100%;
+  min-height: 38px;
+  padding: 6px 32px 6px 34px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+}
+.dashboard-controls select::picker-icon { display: none; }
+.dashboard-controls select:disabled { opacity: .6; cursor: default; }
+.dashboard-count, .dashboard-kpi {
+  --dash-fg: var(--muted);
+  --dash-bg: var(--surface-subtle);
+  --dash-line: var(--line);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 16px;
+  text-align: start;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  transition: border-color var(--motion-fast) ease-out, background-color var(--motion-fast) ease-out, box-shadow var(--motion-fast) ease-out;
+}
 .dashboard-count { white-space: normal; } /* a long translated label wraps inside its card */
-.dashboard-count:hover { background: var(--hover); }
-.dashboard-count:active, .dashboard-count[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
+.dashboard-kpi, .dashboard-count[data-role="info"] {
+  --dash-fg: var(--accent);
+  --dash-bg: var(--selected);
+  --dash-line: var(--selected-line);
+}
+.dashboard-count[data-role="success"] {
+  --dash-fg: var(--success);
+  --dash-bg: var(--success-bg);
+  --dash-line: var(--success-line);
+}
+.dashboard-count[data-role="warning"] {
+  --dash-fg: var(--warning);
+  --dash-bg: var(--warning-bg);
+  --dash-line: var(--warning-line);
+}
+.dashboard-count[data-role="danger"] {
+  --dash-fg: var(--danger);
+  --dash-bg: var(--danger-bg);
+  --dash-line: var(--danger-line);
+}
+.dashboard-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--dash-bg);
+  color: var(--dash-fg);
+  border: 1px solid var(--dash-line);
+}
+.dashboard-icon > svg { width: 19px; height: 19px; }
+.dashboard-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.dashboard-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.dashboard-value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dashboard-change {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.dashboard-change:empty { display: none; }
+.dashboard-count:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--dash-line);
+  box-shadow: 0 0 0 1px var(--dash-line), var(--shadow-sm);
+}
+.dashboard-count:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.dashboard-count:active:not(:disabled),
+.dashboard-count[aria-pressed="true"] {
+  background: var(--dash-bg);
+  border-color: var(--dash-fg);
+  box-shadow: 0 0 0 1px var(--dash-fg);
+}
+.dashboard-count[aria-pressed="true"] .dashboard-icon {
+  background: var(--surface);
+  border-color: var(--dash-fg);
+}
+.dashboard-count[aria-pressed="true"] .dashboard-label {
+  color: var(--dash-fg);
+  font-weight: 700;
+}
 .dashboard-count:disabled { opacity: .65; cursor: default; }
-.dashboard-value { font-size: 20px; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.dashboard-label { font-weight: 500; overflow-wrap: anywhere; }
-.dashboard-change, .dashboard-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.dashboard-count[data-role="info"] .dashboard-label { color: var(--accent); }
-.dashboard-count[data-role="success"] .dashboard-label { color: var(--success); }
-.dashboard-count[data-role="warning"] .dashboard-label { color: var(--warning); }
-.dashboard-count[data-role="danger"] .dashboard-label { color: var(--danger); }
-.dashboard-status[role="alert"] { color: var(--danger); display: flex; gap: 8px; align-items: center; }
-
-.dashboard-count[aria-pressed="true"] .dashboard-label { text-decoration: underline; font-weight: 600; }
-@media (max-width: 700px) { .dashboard-controls select, .dashboard-status button { min-height: 44px; } }
+.dashboard-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.dashboard-status:empty { display: none; }
+.dashboard-status[role="alert"] {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+@media (max-width: 820px) {
+  .dashboard-strip {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}
+@media (max-width: 700px) {
+  .dashboard-strip { margin-block: 4px 12px; }
+  .dashboard-items {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr));
+    gap: 8px;
+  }
+  .dashboard-count, .dashboard-kpi {
+    min-height: 56px;
+    padding: 10px 12px;
+    gap: 10px;
+  }
+  .dashboard-icon { width: 34px; height: 34px; border-radius: 8px; }
+  .dashboard-icon > svg { width: 16px; height: 16px; }
+  .dashboard-value { font-size: 19px; }
+  .dashboard-controls select, .dashboard-status button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-count, .dashboard-kpi, .dashboard-period-field { transition: none; }
+}
 
 /*
   Kanban cards, ungrouped: a grid that fills the width, one bordered card per record; the tile stands where

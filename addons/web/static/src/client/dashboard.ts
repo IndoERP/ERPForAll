@@ -2,6 +2,7 @@
 import type { Field } from "./metadata.js";
 import { ClientError } from "./transport.js";
 import { button, el, errorMessage } from "./dom.js";
+import { icon, type IconName } from "./icons.js";
 import { decodeAst, parseBoundedJson } from "../../../../../web/packages/expr/src/index.js";
 export interface DashboardMetric {
   kind: "count" | "kpi";
@@ -116,6 +117,33 @@ export function dropAbsentDashboardFilters(params: URLSearchParams, known: Reado
   if (kept.length) params.set("search_filters", JSON.stringify(kept)); else params.delete("search_filters");
 }
 
+/** Choose a shipped decorative Lucide glyph for a declarative dashboard metric. */
+export function dashboardMetricIcon(item: DashboardMetric): IconName {
+  if (item.kind === "kpi") return "trending-up";
+  const key = `${item.name} ${item.label}`.toLowerCase().replace(/_/g, " ");
+  if (/\b(quotation|quotations|rfq|rfqs)\b/.test(key)) return "file-text";
+  if (/\b(sales?|order)\b/.test(key) && !/\bpurchase\b/.test(key)) return "shopping-bag";
+  if (/\bpurchase\b/.test(key)) return "shopping-cart";
+  if (/\b(invoice|invoices|bill|bills)\b/.test(key)) return "receipt-text";
+  if (/\b(unpaid|overdue|payment|due)\b/.test(key)) return "wallet";
+  if (/\b(approve|approval)\b/.test(key)) return "clipboard-check";
+  if (/\b(ready|shipment|delivery|picking|transfer)\b/.test(key)) return "package";
+  if (/\b(waiting|pending)\b/.test(key)) return "clock";
+  if (/\b(draft|drafts)\b/.test(key)) return "notebook-pen";
+  if (/\b(barcode|scan)\b/.test(key)) return "scan-barcode";
+  if (/\b(progress|open)\b/.test(key)) return "timer";
+  if (/\b(todo|to do)\b/.test(key)) return "list-todo";
+  if (/\b(pass|passed)\b/.test(key)) return "shield-check";
+  if (/\b(fail|failed|cancel|cancelled|reject|rejected)\b/.test(key)) return "shield";
+  if (/\b(posted|done|complete|completed)\b/.test(key)) return "badge-check";
+  if (/\bbook/.test(key)) return item.color === "success" ? "book-open" : "book";
+  if (item.color === "success") return "badge-check";
+  if (item.color === "warning") return "clock";
+  if (item.color === "danger") return "shield";
+  if (item.color === "info") return "file-text";
+  return "layers";
+}
+
 export function mountDashboard(options: {
   config: DashboardConfig;
   read: (domain: unknown[], period: string) => Promise<unknown>;
@@ -126,14 +154,21 @@ export function mountDashboard(options: {
   const element = el("section", undefined, "dashboard-strip");
   element.setAttribute("aria-label", "Dashboard");
   const controls = el("div", undefined, "dashboard-controls"),
+    periodField = el("div", undefined, "dashboard-period-field"),
+    periodIcon = icon("calendar"),
+    periodCaret = icon("chevron-down"),
     select = document.createElement("select");
+  periodIcon.classList.add("dashboard-period-icon");
+  periodCaret.classList.add("dashboard-period-caret");
+  select.className = "dashboard-period-select";
   select.setAttribute("aria-label", "Dashboard period");
   select.disabled = true;
-  controls.append(select);
+  periodField.append(periodIcon, select, periodCaret);
+  controls.append(periodField);
   const cells = el("div", undefined, "dashboard-items"),
     status = el("div", undefined, "dashboard-status");
   status.setAttribute("role", "status");
-  element.append(controls, cells, status);
+  element.append(cells, controls, status);
   const handles = options.config.items.map((item) => {
     const cell =
       item.kind === "count"
@@ -148,10 +183,15 @@ export function mountDashboard(options: {
         : el("div", undefined, "dashboard-kpi");
     if (item.color) cell.dataset["role"] = item.color;
     cell.dataset["dashboardItem"] = item.name;
-    const value = el("strong", "—", "dashboard-value"),
+    const iconBadge = el("span", undefined, "dashboard-icon");
+    iconBadge.setAttribute("aria-hidden", "true");
+    iconBadge.append(icon(dashboardMetricIcon(item)));
+    const body = el("span", undefined, "dashboard-body"),
       label = el("span", item.label, "dashboard-label"),
+      value = el("strong", "—", "dashboard-value"),
       change = el("span", undefined, "dashboard-change");
-    cell.replaceChildren(value, label, change);
+    body.append(label, value, change);
+    cell.replaceChildren(iconBadge, body);
     cells.append(cell);
     if (cell instanceof HTMLButtonElement) {
       cell.disabled = true;

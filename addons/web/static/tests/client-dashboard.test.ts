@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, expect, test, vi } from "vitest";
-import { dropAbsentDashboardFilters, readDashboard, mountDashboard } from "../src/client/dashboard.js";
+import { dashboardMetricIcon, dropAbsentDashboardFilters, readDashboard, mountDashboard } from "../src/client/dashboard.js";
 import { SearchModel } from "../src/client/search/search-model.js";
 import type { Field } from "../src/client/metadata.js";
 const field: Field = {name:"name",kind:"char",label:"Name",required:false,readonly:false,selection:null,relation:null,relationField:null};
@@ -98,5 +98,54 @@ test("dashboard moves focus to the first card after Retry succeeds, and to the n
   mode="ok";retry().focus();retry().click();
   await vi.waitFor(()=>expect(dashboard.element.querySelector("[role=alert]")).toBeNull());
   expect(document.activeElement).toBe(dashboard.element.querySelector("button[data-dashboard-item]"));
+  dashboard.dispose();
+});
+
+test("dashboard cards render decorative semantic icons and period selector icons", async () => {
+  const multiConfig = readDashboard(
+    {
+      version: 1,
+      revision: "b".repeat(64),
+      items: [
+        { kind: "count", name: "quotations", label: "Quotations", domain: null, filter: "draft", color: "info" },
+        { kind: "count", name: "sales", label: "Sales Orders", domain: null, filter: "sales", color: "success" },
+        { kind: "count", name: "to_invoice", label: "To Invoice", domain: null, filter: "to_invoice", color: "warning" },
+        { kind: "count", name: "fail", label: "Failed", domain: null, filter: "fail", color: "danger" },
+      ],
+    },
+    new Map(),
+    "sale.order",
+  );
+  expect(dashboardMetricIcon(multiConfig.items[0]!)).toBe("file-text");
+  expect(dashboardMetricIcon(multiConfig.items[1]!)).toBe("shopping-bag");
+  expect(dashboardMetricIcon(multiConfig.items[2]!)).toBe("receipt-text");
+  expect(dashboardMetricIcon(multiConfig.items[3]!)).toBe("shield");
+  expect(dashboardMetricIcon({ kind: "kpi", name: "pages", label: "Pages added", color: null })).toBe("trending-up");
+
+  const dashboard = mountDashboard({
+    config: multiConfig,
+    read: async () => ({
+      version: 1,
+      hidden: false,
+      revision: multiConfig.revision,
+      period: "week",
+      periods: [{ id: "week", label: "Last 7 days", kind: "rolling", days: 7 }],
+      values: [
+        { name: "quotations", value: "3", domain: [["state", "=", "draft"]] },
+        { name: "sales", value: "17", domain: [["state", "=", "sale"]] },
+        { name: "to_invoice", value: "3", domain: [["invoice_status", "=", "to invoice"]] },
+        { name: "fail", value: "0", domain: [["state", "=", "fail"]] },
+      ],
+    }),
+    apply: () => {},
+    selected: () => false,
+  });
+  document.body.append(dashboard.element);
+  await dashboard.refresh([]);
+
+  const icons = [...dashboard.element.querySelectorAll(".dashboard-icon > svg")].map((el) => el.getAttribute("data-icon"));
+  expect(icons).toEqual(["file-text", "shopping-bag", "receipt-text", "shield"]);
+  expect(dashboard.element.querySelector(".dashboard-period-icon")?.getAttribute("data-icon")).toBe("calendar");
+  expect(dashboard.element.querySelector(".dashboard-period-caret")?.getAttribute("data-icon")).toBe("chevron-down");
   dashboard.dispose();
 });

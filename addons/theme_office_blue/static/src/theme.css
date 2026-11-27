@@ -523,28 +523,32 @@
   background: var(--surface-subtle);
 }
 
-/* Workflow counters sit in a single strip with a visibly selected filter. */
+/* Workflow counters sit in a clean flat strip matching the Office Blue hairline aesthetic. */
 :root[data-office-theme="office-blue"] .dashboard-strip {
-  padding: 8px;
+  padding: 0;
 }
 :root[data-office-theme="office-blue"] .dashboard-items {
-  gap: 4px;
+  gap: 10px;
 }
-:root[data-office-theme="office-blue"] :is(.dashboard-count, .dashboard-kpi) {
-  padding: 8px 12px;
-  border-color: transparent;
+:root[data-office-theme="office-blue"] :is(.dashboard-count, .dashboard-kpi, .dashboard-period-field) {
+  border-color: var(--line);
+  border-radius: var(--radius-panel);
   background: var(--surface);
+  box-shadow: none;
 }
 :root[data-office-theme="office-blue"] .dashboard-count:hover:not(:disabled) {
-  background: var(--hover);
+  border-color: var(--dash-line, var(--selected-line));
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--dash-line, var(--selected-line));
 }
 :root[data-office-theme="office-blue"] .dashboard-count:is(:active:not(:disabled), [aria-pressed="true"]) {
-  border-color: var(--selected-line);
-  background: var(--selected);
+  border-color: var(--dash-fg, var(--selected-line));
+  background: var(--dash-bg, var(--selected));
+  box-shadow: 0 0 0 1px var(--dash-fg, var(--selected-line));
 }
 :root[data-office-theme="office-blue"] .dashboard-value {
-  font-weight: 600;
-  line-height: 1.25;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 /* Shared record forms for invoices, transfers, purchase orders and sales orders. */
