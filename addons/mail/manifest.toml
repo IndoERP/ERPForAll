@@ -3,7 +3,7 @@ summary = "Document chatter, private conversations, activities and message deliv
 category = "Productivity/Discuss"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.4.0"
+version = "1.5.0"
 depends = ["base"]
 data = [
     "security/ir.access.csv",

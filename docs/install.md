@@ -27,7 +27,7 @@ Three flags help while you work on the checkout:
 
 Everything it owns is under `~/.erpforall/local` (`private/` holds the mode 600 URL files, the generated
 `admin-password` and `server.toml`). It installs these modules with demo data, in one command, after the base:
-`contacts hr account account_reporting stock sale sale_management purchase sale_stock purchase_stock account_mail
+`contacts approvals hr account account_reporting stock sale sale_management purchase sale_stock purchase_stock account_mail
 purchase_mail stock_mail product_mail`. The rest of this guide is the manual route, for a setup of your own (other
 paths, a PostgreSQL server you manage, a different module list); it is also what the script does, step by step.
 

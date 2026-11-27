@@ -572,7 +572,9 @@ pub mod __private {
     };
     // Reserved bridge for base's framework-owned hierarchy fence (not an addon API).
     #[cfg(feature = "__base-core-ddl")]
-    pub use erp_orm::{CoreTableRequirement, base_check_write_fields, core_ddl};
+    pub use erp_orm::{
+        BASE_MODEL_VIEWS, BaseModelView, CoreTableRequirement, base_check_write_fields, core_ddl,
+    };
     pub use erp_registry::{
         AddonDescriptor, CompanyAccessDecl, CompanyBranch, CompanyMatch, DEFAULT_TRACKING_SEQUENCE,
         EmptyCompany, ExclusionDecl, FieldDecl, GENERATED_INPUT_ADAPTER_DECLS,

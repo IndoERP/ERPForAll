@@ -1546,6 +1546,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "erp-addon-approvals"
+version = "0.1.0"
+dependencies = [
+ "erp-sdk",
+]
+
+[[package]]
 name = "erp-addon-barcodes"
 version = "0.1.0"
 dependencies = [
@@ -2114,16 +2121,17 @@ version = "0.1.0"
 dependencies = [
  "addon-acceptance_notes",
  "base64 0.23.1",
+ "bytes",
  "clap",
+ "csv",
  "deadpool-postgres",
  "erp-addon-account",
  "erp-addon-account-mail",
  "erp-addon-account-reporting",
  "erp-addon-ai-base",
  "erp-addon-analytic",
- "bytes",
+ "erp-addon-approvals",
  "erp-addon-barcodes",
- "csv",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
  "erp-addon-delivery",
@@ -2565,6 +2573,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "multer",
  "rustix",
  "serde",
  "serde_json",
@@ -2573,7 +2582,6 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror",
- "multer",
  "tokio",
  "tokio-postgres",
  "tokio-tungstenite",
@@ -4575,14 +4583,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multiversion_no_op"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
-
-[[package]]
-name = "mutate_once"
-[[package]]
 name = "multer"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4599,6 +4599,14 @@ dependencies = [
  "version_check",
 ]
 
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
+
+[[package]]
+name = "mutate_once"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"

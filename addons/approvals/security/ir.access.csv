@@ -1,0 +1,6 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_workflow_admin,Manage approval workflows,approvals.model_approval_workflow,base.group_system,crud,
+access_workflow_step_admin,Manage workflow steps,approvals.model_approval_workflow_step,base.group_system,crud,
+access_request_reader,Read visible approval requests,base.model_approval_request_view,base.group_user,r,
+access_request_history_reader,Read visible approval steps,base.model_approval_request_stage,base.group_user,r,
+access_request_scope_reader,Read personal approval scopes,base.model_approval_request_scope,base.group_user,r,

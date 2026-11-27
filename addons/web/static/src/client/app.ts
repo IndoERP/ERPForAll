@@ -14,7 +14,7 @@ import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
 import { MessageServices } from "./messages.js";
 import { noContentHelp } from "./message-widgets.js";
-import { openApproval, waitForApproval } from "./approval.js";
+import { waitForApproval } from "./approval.js";
 import { ErrorDialog } from "./error-dialog.js";
 import { ClientErrorReporter, type ReportKind } from "./client-report.js";
 import { MobileDrawer } from "./mobile-drawer.js";
@@ -61,7 +61,7 @@ import { RecordState, specification } from "./record.js";
 import { parseRoute, routeUrl, rpcId, type Route, isAddressSizeRefusal } from "./route.js";
 import "./services.js";
 import { type ServiceController } from "./services.js";
-import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle, type ListHeaderHandle } from "./registry.js";
+import { clientActionRedirects, clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle, type ListHeaderHandle } from "./registry.js";
 import { mountControlPanel } from "./control-panel.js";
 import { loadPrintReports, printDropdown, printRecords, type PrintableReport } from "./report-print.js";
 import { listDataMenu, MAX_EXPORT_RECORDS } from "./list-data-menu.js";
@@ -419,11 +419,12 @@ export class HumanApp {
     this.loading = requestLoading(host);
     this.rpc = new RpcClient(window.fetch.bind(window), () => this.expire(), () => this.loading.begin(), model => {
       if (invalidatesMetadata(model)) { this.metadata.clear(); this.methodActions.clear(); }
+      if (model === "approval.request.view") document.dispatchEvent(new Event("erp:activities-changed"));
     }, (event, options) => {
       if (this.expired || this.lifetime.signal.aborted) return;
       this.panelRecovery.observe(event, options);
       this.messages.network.observe(event, options);
-    }, id => waitForApproval(this.messages.dialogs, this.rpc, id, this.lifetime.signal));
+    }, id => waitForApproval(this.messages.dialogs, this.rpc, id, this.lifetime.signal, this.approvalsMenu() !== undefined));
     this.listenForMenuIntent();
     initializeAttachmentPolicy(this.rpc, bootstrap["attachment_limits"], bootstrap["rpc_body_bytes"]);
 
@@ -698,6 +699,8 @@ export class HumanApp {
       report: err => this.reportError(err),
       messages: this.messages,
       openActivities: action => this.openActivities(action),
+      ...(this.approvalsMenu() ? { openApprovals: () => this.openApprovals() } : {}),
+      ...(this.threadReconnect ? { discussNotifications: this.getDiscuss().notifications } : {}),
       navigate: systrayNavigation.navigate,
       openAction: systrayNavigation.openAction
     };
@@ -1050,7 +1053,7 @@ export class HumanApp {
     approvalBtn.addEventListener("click", () => {
       this.userDropdownOpen = false;
       userDropdown.classList.remove("open");
-      openApproval(this.messages.dialogs, this.rpc, this.lifetime.signal);
+      this.run(() => this.openApprovals());
     });
 
     const customUserMenuContainer = el("div", undefined, "user-dropdown-custom-items");
@@ -1087,7 +1090,7 @@ export class HumanApp {
       this.openCommandPalette();
     });
     const divider = (): HTMLElement => { const rule = el("div", undefined, "user-menu-divider"); rule.setAttribute("role", "separator"); return rule; };
-    userDropdown.append(userInfo, divider(), shortcutsBtn, preferencesBtn, approvalBtn, customUserMenuContainer, divider(), logoutForm);
+    userDropdown.append(userInfo, divider(), shortcutsBtn, preferencesBtn, ...(this.approvalsMenu() ? [approvalBtn] : []), customUserMenuContainer, divider(), logoutForm);
     for (const row of userDropdown.querySelectorAll<HTMLElement>(".user-menu-row")) row.setAttribute("role", "menuitem");
     userDropdown.setAttribute("role", "menu");
     userDropdown.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -1279,7 +1282,6 @@ export class HumanApp {
       // A cosmetic choice never stops the application from starting: a failed read is reported and the device preference stays.
       await this.applyUserColorScheme();
       if (this.lifetime.signal.aborted) return;
-      this.renderHeader(this.headerBootstrap);
     }
     const menuResponse = await this.rpc.call("ir.ui.menu", "erp_load_web_menus", { context: this.context }, { signal: this.lifetime.signal });
     if (this.lifetime.signal.aborted) return;
@@ -1305,6 +1307,8 @@ export class HumanApp {
     for (const id of array(response["roots"], "menu roots")) {
       this.rootMenuIds.push(integer(id, "root menu"));
     }
+
+    if (resolveTheme || this.approvalsMenu()) this.renderHeader(this.headerBootstrap);
 
     // Settings identity ties follow server order, independent of a personal home-menu reorder.
     this.settingsRootMenuIds = [...this.rootMenuIds];
@@ -2372,6 +2376,46 @@ export class HumanApp {
     const inFlight = new Promise<void>(resolve => { settle = resolve; });
     this.navigationInFlight = inFlight;
     try {
+      const requestedRoute = route;
+      let persistedClient: ClientResult | undefined;
+      let persistedWindow: Record<string, unknown> | undefined;
+      const loadWindow = async (id: number): Promise<Record<string, unknown>> => this.windowAction(id).catch((error: unknown) => {
+        throw options?.showRefusedPage !== false && isActionRefusal(error) ? new RefusedAction() : error;
+      });
+      if (route.action && !route.method_action) {
+        const id = rpcId(route.action);
+        if (this.isClientRoute(route)) persistedClient = await this.loadClientAction(id);
+        else if ([...this.menus.values()].some(menu => menu.action === id) || this.metadata.peek(this.bundleKey(id))) {
+          persistedWindow = await loadWindow(id);
+        } else {
+          // Numeric bookmarks without a matching menu carry no action type. The server resolves their
+          // shared action key and returns only the metadata authorized by the concrete action loader.
+          const metadataGeneration = this.metadata.generation;
+          const bundle = object(await this.rpc.call("ir.actions.act_window", "erp_load_web_action_views",
+            { ids: [id], wire_major: 1, options: { mobile: false }, context: this.context, bookmark: true })
+            .catch((error: unknown) => {
+              throw options?.showRefusedPage !== false && isActionRefusal(error) ? new RefusedAction() : error;
+            }));
+          if ("result" in bundle) {
+            const result = actionResult(bundle);
+            if (result.kind !== "client" || result.id !== id) throw new ClientError("server", "Mismatched client action.");
+            persistedClient = result;
+          } else {
+            const admitted = this.admitBundle(bundle, id, metadataGeneration);
+            this.metadata.seed(this.bundleKey(id), admitted, metadataGeneration);
+            persistedWindow = object(admitted["action"]);
+          }
+        }
+        if (persistedClient && clientActionRedirects.has(persistedClient.tag)) {
+          const redirect = clientActionRedirects.get(persistedClient.tag);
+          route = await redirect({ route, rpc: this.rpc, context: this.context, signal: this.lifetime.signal });
+          if (!route.action || route.action === requestedRoute.action || route.method_action) {
+            throw new ClientError("validation", "Invalid destination for a retired client action.");
+          }
+          persistedWindow = await loadWindow(rpcId(route.action));
+          persistedClient = undefined;
+        }
+      }
       const staging = el("div");
       let nextRecord: RecordState | undefined;
       let nextService: ServiceController | undefined;
@@ -2384,10 +2428,10 @@ export class HumanApp {
       if (!route.action) {
         this.homeMenuOpen = false;
         staging.append(el("h1", "Apps", "visually-hidden"), this.buildHomeContent());
-      } else if (this.isClientRoute(route)) {
+      } else if (persistedClient || !persistedWindow && this.isClientRoute(route)) {
         this.homeMenuOpen = false;
         this.pendingClient = undefined;
-        const mountedClient = await this.mountClientAction(route, staging, generation, stagedDisposers);
+        const mountedClient = await this.mountClientAction(route, staging, generation, stagedDisposers, persistedClient);
         panelDispose = mountedClient.panelDispose;
         nextService = mountedClient.service;
         nextDispose = mountedClient.dispose;
@@ -2399,7 +2443,7 @@ export class HumanApp {
         if (entry && entry.origin.action !== route.action) throw new ClientError("validation", "Related action does not belong to this route.");
         const action: Record<string, unknown> = entry
           ? { ...entry.result, wire_major: 1, target: "current", id: rpcId(route.action) }
-          : await this.windowAction(actionId).catch((error: unknown) => { throw options?.showRefusedPage !== false && isActionRefusal(error) ? new RefusedAction() : error; });
+          : persistedWindow ?? await loadWindow(actionId);
         if (action["wire_major"] !== 1 || action["target"] !== "current" || action["id"] !== rpcId(route.action)) {
           throw new ClientError("unsupported", "Unsupported or mismatched window action.");
         }
@@ -2550,7 +2594,8 @@ export class HumanApp {
       this.content.replaceChildren(...staging.childNodes);
       nextSettle?.();
       this.currentUrl = routeUrl(route);
-      if (!fromHistory) {
+      if (fromHistory && route !== requestedRoute) history.replaceState(history.state, "", this.currentUrl);
+      else if (!fromHistory) {
         if (initial) history.replaceState({ erpIndex: this.historyIndex }, "", this.currentUrl);
         else history.pushState({ erpIndex: ++this.historyIndex }, "", this.currentUrl);
         this.saveTrail();
@@ -4861,6 +4906,17 @@ export class HumanApp {
     return key;
   }
 
+  private approvalsMenu(): Menu | undefined {
+    return [...this.menus.values()].find(menu =>
+      menu.module === "approvals" && menu.parentId === null && menu.action !== null);
+  }
+
+  private async openApprovals(): Promise<void> {
+    const menu = this.approvalsMenu();
+    if (!menu?.action) throw new ClientError("permission", "The Approvals menu is unavailable for this user.");
+    await this.navigate({ action: String(menu.action), menu: String(menu.id) });
+  }
+
   private async loadClientAction(id: number): Promise<ClientResult> {
     const result = actionResult(await this.rpc.call("ir.actions.client", "erp_load_web_client_action", { ids: [id], wire_major: 1, context: this.context }));
     if (result.kind !== "client" || result.id !== id) throw new ClientError("server", "Mismatched client action.");
@@ -4868,10 +4924,10 @@ export class HumanApp {
   }
 
   /** Mount the registered screen of a client action into `staging`: an unregistered tag mounts nothing. */
-  private async mountClientAction(route: Route, staging: HTMLElement, generation: number, stagedDisposers: (() => void)[]): Promise<{ panelDispose: () => void; service: ServiceController; handle: ClientActionHandle; dispose: () => void }> {
+  private async mountClientAction(route: Route, staging: HTMLElement, generation: number, stagedDisposers: (() => void)[], persisted?: ClientResult): Promise<{ panelDispose: () => void; service: ServiceController; handle: ClientActionHandle; dispose: () => void }> {
     const kept = route.method_action ? this.clientResults.get(route.method_action) : undefined;
     if (route.method_action && !kept) throw new ClientError("validation", "This client action has expired. Open its originating menu again.");
-    const result = kept ?? await this.loadClientAction(rpcId(route.action!));
+    const result = kept ?? persisted ?? await this.loadClientAction(rpcId(route.action!));
     if (!clientActions.has(result.tag)) throw new ClientError("unsupported", `Client action '${result.tag}' is declared by the server but not registered by this page. Reload the page.`);
     const factory = clientActions.get(result.tag);
     const key = route.method_action ?? `${result.tag}:${result.id}`;
@@ -4879,6 +4935,7 @@ export class HumanApp {
     stagedDisposers.push(mounted.dispose);
     const handle = await factory.create({
       ...this.pageNavigation(generation, route, () => result.name),
+      route: { ...route },
       ...(result.tag === DISCUSS_ACTION ? { mountDiscuss: (host: HTMLElement) => this.getDiscuss().openWorkspace(host) } : {}),
       host: staging, panel: mounted.panel, controls: mounted.actions, rpc: this.rpc, companies: this.companies, run: this.run,
       notice: this.notice, messages: this.messages, editorLocale: this.editorLocale,
@@ -4902,7 +4959,14 @@ export class HumanApp {
     const dispose = (): void => { if (disposed) return; disposed = true; handle.dispose(); };
     stagedDisposers.push(dispose);
     this.pendingClient = { key, name: result.name, handle };
-    return { panelDispose: mounted.dispose, handle, dispose, service: { busy: () => false, dirty: () => false, save: async () => {}, discard: () => {}, dispose } };
+    const service: ServiceController = {
+      busy: () => handle.edits?.busy() ?? false,
+      dirty: () => handle.edits?.dirty() ?? false,
+      save: async () => { await handle.edits?.save(); },
+      discard: () => handle.edits?.discard(),
+      dispose,
+    };
+    return { panelDispose: mounted.dispose, handle, dispose, service };
   }
 
   /** Keep what the screen being left exports, bounded; a larger state is dropped with a notice and the screen restarts from its defaults. */
@@ -5351,7 +5415,9 @@ export class HumanApp {
     const editBtn = button(t("Edit"), () => runFormAction(edit), "primary status-btn-edit");
     editBtn.hidden = true; editBtn.title = "Edit (E)";
     const statusIndicator = el("div", undefined, "form-status-indicator");
-    statusIndicator.append(statusBadge, archivedBadge, editBtn, statusActions);
+    // A field can commit on blur between pressing and releasing Save. A newly visible badge
+    // comes after the commands so it does not move the button away from the pointer.
+    statusIndicator.append(editBtn, statusActions, statusBadge, archivedBadge);
 
     const canEdit = view.canEdit !== false && !isFalsy(context["edit"]);
     const readFirst = view.editMode === "read" && canEdit;

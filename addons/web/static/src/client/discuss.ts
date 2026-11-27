@@ -6,6 +6,7 @@ import { watchChatterThread } from "./chatter-realtime.js";
 import { button, el } from "./dom.js";
 import { peoplePicker, type DiscussCall } from "./discuss-picker.js";
 import { icon, type IconName } from "./icons.js";
+import type { DiscussNotifications } from "./systray.js";
 import { ClientError, type RpcClient } from "./transport.js";
 
 interface Channel {
@@ -20,16 +21,28 @@ interface Options {
 }
 export interface DiscussControl {
   node: HTMLElement;
+  notifications: DiscussNotifications;
   openWorkspace(host: HTMLElement): () => void;
   dispose(): void;
 }
 interface Entry {
   key: string; name: string; detail: string; initials?: string; unread?: number; date?: string | null;
-  open(): void; remove?(): void;
+  open(): void; remove?(): void; markRead?(): Promise<void>;
 }
+interface Notice { message: number; subject: string | null; model: string | null; res_id: number | null; unread: boolean }
 type Section = "all" | "unread" | "saved" | "inbox";
 const models = new WeakMap<MessagingStore, LocalModel>();
 const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+function notification(value: unknown): Notice {
+  const row = value as Partial<Notice> | null;
+  if (!row || !positive(row.message) || typeof row.unread !== "boolean"
+      || (row.subject !== null && typeof row.subject !== "string")
+      || (row.model !== null && typeof row.model !== "string")
+      || (row.res_id !== null && !positive(row.res_id))
+      || ((row.model === null) !== (row.res_id === null))) throw new Error("Invalid notification.");
+  return row as Notice;
+}
+
 function channel(value: unknown): Channel {
   if (typeof value !== "object" || !value) throw new Error("Invalid conversation summary.");
   const c = value as Channel;
@@ -120,6 +133,7 @@ export function renderDiscuss(options: Options): DiscussControl {
   const windows = new Map<number, { element: HTMLElement; chatter: Chatter; latest: number | null }>();
   let selected: Channel | null = null, chatter: Chatter | undefined, section: Section = "all";
   const subscriptions = new Map<number, () => void>();
+  const notificationListeners = new Set<() => void>();
   let workspace: HTMLElement | null = null, dead = false, generation = 0, selection = 0;
   let history: (string | number | null)[] = [null], next: string | number | null = null;
   let endPicker: (() => void) | undefined, endSocket: (() => void) | undefined;
@@ -127,12 +141,13 @@ export function renderDiscuss(options: Options): DiscussControl {
   const allowed = context?.["allowed_company_ids"];
   const company = policy?.company ?? (Array.isArray(allowed) && positive(allowed[0]) ? allowed[0] : null);
   const bus = company !== null && typeof BroadcastChannel === "function" ? new BroadcastChannel(`erp.discuss.${uid}.${company}`) : undefined;
-  if (bus) bus.onmessage = event => { if (event.data === "refresh") void refresh(); };
+  if (bus) bus.onmessage = event => {
+    if (event.data === "notifications") notificationsChanged();
+    else if (event.data === "refresh") void refresh();
+  };
   const links = new Map<Section, HTMLButtonElement>();
   for (const [id, label] of [["all","Conversations"],["unread","Unread"],["saved","Saved"],["inbox","Notifications"]] as const) {
-    const b = button(label, () => {
-      section = id; history = [null]; list.replaceChildren(); next = null; void refresh();
-    });
+    const b = button(label, () => selectSection(id));
     links.set(id, b); nav.append(b);
   }
   search.addEventListener("input", () => {
@@ -142,6 +157,18 @@ export function renderDiscuss(options: Options): DiscussControl {
   panel.addEventListener("keydown", e => {
     if (e.key === "Escape" && !e.defaultPrevented && !workspace) { closeQuick(); trigger.focus(); }
   });
+  function selectSection(id: Section, load = true) {
+    section = id; history = [null]; list.replaceChildren(); next = null;
+    if (id === "inbox") {
+      closePicker(false);
+      panel.classList.remove("has-thread");
+    }
+    if (load) void refresh();
+  }
+  function notificationsChanged() {
+    for (const listener of notificationListeners) listener();
+    if (section === "inbox") void refresh();
+  }
   function persist(c: Channel) {
     const id = String(c.id);
     if (rows.has(id)) rows.set(id, { channel: c }); else rows.create(id, { channel: c });
@@ -174,14 +201,21 @@ export function renderDiscuss(options: Options): DiscussControl {
   }
   function syncWatch() {
     const needed = !dead && (!panel.hidden || windows.size > 0);
-    if (!needed) { endSocket?.(); endSocket = undefined; }
+    const keepSummary = !dead && (needed || notificationListeners.size > 0);
+    if (!keepSummary) { endSocket?.(); endSocket = undefined; }
     const active = needed ? new Set(windows.keys()) : new Set<number>();
     if (needed && !panel.hidden && selected) active.add(selected.id);
     for (const [id, dispose] of subscriptions) {
       if (!active.has(id)) { dispose(); subscriptions.delete(id); }
     }
-    if (!needed || !policy || typeof WebSocket !== "function") return;
-    endSocket ??= watchChatterThread({ model: "discuss.channel.member", id: Number.MAX_SAFE_INTEGER }, policy, refresh, fail);
+    if (!keepSummary || !policy || typeof WebSocket !== "function") return;
+    endSocket ??= watchChatterThread({ model: "discuss.channel.member", id: Number.MAX_SAFE_INTEGER }, policy, async () => {
+      for (const listener of notificationListeners) listener();
+      await refresh();
+    }, error => {
+      fail(error);
+      for (const listener of notificationListeners) listener();
+    });
     // An open conversation can fall outside the recent page. Recheck it independently on edits or loss of membership.
     for (const id of active) if (!subscriptions.has(id)) {
       subscriptions.set(id, watchChatterThread({ model: "discuss.channel", id }, policy, async () => {
@@ -292,11 +326,24 @@ export function renderDiscuss(options: Options): DiscussControl {
       if (e.unread) { const badge = el("span", e.unread >= 1000 ? "999+" : String(e.unread), "discuss-unread"); badge.setAttribute("aria-label", `${e.unread} unread`); meta.append(badge); }
       b.append(meta); row.append(b);
       if (e.remove) { const remove = iconButton("Remove saved message", "x", e.remove); remove.dataset["key"] = "remove" + e.key; row.append(remove); }
+      if (e.markRead) {
+        const markRead = iconButton(`Mark ${e.name} as read`, "square-check-big", () => {
+          markRead.disabled = true;
+          void e.markRead!().catch(fail).finally(() => { markRead.disabled = false; });
+        });
+        markRead.dataset["key"] = "read" + e.key;
+        row.append(markRead);
+      }
       list.append(row);
     }
     if (!entries.length) list.append(el("p", section === "saved" ? "No saved messages." : section === "inbox" ? "No notifications." :
       section === "unread" ? "No unread conversations." : "No conversations found.", "discuss-list-empty"));
-    if (focus) Array.from(list.querySelectorAll<HTMLButtonElement>("button")).find(b => b.dataset["key"] === focus)?.focus({ preventScroll: true });
+    if (focus) {
+      const controls = Array.from(list.querySelectorAll<HTMLButtonElement>("button"));
+      const same = controls.find(b => b.dataset["key"] === focus);
+      const marked = focus.startsWith("readn") ? controls.find(b => b.dataset["key"] === focus.slice(4)) : undefined;
+      (same ?? marked)?.focus({ preventScroll: true });
+    }
   }
   async function refresh() {
     if (dead || (panel.hidden && !windows.size)) return;
@@ -329,19 +376,25 @@ export function renderDiscuss(options: Options): DiscussControl {
             remove: () => { void write("conversation_bookmark", { ids: [s.channel_id], message_id: s.id, saved: false }).catch(fail); } });
         }
       } else {
-        const notices = await call("messaging_inbox", {});
+        const notices = await call("messaging_notifications", {});
         if (!isCurrent()) return;
         if (!Array.isArray(notices) || notices.length > 50) throw new Error("Invalid notifications.");
         const seen = new Set<number>();
-        for (const n of notices) {
-          if (!positive(n?.message) || !["inbox", "push"].includes(n.transport)) throw new Error("Invalid notification.");
+        for (const raw of notices) {
+          const n = notification(raw);
           if (seen.has(n.message)) continue;
           seen.add(n.message);
-          entries.push({ key: "n" + n.message, name: n.subject || "New message", detail: n.model && !n.channel_id ? n.model : "Conversation",
+          entries.push({ key: "n" + n.message, name: n.subject || "New message", detail: n.model ?? "",
+            ...(n.unread ? { unread: 1, markRead: async () => {
+              await call("messaging_notification_read", { message_id: n.message }, true);
+              if (!dead) {
+                bus?.postMessage("notifications");
+                notificationsChanged();
+              }
+            } } : {}),
             open: () => {
-              if (positive(n.channel_id)) void openId(n.channel_id, n.message);
-              else if (typeof n.model === "string" && positive(n.res_id) && options.openRecord) options.openRecord(n.model, n.res_id);
-              else status.textContent = "This notification has no available conversation or document.";
+              if (n.model && n.res_id && options.openRecord) options.openRecord(n.model, n.res_id);
+              else status.textContent = "This notification has no available document.";
             } });
         }
       }
@@ -374,6 +427,28 @@ export function renderDiscuss(options: Options): DiscussControl {
   head.hidden = true; pages.hidden = true;
   return {
     node,
+    notifications: {
+      async count() {
+        const raw = await call("messaging_notification_count", {});
+        if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) throw new Error("Invalid notification count.");
+        return raw;
+      },
+      open() {
+        if (dead) return;
+        selectSection("inbox", false);
+        show();
+        links.get("inbox")?.focus();
+      },
+      subscribe(listener) {
+        if (dead) return () => {};
+        notificationListeners.add(listener);
+        syncWatch();
+        return () => {
+          notificationListeners.delete(listener);
+          syncWatch();
+        };
+      },
+    },
     openWorkspace(host) {
       workspace = host; host.append(panel); panel.classList.add("discuss-workspace"); expand.hidden = true; close.hidden = true; show();
       return () => {
@@ -384,7 +459,7 @@ export function renderDiscuss(options: Options): DiscussControl {
     },
     dispose() {
       if (dead) return;
-      dead = true; clearTimeout(searchTimer); syncWatch(); bus?.close(); clearPrivate(); panel.remove(); node.remove();
+      dead = true; clearTimeout(searchTimer); syncWatch(); bus?.close(); notificationListeners.clear(); clearPrivate(); panel.remove(); node.remove();
     }
   };
 }

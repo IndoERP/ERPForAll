@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { errorMessage } from "./dom.js";
+import { el, errorMessage } from "./dom.js";
 import { icon, type IconName } from "./icons.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
 import type { SystrayItem, SystrayEnvironment } from "./systray.js";
@@ -164,6 +164,8 @@ export function parseActivityGroupAction(raw: unknown, model: string): ActivityW
 
 /** The activity menu reads the counts through this RPC; it needs the mail addon's `mail.activity` model. */
 const ACTIVITY_MODEL = "mail.activity";
+const APPROVAL_MODEL = "ir.approval.request";
+const APPROVAL_REFRESH_MS = 60_000;
 
 /**
  * True only for the server's refusal of an unknown `mail.activity` model: HTTP 404, `werkzeug.exceptions.NotFound`
@@ -182,6 +184,16 @@ async function fetchActivityMenu(rpc: RpcClient, context: Record<string, unknown
   return parseActivityMenuData(raw);
 }
 
+async function fetchApprovalCount(rpc: RpcClient, context: Record<string, unknown> | undefined): Promise<number> {
+  const raw = await rpc.call(APPROVAL_MODEL, "erp_queue", { scope: "review", offset: 0, limit: 0, context: context ?? {} }, { background: true });
+  const answer = raw as { total?: unknown; items?: unknown } | null;
+  if (typeof answer?.total !== "number" || !Number.isSafeInteger(answer.total) || answer.total < 0
+      || !Array.isArray(answer.items) || answer.items.length !== 0) {
+    throw new ClientError("server", "Invalid approval queue count.");
+  }
+  return answer.total;
+}
+
 export interface ActivityMenuHandle {
   node: HTMLElement;
   dispose(): void;
@@ -191,19 +203,13 @@ export interface ActivityMenuHandle {
 /** A first read that failed: the entry stays, shows a failed state, and the next open retries. */
 export interface ActivityMenuFailure { readonly failure: unknown }
 
-type PanelState =
+type PanelState<T> =
   | { readonly kind: "loading" }
   | { readonly kind: "failed" }
-  | { readonly kind: "ready"; readonly data: ActivityMenuData };
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "ready"; readonly data: T };
 
 let panelSerial = 0;
-
-function paragraph(className: string, message: string): HTMLElement {
-  const node = document.createElement("p");
-  node.className = className;
-  node.textContent = message;
-  return node;
-}
 
 /** A count above zero is a button named after its group and state; a zero is plain text, never a control. */
 function countControl(className: string, value: number, state: Exclude<ActivityState, "all">, group: ActivityGroupData, open: (group: ActivityGroupData, state: ActivityState) => void): HTMLElement {
@@ -222,9 +228,8 @@ function countControl(className: string, value: number, state: Exclude<ActivityS
 }
 
 /**
- * Renders the activity menu of the systray: a clock button with a counter badge and a panel with one
- * row per document type. A count above zero and the group name open the model's list in that state through
- * `env.openActivities`; "View all activities" opens the user's own list.
+ * Renders the systray clock with late and due activities, the user's approval queue, and unread Discuss notifications.
+ * The badge counts work awaiting the user. A separate marker indicates unread notifications.
  *
  * `initial` is the outcome of a first read already made (an answer, checked, or its failure); without it the entry
  * fetches once when it is rendered. It then fetches again on every open, which is the retry after a failure. A failed
@@ -236,6 +241,8 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   const report = env.report;
   const openList = env.openActivities;
   if (!rpc || !report || !openList) throw new ClientError("validation", "The activity menu needs the RPC client, the error reporter and the handler that opens an activity list.");
+  const openApprovals = env.openApprovals;
+  const notifications = env.discussNotifications;
 
   const container = document.createElement("div");
   container.className = "activity-menu-systray";
@@ -245,6 +252,11 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   trigger.className = "activity-menu-trigger";
   trigger.setAttribute("aria-label", "Activities");
   trigger.append(icon("clock"));
+  const unreadIndicator = document.createElement("span");
+  unreadIndicator.className = "activity-menu-unread";
+  unreadIndicator.setAttribute("aria-hidden", "true");
+  unreadIndicator.hidden = true;
+  trigger.append(unreadIndicator);
 
   const dropdown = document.createElement("div");
   dropdown.className = "activity-menu-dropdown";
@@ -257,11 +269,12 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   dropdown.append(body);
 
   const first = initial === undefined ? undefined : "failure" in initial ? initial : { data: initial };
-  let state: PanelState = first === undefined ? { kind: "loading" } : "data" in first ? { kind: "ready", data: first.data } : { kind: "failed" };
+  let state: PanelState<ActivityMenuData> = first === undefined ? { kind: "loading" } : "data" in first ? { kind: "ready", data: first.data } : { kind: "failed" };
+  let approvalState: PanelState<number> = { kind: openApprovals ? "loading" : "unavailable" };
+  let notificationState: PanelState<number> = { kind: notifications ? "loading" : "unavailable" };
   let announced = false;
   let badge: HTMLElement | null = null;
   let disposed = false;
-  let fetching = false;
   let opening = false;
   let openingEpoch = 0; // the panel opening the pending open belongs to
   let openTicket = 0; // the newest open: an older one that settles later must not clear the busy state of a newer one
@@ -277,14 +290,12 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   };
 
   const paintBadge = (): void => {
-    trigger.classList.toggle("is-failed", state.kind === "failed");
-    if (state.kind === "failed") {
-      badge?.remove();
-      badge = null;
-      trigger.setAttribute("aria-label", "Activities, could not be loaded");
-      return;
-    }
-    const total = state.kind === "ready" ? state.data.activity_counter : 0;
+    const activityCount = state.kind === "ready" ? state.data.activity_counter : 0;
+    const approvalCount = approvalState.kind === "ready" ? approvalState.data : 0;
+    const notificationCount = notificationState.kind === "ready" ? notificationState.data : 0;
+    const total = activityCount + approvalCount;
+    trigger.classList.toggle("is-failed", state.kind === "failed" && total === 0 && notificationCount === 0);
+    unreadIndicator.hidden = notificationCount === 0;
     if (total > 0) {
       if (!badge) {
         badge = document.createElement("span");
@@ -293,18 +304,26 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
         badge.setAttribute("aria-hidden", "true");
         trigger.append(badge);
       }
-      badge.textContent = String(total);
-      trigger.setAttribute("aria-label", `Activities, ${total} late or due today`);
+      badge.textContent = total > 999 ? "999+" : String(total);
     } else {
       badge?.remove();
       badge = null;
-      trigger.setAttribute("aria-label", "Activities");
     }
+    const labels = ["Activities"];
+    if (state.kind === "failed") labels.push(openApprovals || notifications ? "scheduled activities unavailable" : "could not be loaded");
+    if (approvalState.kind === "failed") labels.push("approvals unavailable");
+    if (notificationState.kind === "failed") labels.push("notification count unavailable");
+    if (activityCount > 0) labels.push(`${activityCount} late or due today`);
+    if (approvalCount > 0) labels.push(`${approvalCount} awaiting your review`);
+    if (notificationCount > 0) {
+      labels.push(`${notificationCount >= 1000 ? "at least 1000" : notificationCount} unread ${notificationCount === 1 ? "notification" : "notifications"}`);
+    }
+    trigger.setAttribute("aria-label", labels.join(", "));
   };
 
-  const paintBody = (): void => {
-    body.replaceChildren();
-    if (state.kind === "loading") { body.append(paragraph("activity-menu-empty", "Loading activities…")); return; }
+  const paintActivities = (section: HTMLElement): void => {
+    if (state.kind === "unavailable") return;
+    if (state.kind === "loading") { section.append(el("p", "Loading activities…", "activity-menu-empty")); return; }
     if (state.kind === "failed") {
       // A control keeps the keyboard inside the panel (Escape closes it from there) and is the retry the open-time refresh already is.
       const retry = document.createElement("button");
@@ -312,11 +331,12 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
       retry.className = "activity-menu-footer";
       retry.dataset["focusKey"] = "retry";
       retry.textContent = "Try again";
-      retry.addEventListener("click", () => { void refresh(); });
-      body.append(paragraph("activity-menu-empty activity-menu-failed", "Activities could not be loaded."), retry);
+      retry.addEventListener("click", () => { void refreshActivities(); });
+      section.append(el("p", "Activities could not be loaded.", "activity-menu-empty activity-menu-failed"), retry);
       return;
     }
-    if (state.data.groups.length === 0) body.append(paragraph("activity-menu-empty", "No activities to do."));
+    if (state.data.groups.length === 0) section.append(el("p",
+      openApprovals || notifications ? "No scheduled activities." : "No activities to do.", "activity-menu-empty"));
     const list = document.createElement("ul");
     list.className = "activity-group-list";
     for (const group of state.data.groups) {
@@ -351,25 +371,28 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
       item.append(iconSpan, details);
       list.append(item);
     }
-    if (state.data.groups.length > 0) body.append(list);
+    if (state.data.groups.length > 0) section.append(list);
     const footer = document.createElement("button");
     footer.type = "button";
     footer.className = "activity-menu-footer";
     footer.dataset["focusKey"] = "footer";
     footer.textContent = "View all activities";
     footer.addEventListener("click", () => openGroup(null, "all"));
-    body.append(footer);
+    section.append(footer);
   };
 
-  const failOpen = (error: unknown): void => {
+  const failOpen = (error: unknown, what: string): void => {
     const notifications = env.messages?.notifications;
-    const message = `The activities could not be opened. ${errorMessage(error)}`;
+    const message = `The ${what} could not be opened. ${errorMessage(error)}`;
     if (notifications) notifications.add(message, { level: "danger" });
     else report(error);
   };
 
-  /** `group` null opens the user's whole "My Activities" list. The panel closes only once the answer is checked and still wanted. */
-  const openGroup = (group: ActivityGroupData | null, wanted: ActivityState): void => {
+  const openDestination = (
+    what: string,
+    open: (action: ActivityWindowAction | null) => void | Promise<void>,
+    prepare?: () => Promise<ActivityWindowAction>
+  ): void => {
     // A pending open from an earlier opening of the panel (closed since) does not block the user's new click: the newest click wins.
     if (disposed || opening && openingEpoch === openEpoch) return;
     opening = true;
@@ -384,56 +407,141 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
     body.setAttribute("aria-busy", "true");
     void (async () => {
       try {
-        const action = group === null ? null
-          : parseActivityGroupAction(await rpc.call(ACTIVITY_MODEL, "erp_activity_group_action", { model: group.model, state: wanted, context: env.context ?? {} }, { background: true }), group.model);
+        const action = prepare ? await prepare() : null;
         // Closed (Escape, outside click, another open) or removed while the server answered: do nothing.
         if (disposed || epoch !== openEpoch) return;
         controller.close(false);
         closedByOpen = true;
         epoch = openEpoch;
-        await openList(action);
+        await open(action);
         // The open ended without a list (an unsaved form was kept, an action is pending): focus must not stay in the hidden panel.
         if (!disposed) restoreFocus();
       } catch (error) {
         // Focus goes back to the clock only when this open closed the panel and focus was left inside it; a close the user made leaves focus where they put it.
         if (!disposed && closedByOpen && epoch === openEpoch) restoreFocus();
         // After dispose the notification surface may be gone: report it instead of dropping it.
-        if (disposed) report(error); else failOpen(error);
+        if (disposed) report(error); else failOpen(error, what);
       } finally {
         if (ticket === openTicket) { opening = false; body.removeAttribute("aria-busy"); }
       }
     })();
   };
 
-  const paint = (): void => { paintBadge(); paintBody(); };
-  paint();
+  /** `group` null opens the user's whole "My Activities" list. */
+  const openGroup = (group: ActivityGroupData | null, wanted: ActivityState): void => {
+    openDestination("activities", openList, group ? async () => {
+      const raw = await rpc.call(ACTIVITY_MODEL, "erp_activity_group_action", { model: group.model, state: wanted, context: env.context ?? {} }, { background: true });
+      return parseActivityGroupAction(raw, group.model);
+    } : undefined);
+  };
 
-  const refresh = async (): Promise<void> => {
-    if (fetching || disposed) return;
-    fetching = true;
-    let outcome: { readonly data: ActivityMenuData } | { readonly error: unknown };
-    try { outcome = { data: await fetchActivityMenu(rpc, env.context) }; }
-    catch (error) { outcome = { error }; }
-    finally { fetching = false; }
-    // After dispose: no report and no DOM work.
-    if (disposed) return;
-    if ("error" in outcome) {
-      // Announced, then shown as a failure: never as an empty list or a zero counter.
-      announce(outcome.error);
-      state = { kind: "failed" };
-    } else {
-      announced = false;
-      state = { kind: "ready", data: outcome.data };
+  const paintSummary = (key: string, title: string, glyph: IconName, summary: PanelState<number>,
+    amount: (value: number) => string, open: () => void, retry: () => void): void => {
+    const section = el("section", undefined, "activity-menu-section activity-menu-summary");
+    section.setAttribute("aria-label", title);
+    if (summary.kind === "loading") {
+      section.append(el("p", `Loading ${title.toLowerCase()}…`, "activity-menu-empty"));
+    } else if (summary.kind === "failed") {
+      const control = el("button", `Retry ${title.toLowerCase()}`, "activity-menu-summary-control");
+      control.type = "button";
+      control.dataset["focusKey"] = key;
+      control.addEventListener("click", retry);
+      section.append(el("p", `${title} could not be loaded.`, "activity-menu-empty activity-menu-failed"), control);
+    } else if (summary.kind === "ready") {
+      const control = el("button", undefined, "activity-menu-summary-control");
+      control.type = "button";
+      control.dataset["focusKey"] = key;
+      const count = amount(summary.data);
+      control.setAttribute("aria-label", `${title}, ${count}`);
+      control.append(icon(glyph), el("span", title), el("span", count, "activity-menu-summary-count"));
+      control.addEventListener("click", open);
+      section.append(control);
     }
+    body.append(section);
+  };
+
+  const paint = (): void => {
     // A repaint replaces every control: when focus was inside the panel it moves to the same group and state, else the first control.
     const active = document.activeElement;
     const keptKey = active instanceof HTMLElement && dropdown.contains(active) ? active.dataset["focusKey"] ?? "" : undefined;
-    paint();
+    paintBadge();
+    body.replaceChildren();
+    if (state.kind !== "unavailable") {
+      const section = el("section", undefined, "activity-menu-section");
+      if (openApprovals || notifications) {
+        section.setAttribute("aria-label", "Scheduled activities");
+        section.append(el("h2", "Scheduled activities", "activity-menu-heading"));
+      }
+      paintActivities(section);
+      body.append(section);
+    }
+    if (openApprovals && approvalState.kind !== "unavailable") {
+      paintSummary("approvals", "Approvals", "badge-check", approvalState, value => `${value} to review`,
+        () => openDestination("approvals", openApprovals), () => { void refreshApprovals(); });
+    }
+    if (notifications && notificationState.kind !== "unavailable") {
+      paintSummary("notifications", "Notifications", "inbox", notificationState, value => `${value >= 1000 ? "999+" : value} unread`,
+        () => openDestination("notifications", () => notifications.open()), () => { void refreshNotifications(); });
+    }
+    if (!body.firstChild) body.append(el("p", "Nothing to review.", "activity-menu-empty"));
     if (keptKey !== undefined) {
       const same = keptKey ? [...dropdown.querySelectorAll<HTMLElement>("[data-focus-key]")].find(node => node.dataset["focusKey"] === keptKey) : undefined;
       (same ?? dropdown.querySelector<HTMLElement>("button") ?? trigger).focus();
     }
-    controller.refresh();
+    if (!controller.isOpen() || !active || active === trigger || active === document.body || keptKey !== undefined) {
+      controller.refresh();
+    }
+  };
+
+  // A wake that arrives in flight can describe a write after that read's snapshot, so read once more when it settles.
+  function makeRefresh<T>(load: () => Promise<T>, apply: (outcome: { data: T } | { error: unknown }) => void) {
+    let pending: Promise<void> | undefined;
+    let queued = false;
+    return (afterChange = false): Promise<void> => {
+      if (disposed) return Promise.resolve();
+      if (pending) {
+        queued ||= afterChange;
+        return pending;
+      }
+      pending = (async () => {
+        do {
+          queued = false;
+          let outcome: { data: T } | { error: unknown };
+          try { outcome = { data: await load() }; }
+          catch (error) { outcome = { error }; }
+          if (disposed) return;
+          apply(outcome);
+          paint();
+        } while (queued);
+      })().finally(() => { pending = undefined; });
+      return pending;
+    };
+  }
+
+  const readActivities = makeRefresh(() => fetchActivityMenu(rpc, env.context), outcome => {
+    if ("data" in outcome) {
+      announced = false;
+      state = { kind: "ready", data: outcome.data };
+    } else if (isUnknownActivityModel(outcome.error)) {
+      state = { kind: "unavailable" };
+    } else {
+      announce(outcome.error);
+      state = { kind: "failed" };
+    }
+  });
+  const readApprovals = makeRefresh(() => fetchApprovalCount(rpc, env.context), outcome => {
+    approvalState = "data" in outcome ? { kind: "ready", data: outcome.data } :
+      { kind: outcome.error instanceof ClientError && outcome.error.kind === "permission" ? "unavailable" : "failed" };
+  });
+  const readNotifications = notifications && makeRefresh(() => notifications.count(), outcome => {
+    notificationState = "data" in outcome ? { kind: "ready", data: outcome.data } :
+      { kind: outcome.error instanceof ClientError && outcome.error.kind === "permission" ? "unavailable" : "failed" };
+  });
+  const refreshActivities = (afterChange = false) => state.kind === "unavailable" ? undefined : readActivities(afterChange);
+  const refreshApprovals = (afterChange = false) => openApprovals ? readApprovals(afterChange) : undefined;
+  const refreshNotifications = (afterChange = false) => readNotifications?.(afterChange);
+  const refresh = async (): Promise<void> => {
+    await Promise.all([refreshActivities(), refreshApprovals(), refreshNotifications()]);
   };
 
   const controller = attachMenuDropdown({
@@ -447,11 +555,39 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   trigger.removeAttribute("aria-haspopup");
   trigger.setAttribute("aria-controls", dropdown.id);
 
-  const onActivityChange = () => { void refresh(); };
+  const onActivityChange = () => {
+    void refreshActivities(true);
+    void refreshApprovals(true);
+  };
+  // An approval may be requested in someone else's session. Keep the closed badge up to date in the foreground.
+  let approvalTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleApprovalRefresh = (): void => {
+    clearTimeout(approvalTimer);
+    if (document.visibilityState !== "visible") return;
+    approvalTimer = setTimeout(() => {
+      void refreshApprovals();
+      scheduleApprovalRefresh();
+    }, APPROVAL_REFRESH_MS);
+  };
+  const onVisibilityChange = (): void => {
+    if (document.visibilityState === "visible") {
+      void refreshApprovals(true);
+      void refreshNotifications(true);
+    }
+    if (openApprovals) scheduleApprovalRefresh();
+  };
+  if (openApprovals || notifications) document.addEventListener("visibilitychange", onVisibilityChange);
+  if (openApprovals) scheduleApprovalRefresh();
   document.addEventListener("erp:activities-changed", onActivityChange);
+  const stopNotifications = notifications?.subscribe(() => { void refreshNotifications(true); });
   container.append(trigger, dropdown);
+  paint();
   if (first === undefined) void refresh();
-  else if ("failure" in first) announce(first.failure);
+  else {
+    if ("failure" in first) announce(first.failure);
+    void refreshApprovals();
+    void refreshNotifications();
+  }
 
   return {
     node: container,
@@ -459,6 +595,9 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
       if (disposed) return;
       disposed = true;
       document.removeEventListener("erp:activities-changed", onActivityChange);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearTimeout(approvalTimer);
+      stopNotifications?.();
       controller.dispose();
       container.remove();
     },
@@ -470,14 +609,15 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
 const prefetched = new WeakMap<object, ActivityMenuData | ActivityMenuFailure>();
 
 /**
- * The systray entry, registered by the client under "mail.activity_menu". It is hidden only for a
- * deployment without the `mail.activity` model. Any other failure of the first read keeps the entry, in a failed state.
+ * The systray entry, registered under "mail.activity_menu" for existing callers. Approvals and
+ * personal notifications can keep it visible without the optional scheduled activity model.
  */
 export const activitySystrayItem: SystrayItem = {
   key: "mail.activity_menu",
   sequence: 20,
   isDisplayed: async (env: SystrayEnvironment): Promise<boolean> => {
     if (!env.rpc) return false;
+    if (env.openApprovals || env.discussNotifications) return true;
     try {
       prefetched.set(env, await fetchActivityMenu(env.rpc, env.context));
     } catch (error) {

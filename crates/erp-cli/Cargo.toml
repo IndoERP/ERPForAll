@@ -15,6 +15,7 @@ erp-addon-base = { workspace = true }
 erp-addon-ai-base.workspace = true
 erp-addon-barcodes = { workspace = true }
 erp-addon-uom = { workspace = true }
+erp-addon-approvals.workspace = true
 erp-addon-mail = { workspace = true }
 erp-addon-product = { workspace = true }
 erp-addon-product-mail = { workspace = true }
@@ -69,9 +70,9 @@ erp-sdk.workspace = true
 erp-wasm-host.workspace = true
 erp-sql.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 csv.workspace = true
 bytes.workspace = true
+sha2.workspace = true
 tracing.workspace = true
 erp-data = { workspace = true }
 erp-fields = { workspace = true }

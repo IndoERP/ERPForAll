@@ -695,7 +695,7 @@ test("systray user menu displays company and CSRF-protected logout", async () =>
   expect(header.querySelector(".company-menu-name")?.textContent).not.toBe("");
   const rowLabels = [...dropdown.querySelectorAll(".user-menu-row")].map(row => row.textContent ?? "");
   expect(rowLabels[0]).toContain("Shortcuts");
-  expect(rowLabels.slice(1)).toEqual(["My preferences", "Review approval", "Sign out"]);
+  expect(rowLabels.slice(1)).toEqual(["My preferences", "Sign out"]);
 
   const logoutForm = dropdown.querySelector<HTMLFormElement>("form")!;
   expect(logoutForm.action).toContain("/erp/session/logout");
@@ -3855,6 +3855,41 @@ function printFormFetch(order: string[], opts: { reports?: { report: string; nam
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   });
 }
+
+test("Save stays ahead of status badges and runs once when a new field commits on blur", async () => {
+  history.replaceState(null, "", "/erp/action-20?view_type=form");
+  const calls: string[] = [];
+  let finishChange!: () => void;
+  const pendingChange = new Promise<void>(resolve => { finishChange = resolve; });
+  const fetchNote = printFormFetch(calls, { reports: [] });
+  vi.stubGlobal("fetch", async (path: string, init: RequestInit) => {
+    if (path.endsWith("/onchange") && JSON.parse(String(init.body)).field_names.includes("name")) await pendingChange;
+    return fetchNote(path, init);
+  });
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+
+  const save = root.querySelector<HTMLButtonElement>(".status-btn-save")!;
+  const status = root.querySelector<HTMLElement>(".status-badge.dirty")!;
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  expect(status.hidden).toBe(true);
+  input.focus();
+  input.value = "Saved on the first click";
+  input.dispatchEvent(new Event("input"));
+  expect(save.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  input.dispatchEvent(new Event("change"));
+  expect(status.textContent).toBe("Unsaved changes");
+  expect(status.hidden).toBe(false);
+  save.focus();
+  save.click();
+  expect(calls).toEqual([]);
+
+  finishChange();
+  await vi.waitFor(() => expect(new URL(location.href).searchParams.get("id")).toBe("5"));
+  expect(calls).toEqual(["web_save"]);
+  expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Saved on the first click");
+});
 
 async function openPrintMenu(root: HTMLElement): Promise<HTMLButtonElement> {
   await vi.waitFor(() => expect(root.querySelector(".form-record-menus .print-toggle-btn")).not.toBeNull());

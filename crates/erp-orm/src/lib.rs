@@ -200,6 +200,8 @@ pub use compute::{
 pub use context::Context;
 pub use core_ddl::{AfterModels, CORE_DDL, CoreDdl, CoreTableRequirement};
 #[doc(hidden)]
+pub use core_ddl::{BASE_MODEL_VIEWS, BaseModelView};
+#[doc(hidden)]
 pub use core_ddl::{
     CorePhase, pending as core_ddl_pending, refuse_deferred as core_ddl_refuse_deferred,
     run as core_ddl_run, run_deferred as core_ddl_run_deferred, validate as core_ddl_validate,

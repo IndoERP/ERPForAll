@@ -171,6 +171,21 @@ function relationAutocomplete(options: RelationAutocompleteOptions): ReturnType<
   return { ...complete, dispose: () => { if (disposed) return; disposed = true; complete.dispose(); } };
 }
 
+function relationQueryDraft(input: HTMLInputElement, complete: ReturnType<typeof createAutocomplete>): Pick<WidgetHandle, "captureDraft" | "restoreDraft"> {
+  return {
+    captureDraft: () => complete.isOpen() ? { value: input.value, message: input.validationMessage } : undefined,
+    restoreDraft: draft => {
+      input.value = draft.value;
+      // The owner inserts and refocuses the new control after restoring its draft.
+      queueMicrotask(() => {
+        if (!input.isConnected || input.ownerDocument.activeElement !== input || complete.isDisposed()) return;
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.dispatchEvent(new Event("input"));
+      });
+    },
+  };
+}
+
 function combobox({ field, className, placeholder, values, fields }: Pick<FieldControlOptions, "field" | "values" | "fields"> & { className: string; placeholder: string }): HTMLInputElement {
   const input = el("input", undefined, className);
   input.type = "text";
@@ -333,7 +348,7 @@ function many2oneControl({ field, value, rpc, context, change: changed, run, ope
   const label = el("label", field.label); label.htmlFor = input.id; caption.append(label);
   wrapper.setAttribute("aria-labelledby", caption.id); wrapper.append(caption, area);
   if (field.required) markRequired(wrapper, field.label);
-  return { node: wrapper, dispose: complete.dispose };
+  return { node: wrapper, dispose: complete.dispose, ...relationQueryDraft(input, complete) };
 }
 
 function many2manyControl({ field, value, rpc, context, change: changed, run, editor: owner, values: recordValues, openRecord, fields: authorizedFields, viewContext }: FieldControlOptions): FieldControl {
@@ -375,6 +390,7 @@ function many2manyControl({ field, value, rpc, context, change: changed, run, ed
   }
   area.append(tags);
   let dispose = (): void => {};
+  let drafts: Pick<WidgetHandle, "captureDraft" | "restoreDraft"> = {};
   if (field.readonly) {
     if (!values.length) tags.append(el("span", "—", "muted"));
   } else {
@@ -398,6 +414,7 @@ function many2manyControl({ field, value, rpc, context, change: changed, run, ed
     tags.append(input);
 
     dispose = complete.dispose;
+    drafts = relationQueryDraft(input, complete);
   }
   if (viewContext === "list") return { node: fieldShell(field, area, viewContext).node, dispose };
   // A group, not a <label>: a click inside a label is forwarded to its first control, which here
@@ -410,7 +427,7 @@ function many2manyControl({ field, value, rpc, context, change: changed, run, ed
   wrapper.append(caption, area);
   if (field.required) markRequired(wrapper, field.label);
   if (field.readonly) wrapper.classList.add("field-readonly");
-  return { node: wrapper, dispose };
+  return { node: wrapper, dispose, ...drafts };
 }
 
 // Builtin controls use the same registration contract as trusted addon widgets.

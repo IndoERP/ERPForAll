@@ -24,7 +24,7 @@
     "node": ">=24.22.0 <25"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.src.json --noEmit && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.generated.json --noEmit && tsc -p tsconfig.fixtures.json --noEmit && tsc -p ../addons/hr/static/tsconfig.json --noEmit && tsc -p tsconfig.dts.json && mkdir -p node_modules/.elang-dts/src/runtime && cp src/runtime/abi.d.ts node_modules/.elang-dts/src/runtime/abi.d.ts && tsc -p tsconfig.dts-consumer.json --noEmit",
+    "typecheck": "tsc -p tsconfig.src.json --noEmit && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.generated.json --noEmit && tsc -p tsconfig.fixtures.json --noEmit && tsc -p ../addons/hr/static/tsconfig.json --noEmit && tsc -p ../addons/approvals/static/tsconfig.json --noEmit && tsc -p tsconfig.dts.json && mkdir -p node_modules/.elang-dts/src/runtime && cp src/runtime/abi.d.ts node_modules/.elang-dts/src/runtime/abi.d.ts && tsc -p tsconfig.dts-consumer.json --noEmit",
     "test": "vitest run",
     "test:milestone": "vitest run --config vitest.milestone.config.ts",
     "licenses": "node scripts/check-licenses.mjs",

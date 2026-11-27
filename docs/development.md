@@ -186,22 +186,68 @@ caller's ordinary model, field, record and key-scope checks in force.
 To request approval for a write or destructive method, send an `Idempotency-Key`. An unkeyed
 call needing approval returns 422 with `context.approval_key_required`. The keyed 409 response
 carries `context.approval_request_id`. The requester and eligible reviewers can call
-`ir.approval.request.erp_status` with that ID. The receipt includes the requester's ID,
-companies, payload digest and `can_decide`. An eligible signed-in reviewer decides by calling
-`ir.approval.request.erp_decide` with `request_id`, `approve` and the optional displayed
-`payload_sha256`.
-The requester and anyone impersonating them are excluded from the decision.
+`ir.approval.request.erp_status` with that ID. The receipt includes the requester’s name and
+ID, policy name, companies, UTC expiry, payload digest and `can_decide`. A staged revision's
+`review_steps` array defines up to 16 levels in order. Each level has a `name` and names at
+least one recipient using `user_ids` or `group_ids`. An empty array uses the revision's
+ordinary approver users and groups for a single decision.
+
+An eligible signed-in reviewer calls `ir.approval.request.erp_decide` with `request_id`,
+`approve` and the optional displayed `payload_sha256`. For a multi-level revision it also
+requires `step`, the displayed 1-based `current_step`. Approving advances one level. Denying
+at any level closes the request. A receipt's `steps` lists each level by position, name and
+state, with the signer and decision time when recorded. The requester and anyone impersonating
+them are excluded from decisions.
 An MCP tool call returns the same ID in `structuredContent.approval_request_id`.
 
-In the web client, the requester gives the displayed request number to their reviewer.
-The reviewer opens **Review approval** in the user menu, checks the operation, companies,
-requester and argument digest, then chooses **Approve** or **Deny**. The requester selects
-**Check approval** in the original window to finish. That window holds the original request
-in memory and sends the same bytes and idempotency key after approval.
+`ir.approval.request.erp_queue` accepts `scope`, `offset` (default 0) and `limit`
+(default 25, range 0–100). Use `review` for requests the signed-in reviewer can decide now,
+`mine` for the requester's history, or `reviewed` for their decisions under revisions they
+are still eligible to review. The result contains `total` and an `items` array in descending
+request ID order. A limit of zero returns the count with an empty array. Each item contains
+`id`, `state`, `model`, `method`, `requester_id`, `requester_name`, `policy_name`, `companies`,
+`expires_at`, `current_step`, `current_step_name`, `step_count` and `can_decide`. Open the
+individual receipt to inspect the digest and stage history.
+
+Install the `approvals` addon to enable the request inbox and workflow editor. Include
+`approvals` in the list passed to `web/scripts/build-human-ui.mjs --addons` for custom asset
+builds. The standard installer includes the addon and its client assets. The base RPC layer enforces
+approval policies independently of the UI.
+
+For an existing installation, upgrade `base` and `approvals` together and serve the rebuilt web
+assets. The upgrade makes existing workflow revisions and their request history available in the
+native views. Saved links to the previous approval pages open the corresponding native record or list.
+
+Administrators open **Approvals → Workflows → New** to create a draft. **Save** keeps the draft
+editable, even if review steps are still missing. Set the company and operation under **Applies
+to** and **Operation**. In **Review steps**, add a line for each level, choose its order and
+select users or groups. One eligible reviewer signs each step in order. For example,
+**Team manager → Finance** requires two decisions before the requester can finish the operation.
+
+**Publish** validates the draft and activates its immutable policy revision. **Create revision**
+opens an editable draft based on the selected workflow. The previous revision stays active
+until the replacement publishes successfully. Archiving a revision expires its unfinished
+requests. Existing single-stage policies are available through the same workflow views.
+
+**Approvals → Requests** uses the standard searchable list and a read-only request form. Open
+it from the application menu, activity clock, or **Review approval** in the user menu. **To
+review** shows the requests the current user can decide. **My requests** follows their
+submissions and **Reviewed** lists their decisions. Open a request to see its companies,
+operation, current stage and decision history. **Approve** and **Deny** apply to the stage
+displayed when the reviewer opened the form.
+
+After final approval, the requester selects **Check approval** in the original window to
+finish. The window holds the original request in memory and sends the same bytes and
+idempotency key. Existing request bookmarks open the record through its window action.
+
+The activity clock counts overdue and due-today activities plus actionable approval requests.
+Its Notifications row opens personal notifications in Discuss. Marking a notification as read
+updates the recipient’s unread count across sessions. Channel and direct-message unread
+counts follow the conversation in Discuss.
 
 After approval, the requester repeats the original request with the same key. The server
-checks the bound arguments, authenticated identity, policy revision, and the approver's current
-eligibility. The call runs with the requester's authority. The request stores a digest of
+checks the bound arguments, authenticated identity, policy revision, and every signer's current
+eligibility for the stage they approved. The call runs with the requester's authority. The request stores a digest of
 the arguments and records the execution operation ID when the call commits. Pending and
 approved requests expire after 24 hours according to the database clock. A fresh request needs
 its own key. A policy revision change keeps earlier approval keys reserved.

@@ -105,6 +105,123 @@ describe("Activity menu client", () => {
     handle.dispose();
   });
 
+  test("the clock shows scheduled work, the review queue and unread notifications with separate click targets", async () => {
+    let reviews = 2;
+    let unread = 5;
+    const count = vi.fn(async () => unread);
+    const open = vi.fn();
+    const openApprovals = vi.fn();
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn((_listener: () => void) => unsubscribe);
+    const call = vi.fn(async (model: string) => model === "ir.approval.request"
+      ? { total: reviews, items: [] } : answer([partner], 2));
+    const env = {
+      ...envFor({ call } as unknown as RpcClient),
+      openApprovals,
+      discussNotifications: { count, open, subscribe },
+    };
+    const handle = renderActivityMenu(env);
+    container.append(handle.node);
+    const approval = () => handle.node.querySelector<HTMLButtonElement>('[data-focus-key="approvals"]')!;
+    const inbox = () => handle.node.querySelector<HTMLButtonElement>('[data-focus-key="notifications"]')!;
+    await vi.waitFor(() => expect(badge(handle.node)?.textContent).toBe("4"));
+    expect(inbox().getAttribute("aria-label")).toBe("Notifications, 5 unread");
+    expect(approval().getAttribute("aria-label")).toBe("Approvals, 2 to review");
+    expect(trigger(handle.node).getAttribute("aria-label")).toContain("5 unread notifications");
+    expect(call).toHaveBeenCalledWith("ir.approval.request", "erp_queue", {
+      scope: "review", offset: 0, limit: 0, context: { lang: "en_US" },
+    }, { background: true });
+
+    trigger(handle.node).click();
+    approval().focus();
+    await vi.waitFor(() => expect(document.activeElement).toBe(approval()));
+    approval().click();
+    expect(openApprovals).toHaveBeenCalledOnce();
+    expect(trigger(handle.node).getAttribute("aria-expanded")).toBe("false");
+    reviews = 1;
+    document.dispatchEvent(new Event("erp:activities-changed"));
+    await vi.waitFor(() => expect(badge(handle.node)?.textContent).toBe("3"));
+
+    unread = 0;
+    subscribe.mock.calls[0]![0]();
+    await vi.waitFor(() => expect(inbox().getAttribute("aria-label")).toBe("Notifications, 0 unread"));
+    expect(handle.node.querySelector<HTMLElement>(".activity-menu-unread")?.hidden).toBe(true);
+    expect(badge(handle.node)?.textContent).toBe("3");
+    trigger(handle.node).click();
+    inbox().click();
+    expect(open).toHaveBeenCalledOnce();
+    handle.dispose();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  test("the review queue works without the mail addon and retries a failed approval count", async () => {
+    let denied = false;
+    let attempts = 0;
+    const call = vi.fn(async (model: string) => {
+      if (model === "mail.activity") throw unknownModel();
+      if (denied) throw new ClientError("permission", "Access denied.", 403);
+      if (++attempts === 1) throw new ClientError("network", "Offline.");
+      return { total: 1, items: [] };
+    });
+    const env = { ...envFor({ call } as unknown as RpcClient), openApprovals: vi.fn() };
+    expect(await activitySystrayItem.isDisplayed?.(env)).toBe(true);
+    const handle = activitySystrayItem.render!(env);
+    container.append(handle.node);
+    const panel = handle.node.querySelector(".activity-menu-dropdown")!;
+    await vi.waitFor(() => expect(panel.textContent).toContain("Approvals could not be loaded."));
+    expect(panel.textContent).not.toContain("Scheduled activities");
+    expect(reported).toEqual([]);
+    panel.querySelector<HTMLButtonElement>('[data-focus-key="approvals"]')!.click();
+    await vi.waitFor(() => expect(badge(handle.node)?.textContent).toBe("1"));
+    expect(call.mock.calls.filter(([model]) => model === "mail.activity")).toHaveLength(1);
+    denied = true;
+    trigger(handle.node).click();
+    await vi.waitFor(() => expect(panel.querySelector('[data-focus-key="approvals"]')).toBeNull());
+    expect(badge(handle.node)).toBeNull();
+    handle.dispose();
+  });
+
+  test("a visible clock refreshes a reviewer badge across sessions, including after returning from a hidden tab", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    const documentVisibility = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    let reviews = 0;
+    const approvalRead = vi.fn(async () => ({ total: reviews, items: [] }));
+    const call = vi.fn((model: string) => model === "ir.approval.request" ? approvalRead() : Promise.resolve(answer([], 0)));
+    const env = { ...envFor({ call } as unknown as RpcClient), openApprovals: vi.fn() };
+    const handle = renderActivityMenu(env);
+    container.append(handle.node);
+    try {
+      await handle.refresh();
+      expect(badge(handle.node)).toBeNull();
+      expect(handle.node.textContent).toContain("No scheduled activities.");
+      reviews = 1;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(badge(handle.node)?.textContent).toBe("1");
+      expect(trigger(handle.node).getAttribute("aria-expanded")).toBe("false");
+      expect(approvalRead).toHaveBeenCalledTimes(2);
+      expect(call.mock.calls.filter(([model]) => model === "mail.activity")).toHaveLength(1);
+
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      reviews = 2;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(approvalRead).toHaveBeenCalledTimes(2);
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(badge(handle.node)?.textContent).toBe("2");
+      handle.dispose();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(approvalRead).toHaveBeenCalledTimes(3);
+    } finally {
+      handle.dispose();
+      documentVisibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   test("a successful chatter activity change refreshes the closed badge until disposal", async () => {
     const { rpc, call } = rpcReturning(answer([partner], 1));
     const handle = renderActivityMenu(envFor(rpc), parseActivityMenuData(answer([], 0)));

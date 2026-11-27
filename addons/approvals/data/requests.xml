@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="request_stage_list" model="ir.ui.view">
+    <field name="name">approval.request.stage.list</field>
+    <field name="model">approval.request.stage</field>
+    <field name="arch" type="xml">
+      <list string="Approval stages" create="0" edit="0" delete="0">
+        <field name="position" string="Stage" width="80px" options="{'enable_formatting': False}"/>
+        <field name="name" string="Review stage" width="[160px]"/>
+        <field name="state" string="Status" widget="badge"
+               options="{'tone_success': ['approved'], 'tone_warning': ['pending'], 'tone_danger': ['denied'], 'tone_muted': ['waiting', 'expired']}"/>
+        <field name="decider_name" string="Decided by"/>
+        <field name="decided_at" string="Decided at"/>
+      </list>
+    </field>
+  </record>
+  <record id="request_stage_form" model="ir.ui.view">
+    <field name="name">approval.request.stage.form</field>
+    <field name="model">approval.request.stage</field>
+    <field name="arch" type="xml">
+      <form string="Approval stage" create="0" edit="0" delete="0">
+        <sheet>
+          <div class="oe_title"><h1><field name="name"/></h1></div>
+          <group>
+            <group string="Stage">
+              <field name="position" string="Stage number" options="{'enable_formatting': False}"/>
+              <field name="state" string="Status" widget="badge"
+                     options="{'tone_success': ['approved'], 'tone_warning': ['pending'], 'tone_danger': ['denied'], 'tone_muted': ['waiting', 'expired']}"/>
+            </group>
+            <group string="Decision">
+              <field name="decider_name" string="Decided by"/>
+              <field name="decided_at" string="Decided at"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="request_list" model="ir.ui.view">
+    <field name="name">approval.request.view.list</field>
+    <field name="model">approval.request.view</field>
+    <field name="arch" type="xml">
+      <list string="Approval requests" create="0" edit="0" delete="0" limit="25">
+        <field name="name" string="Request" width="[100px]"/>
+        <field name="policy_name" string="Workflow" width="[180px]"/>
+        <field name="requester_name" string="Requested by" width="[140px]"/>
+        <field name="state" string="Status" widget="badge"
+               options="{'tone_success': ['approved', 'executed'], 'tone_warning': ['pending'], 'tone_danger': ['denied'], 'tone_muted': ['expired']}"/>
+        <field name="current_step" string="Stage" width="80px" options="{'enable_formatting': False}"/>
+        <field name="current_step_name" string="Review stage" width="[150px]"/>
+        <field name="expires_at" string="Expires" width="[150px]"/>
+      </list>
+    </field>
+  </record>
+  <record id="request_form" model="ir.ui.view">
+    <field name="name">approval.request.view.form</field>
+    <field name="model">approval.request.view</field>
+    <field name="arch" type="xml">
+      <form string="Approval request" create="0" edit="0" delete="0">
+        <header>
+          <button name="action_approve" type="object" string="Approve" class="btn-primary"
+                  invisible="state != 'pending' or not can_decide"
+                  context="{'approval_step': current_step, 'approval_digest': payload_sha256}"/>
+          <button name="action_deny" type="object" string="Deny" class="btn-danger"
+                  invisible="state != 'pending' or not can_decide"
+                  confirm="Deny this approval request?"
+                  context="{'approval_step': current_step, 'approval_digest': payload_sha256}"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="policy_name"/></h1></div>
+          <group>
+            <group string="Request">
+              <field name="name" string="Request"/>
+              <field name="requester_name" string="Requested by"/>
+              <field name="company_names" string="Companies"/>
+              <field name="expires_at" string="Expires"/>
+            </group>
+            <group string="Progress">
+              <field name="state" string="Status" widget="badge"
+                     options="{'tone_success': ['approved', 'executed'], 'tone_warning': ['pending'], 'tone_danger': ['denied'], 'tone_muted': ['expired']}"/>
+              <field name="current_step" string="Current stage" options="{'enable_formatting': False}"/>
+              <field name="step_count" string="Total stages" options="{'enable_formatting': False}"/>
+              <field name="current_step_name" string="Review stage"/>
+            </group>
+          </group>
+          <field name="can_decide" invisible="1"/>
+          <notebook>
+            <page name="approval_stages" string="Approval stages">
+              <field name="stage_ids" string="Approval stages" nolabel="1" readonly="1"
+                     context="{'list_view_ref': 'approvals.request_stage_list', 'form_view_ref': 'approvals.request_stage_form'}"/>
+            </page>
+            <page name="technical_details" string="Technical details">
+              <group>
+                <field name="target_model" string="Target model"/>
+                <field name="target_method" string="Operation"/>
+                <field name="payload_sha256" string="Payload SHA-256"/>
+                <field name="execution_receipt" string="Execution receipt" invisible="not execution_receipt"/>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="request_search" model="ir.ui.view">
+    <field name="name">approval.request.view.search</field>
+    <field name="model">approval.request.view</field>
+    <field name="arch" type="xml">
+      <search string="Approval requests">
+        <field name="name" string="Request"/>
+        <field name="policy_name" string="Workflow"/>
+        <field name="requester_name" string="Requested by"/>
+        <filter name="to_review" string="To review" domain="[('to_review', '=', True)]"/>
+        <filter name="is_mine" string="My requests" domain="[('is_mine', '=', True)]"/>
+        <filter name="is_reviewed" string="Reviewed" domain="[('is_reviewed', '=', True)]"/>
+      </search>
+    </field>
+  </record>
+  <record id="requests_window" model="ir.actions.act_window">
+    <field name="name">Approval requests</field>
+    <field name="res_model">approval.request.view</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="request_list"/>
+    <field name="search_view_id" ref="request_search"/>
+    <field name="context">{'search_default_to_review': 1}</field>
+  </record>
+</erp>

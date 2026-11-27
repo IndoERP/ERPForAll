@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { configureClientTemplates, registerClientAction } from "../src/client/registry.js";
 import type { ClientActionEnvironment } from "../src/client/registry.js";
 import { HumanApp } from "../src/client/app.js";
+import "../../../approvals/static/src/requests.js";
 
 const bootstrap = {
   wire_major: 1, registry_version: "r1", asset_version: "a1",
@@ -242,4 +243,115 @@ test("expanding quick chat navigates to the authorized Discuss menu and keeps th
   root.querySelector<HTMLButtonElement>("button.brand")!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-client-header] .discuss-panel")).toBe(panel));
   expect(panel.hidden).toBe(true);
+});
+
+test("an editable client action guards navigation while busy and saves a draft before leaving", async () => {
+  const createElement = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag, options) => {
+    const node = createElement(tag, options);
+    if (node instanceof HTMLDialogElement) {
+      node.showModal = () => { node.open = true; };
+      node.close = () => { node.open = false; node.dispatchEvent(new Event("close")); };
+    }
+    return node;
+  });
+  history.replaceState(null, "", "/erp/action-30?menu=10");
+  let env!: ClientActionEnvironment;
+  let busy = true;
+  let dirty = true;
+  const edits = {
+    busy: () => busy, dirty: () => dirty,
+    save: vi.fn(async () => { dirty = false; }), discard: vi.fn(() => { dirty = false; }),
+  };
+  registerClientAction("demo.workflow_editor", { async create(context) {
+    env = context;
+    return { edits, dispose() {} };
+  } });
+  vi.stubGlobal("fetch", fetchMock({ 30: "demo.workflow_editor" }));
+  app = new HumanApp(host(), bootstrap);
+  await app.start();
+  await env.navigate!({});
+  expect(location.pathname).toBe("/erp/action-30");
+  busy = false;
+  const choose = async (name: string) => {
+    const navigation = env.navigate!({});
+    const dialog = await vi.waitFor(() => {
+      const node = [...document.querySelectorAll("dialog")].find(d => d.textContent?.includes("Unsaved changes"));
+      expect(node, document.querySelector("dialog")?.textContent ?? document.querySelector("[data-client-notice]")?.textContent ?? "No dialog").toBeDefined();
+      return node!;
+    });
+    [...dialog.querySelectorAll("button")].find(b => b.textContent === name)!.click();
+    await navigation;
+  };
+  await choose("Cancel");
+  expect(location.pathname).toBe("/erp/action-30");
+  expect(dirty).toBe(true);
+  await choose("Save");
+  expect(location.pathname).toBe("/erp");
+  expect(edits.save).toHaveBeenCalledOnce();
+  expect(edits.discard).not.toHaveBeenCalled();
+});
+
+const approvalsMenu = { module: "approvals", id: 12, parent_id: null, label: "Approvals", action_id: 61, action_kind: "window", children: [], icon: null };
+const approvalsModel = "approval.request.view";
+const requestAction = { wire_major: 1, id: 61, name: "Approval requests", model: approvalsModel, target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null };
+const requestView = {
+  wire_major: 1, registry_version: "r1", description_version: "d1", model: approvalsModel, notices: [],
+  fields: { [approvalsModel]: { name: { type: "char", label: "Request", required: false, readonly: true, selection: null, relation: null, relation_field: null } } },
+  views: [{ identity: { kind: "stored", id: 1 }, type: "form", schema_major: 1, renderer: "web.form", root: 0, nodes: [
+    { kind: "form", record_mode: "record", children: [1] },
+    { kind: "field", field: { model: approvalsModel, name: "name" }, widget: "char", label: "Request", force_save: false, options: {}, modifiers: { readonly: null, required: null, invisible: null } }
+  ] }]
+};
+
+test.each(["first load", "browser Back"])("a retired Approvals record link becomes a native route on %s", async visit => {
+  history.replaceState({ erpIndex: 21 }, "", `/erp/action-60?${visit === "first load" ? "" : "menu=12&"}id=23&view_type=form&list_tab=reviewed:50`);
+  if (visit === "browser Back") history.pushState({ erpIndex: 22 }, "", "/erp");
+  const entryCount = history.length;
+  const calls: { path: string; args: Record<string, unknown> }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    const args = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    calls.push({ path, args });
+    if (path.endsWith("erp_load_web_menus")) return json({ ...menus, roots: [12], nodes: [approvalsMenu] });
+    if (path.endsWith("erp_load_web_action_views")) {
+      if ((args["ids"] as number[])[0] !== 60) return json({ action: requestAction, views: requestView });
+      expect(args["bookmark"]).toBe(true);
+      return json(clientAction(60, "approvals.requests"));
+    }
+    if (path.endsWith("erp_load_web_action_ref")) return json(requestAction);
+    if (path.endsWith(`${approvalsModel}/web_read`)) return json([{ id: 23, name: "Request #23" }]);
+    if (path.endsWith("res.users/web_read")) return json([{ id: 2, action_id: false }]);
+    return json([]);
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  if (visit === "browser Back") history.back();
+  await vi.waitFor(() => expect(root.querySelector("[data-client-content]")?.textContent).toContain("Request #23"));
+  const url = new URL(location.href);
+  expect(url.pathname).toBe("/erp/action-61");
+  expect(url.searchParams.get("menu")).toBe(visit === "first load" ? null : "12");
+  expect(url.searchParams.get("id")).toBe("23");
+  expect(url.searchParams.get("view_type")).toBe("form");
+  expect(url.searchParams.get("search_filters")).toBe('["is_reviewed"]');
+  expect(url.searchParams.has("list_tab")).toBe(false);
+  expect(history.state).toEqual({ erpIndex: 21 });
+  expect(history.length).toBe(entryCount);
+  expect(calls.find(call => call.path.endsWith("erp_load_web_action_ref"))?.args["xml_id"]).toBe("approvals.requests_window");
+  expect(calls.find(call => call.path.endsWith(`${approvalsModel}/web_read`))?.args["ids"]).toEqual([23]);
+});
+
+test("a denied native menu action preserves the refusal without probing a legacy client action", async () => {
+  history.replaceState(null, "", "/erp/action-61?menu=12");
+  const fetch = vi.fn(async (path: string) => {
+    if (path.endsWith("erp_load_web_menus")) return json({ ...menus, roots: [12], nodes: [approvalsMenu] });
+    if (path.endsWith("erp_load_web_action_views")) return new Response(JSON.stringify({ message: "Access denied." }), { status: 403 });
+    return json([]);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  expect(root.querySelector("[data-client-content]")?.textContent).toContain("This screen is not open to your account.");
+  expect(fetch.mock.calls.some(([path]) => path.endsWith("erp_load_web_client_action"))).toBe(false);
 });

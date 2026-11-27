@@ -8,6 +8,7 @@ use erp_sdk::{Context, Operation, SearchOptions};
 
 pub(crate) const MAX_MEMBERS: usize = 100;
 const PAGE: u64 = 50;
+mod notifications;
 mod workspace;
 
 #[model(name = "discuss.channel", description = "Conversation", inherit = [MailThread], addon = "mail",
@@ -466,13 +467,7 @@ pub(crate) async fn change_window(tx: &mut Transaction, page: i64) -> Result<Vec
     if page == 9_007_199_254_740_991 {
         let mut window = workspace::recent_window(tx, &env).await?;
         window.push(-1);
-        for notice in visible_notifications(tx, &env).await? {
-            window.push(
-                notice["id"]
-                    .as_i64()
-                    .ok_or_else(|| Error::invariant("Invalid notification id."))?,
-            );
-        }
+        notifications::extend_window(tx, &env, &mut window).await?;
         return Ok(window);
     }
     let mut window = Vec::new();

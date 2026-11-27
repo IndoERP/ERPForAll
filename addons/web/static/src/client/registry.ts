@@ -114,6 +114,8 @@ export interface ClientActionDescriptor { readonly id: number | null; readonly n
 export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   host: HTMLElement; panel: HTMLElement; controls: HTMLElement; rpc: RpcClient; companies: readonly Company[];
   run: (job: () => Promise<void>) => void; notice: (message: string) => void; messages: MessageServices; editorLocale: EditorLocale;
+  /** Current address when mounted by the shell, including bookmarkable list and record selections. */
+  readonly route?: Readonly<Route>;
   /** Mount the current session's Discuss controller into its installed workspace action. */
   mountDiscuss?: (host: HTMLElement) => () => void;
   /** Active interactive identity for first-party, session-bound client actions. */
@@ -127,13 +129,33 @@ export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   openDraft?(xmlId: string, defaults: Readonly<Record<string, string>>): Promise<void>;
 }
 /** `dispose` is synchronous and idempotent and the screen ignores late rendering after it; `captureState` returns JSON of at most 16 KiB. */
-export interface ClientActionHandle { dispose(): void; captureState?(): unknown }
+export interface ClientActionHandle {
+  dispose(): void;
+  captureState?(): unknown;
+  /** Editable client actions participate in the shell's normal unsaved-change and navigation guards. */
+  edits?: Pick<ServiceController, "dirty" | "busy" | "save" | "discard">;
+}
 export interface ClientActionFactory { create(environment: ClientActionEnvironment): Promise<ClientActionHandle> }
 export const clientActions = new Registry<ClientActionFactory>("client action");
+export interface ClientActionRedirectEnvironment {
+  readonly route: Readonly<Route>;
+  readonly rpc: RpcClient;
+  readonly context: Readonly<Record<string, unknown>>;
+  readonly signal: AbortSignal;
+}
+export const clientActionRedirects = new Registry<(environment: ClientActionRedirectEnvironment) => Promise<Route>>("client action redirect");
+function checkClientActionTag(tag: string): void {
+  if (!/^[a-z0-9_]+\.[a-z][a-z0-9_]*$/.test(tag) || tag.length > 64) throw new ClientError("validation", `Invalid client action tag: ${tag.slice(0, 64)}.`);
+}
 /** Bind a client action tag (`<addon>.<name>`, declared on the server by the same addon) to its screen. A second registration of one tag fails. */
 export function registerClientAction(tag: string, factory: ClientActionFactory): void {
-  if (!/^[a-z0-9_]+\.[a-z][a-z0-9_]*$/.test(tag) || tag.length > 64) throw new ClientError("validation", `Invalid client action tag: ${tag.slice(0, 64)}.`);
+  checkClientActionTag(tag);
   clientActions.add(tag, factory);
+}
+/** Preserve bookmarks to a retired, authorized client action by resolving its current window route before mounting. */
+export function registerClientActionRedirect(tag: string, redirect: (environment: ClientActionRedirectEnvironment) => Promise<Route>): void {
+  checkClientActionTag(tag);
+  clientActionRedirects.add(tag, redirect);
 }
 export interface ControlPanelExtension { model: string; component: ComponentClass }
 /** What a list header may use: the list's own data access, read as the signed-in user. */

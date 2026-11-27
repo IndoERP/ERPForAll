@@ -1,0 +1,39 @@
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+.activity-menu-section + .activity-menu-section { border-top: 1px solid var(--line); }
+.activity-menu-heading {
+  margin: 0;
+  padding: 8px 12px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.activity-menu-unread {
+  position: absolute;
+  bottom: 3px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
+}
+.app-bar .activity-menu-dropdown button.activity-menu-summary-control {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  cursor: pointer;
+  text-align: start;
+}
+.app-bar .activity-menu-dropdown button.activity-menu-summary-control:hover { background: var(--hover); }
+.app-bar .activity-menu-dropdown button.activity-menu-summary-control:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.activity-menu-summary-control svg { width: 16px; height: 16px; color: var(--muted); }
+.activity-menu-summary-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }

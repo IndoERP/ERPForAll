@@ -50,6 +50,18 @@ pub enum CorePhase {
 #[linkme::distributed_slice]
 pub static CORE_DDL: [CoreDdl];
 
+/// Read-only model projection supplied by the framework base addon. Ordinary model tables
+/// are synchronized first so a projection can depend on columns added in the same upgrade.
+#[doc(hidden)]
+pub struct BaseModelView {
+    pub model: &'static str,
+    pub select: fn() -> String,
+}
+
+#[doc(hidden)]
+#[linkme::distributed_slice]
+pub static BASE_MODEL_VIEWS: [BaseModelView];
+
 /// Register a core table installed by [`crate::Orm::sync_schema`].
 ///
 /// ```

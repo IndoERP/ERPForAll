@@ -1916,6 +1916,9 @@ impl Transaction {
                 .collect()
         };
         check_name_collisions(&specs)?;
+        let (views, specs): (Vec<_>, Vec<_>) = specs
+            .into_iter()
+            .partition(|m| crate::BASE_MODEL_VIEWS.iter().any(|v| v.model == m.name));
         let relations = relation_tables(&registry, &specs);
         let (saved, lock_timeout) = self.set_schema_limits(false).await?;
         // Serialize schema changes, then read the catalog under the lock.
@@ -1938,6 +1941,34 @@ impl Transaction {
                 &clear,
             )
             .await?;
+        // Native projections have no writable backing table. Publish their trusted SELECTs
+        // atomically with the tables they read, then use the ordinary view-column checks.
+        for view in &views {
+            let provider = crate::BASE_MODEL_VIEWS
+                .iter()
+                .find(|v| v.model == view.name)
+                .ok_or_else(|| Error::invariant("Missing model view definition."))?;
+            let ddl = format!(
+                "CREATE OR REPLACE VIEW {} AS {}",
+                erp_sql::quote(&view.table),
+                (provider.select)()
+            );
+            self.batch(&ddl).await?;
+        }
+        if !views.is_empty() {
+            self.init_models_locked(
+                &views,
+                &relation_tables(&registry, &views),
+                &registry,
+                options,
+                SchemaPlanMode {
+                    replan: None,
+                    sql_objects: crate::schema_sqlobj::SqlObjectScope::Subset,
+                },
+                &[],
+            )
+            .await?;
+        }
         self.seal_clear_columns(&clear).await?;
         self.set_timeouts(&saved.0, &saved.1).await?;
         Ok(SchemaSync { steps })

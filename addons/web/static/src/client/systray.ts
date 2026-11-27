@@ -6,6 +6,12 @@ import type { ActivityWindowAction } from "./activity-menu.js";
 import type { ActionRequest } from "./registry.js";
 import type { Route } from "./route.js";
 
+export interface DiscussNotifications {
+  count(): Promise<number>;
+  open(): void;
+  subscribe(listener: () => void): () => void;
+}
+
 export interface SystrayEnvironment {
   userId?: number;
   /** Token issued for this browser session, for authorized same-origin addon requests. */
@@ -23,6 +29,10 @@ export interface SystrayEnvironment {
   messages?: MessageServices;
   /** Opens a checked activity window action as a list; `null` opens the user's own "My Activities" list. */
   openActivities?: (action: ActivityWindowAction | null) => Promise<void>;
+  /** Opens the current user's approval review queue. */
+  openApprovals?: () => void | Promise<void>;
+  /** Personal Discuss notifications, available when Discuss is installed. */
+  discussNotifications?: DiscussNotifications;
   /** Goes to a route through the shell (see `ShellNavigation` in registry.ts). */
   navigate?: (route: Route) => Promise<void>;
   /** Opens a window action by XML id; the breadcrumb leads back to the page that was open. */

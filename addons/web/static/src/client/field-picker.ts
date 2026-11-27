@@ -29,7 +29,7 @@ export function withRelationPicker(control:FieldControl, env:WidgetEnvironment):
   more.title=`Search more ${field.label}…`;
   (control.node.querySelector('.many2one-buttons') ?? control.node).append(more);
   if(env.signal?.aborted)scope.abort();
-  return {node:control.node,dispose:()=>{
+  return {...control,dispose:()=>{
     if(dead)return;dead=true;env.signal?.removeEventListener('abort',abort);scope.abort();picker?.dispose();control.dispose();
   }};
 }

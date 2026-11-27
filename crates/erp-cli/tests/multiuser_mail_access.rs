@@ -614,6 +614,115 @@ fn saved_socket_filters_hidden_wakes_and_closes_after_role_change() {
 }
 
 #[test]
+fn personal_notifications_are_counted_and_read_per_recipient() {
+    use tungstenite::Message;
+    run(|f| {
+        let m = Mail::new(f);
+        let a = f.user(Subject::A);
+        let port = f.native.port;
+        let model = "discuss.channel";
+        success(&f.rpc(
+            Subject::Admin,
+            "res.users",
+            "write",
+            json!({"ids":[a.id],"vals":{"notification_type":"inbox"}}),
+        ));
+        let count =
+            |subject| success(&f.rpc(subject, model, "messaging_notification_count", json!({})));
+        let inbox = |subject| success(&f.rpc(subject, model, "messaging_notifications", json!({})));
+        let mark = |subject, id| {
+            f.rpc(
+                subject,
+                model,
+                "messaging_notification_read",
+                json!({"message_id":id}),
+            )
+        };
+        assert_eq!(count(Subject::A), 0);
+        let mut socket = a.thread_socket(port);
+        let csrf = a.bootstrap(port, "/erp")["csrf"]["logout"].clone();
+        socket
+            .send(Message::Text(
+                json!({"type":"subscribe","model":"discuss.channel.member",
+            "id":9_007_199_254_740_991_i64,"company":a.company,"csrf":csrf})
+                .to_string()
+                .into(),
+            ))
+            .unwrap();
+        let wake = Message::Text(r#"{"type":"resync"}"#.into());
+        assert_eq!(socket.read().unwrap(), wake);
+
+        let subject = "Please review the delivery plan";
+        let message = success(&f.rpc(
+            Subject::Admin,
+            "product.template",
+            "thread_post",
+            json!({"ids":[m.shared],"post":{"body":"A personal record update", "subject":subject, "partner_ids":[m.partner_a]}}),
+        ))["message_id"].as_i64().unwrap();
+        assert_eq!(socket.read().unwrap(), wake);
+        // Imported and subsequently restricted deliveries can still be present in a recipient's
+        // receipts. Newer unreadable messages must never hide the older readable notice.
+        let hidden: Vec<_> = (0..120).map(|i| {
+            json!({"model":"product.template","res_id":m.b,"body":format!("Hidden notification {i}"),"message_type":"comment"})
+        }).collect();
+        let hidden = success(&f.rpc(
+            Subject::Admin,
+            "mail.message",
+            "create",
+            json!({"vals_list":hidden}),
+        ));
+        let hidden: Vec<i64> = hidden
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_i64().unwrap())
+            .collect();
+        let database = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        database
+            .block_on(f.native.client.execute(
+                "INSERT INTO mail_notification (message_id,partner_id,transport,state)
+             SELECT message,$2::bigint,'inbox','delivered' FROM unnest($1::bigint[]) AS message",
+                &[&hidden, &m.partner_a],
+            ))
+            .unwrap();
+        assert_eq!(count(Subject::A), 1);
+        assert_eq!(count(Subject::B), 0);
+        let row = json!({"message":message, "model":"product.template","res_id":m.shared,"subject":subject,"unread":true});
+        assert_eq!(inbox(Subject::A), json!([row.clone()]));
+        assert_eq!(inbox(Subject::B), json!([]));
+        assert_eq!(mark(Subject::B, message).status, 403);
+        assert_eq!(mark(Subject::Anonymous, message).status, 401);
+        assert_eq!(mark(Subject::A, hidden[0]).status, 403);
+        assert_eq!(count(Subject::A), 1);
+
+        success(&mark(Subject::A, message));
+        assert_eq!(socket.read().unwrap(), wake);
+        success(&mark(Subject::A, message));
+        assert_eq!(count(Subject::A), 0);
+        let mut row = row;
+        row["unread"] = json!(false);
+        assert_eq!(inbox(Subject::A), json!([row]));
+
+        let late = m.message(m.shared, "The second transport is delayed", json!({}));
+        let deliver = |transport: &str| {
+            database.block_on(f.native.client.execute(
+                "INSERT INTO mail_notification (message_id,partner_id,transport,state) VALUES ($1::bigint,$2::bigint,$3::text,'delivered')",
+                &[&late, &m.partner_a, &transport],
+            )).unwrap();
+        };
+        deliver("inbox");
+        assert_eq!(count(Subject::A), 1);
+        success(&mark(Subject::A, late));
+        deliver("push");
+        assert_eq!(count(Subject::A), 0);
+        assert_eq!(inbox(Subject::A)[0]["unread"], false);
+    });
+}
+
+#[test]
 fn conversation_membership_replay_receipts_and_revocation() {
     use multiuser_fixture::UserSpec;
     use tungstenite::{Message, protocol::frame::coding::CloseCode};
@@ -709,6 +818,25 @@ fn conversation_membership_replay_receipts_and_revocation() {
         }
         let snapshot = list();
         assert!(snapshot[0]["unread"].as_i64().unwrap() > 0);
+        assert_eq!(
+            success(&participant.rpc_on(port, model, "messaging_notification_count", json!({}))),
+            0
+        );
+        assert_eq!(
+            success(&participant.rpc_on(port, model, "messaging_notifications", json!({}))),
+            json!([])
+        );
+        assert_eq!(
+            participant
+                .rpc_on(
+                    port,
+                    model,
+                    "messaging_notification_read",
+                    json!({"message_id":posted})
+                )
+                .status,
+            403
+        );
         for _ in 0..2 {
             success(&participant.rpc_on(
                 port,

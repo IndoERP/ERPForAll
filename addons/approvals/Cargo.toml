@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+[package]
+name = "erp-addon-approvals"
+description = "Configurable approval workflows and request inbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk.workspace = true
+
+[lints]
+workspace = true

@@ -3,7 +3,7 @@
 use erp_sdk::prelude::*;
 
 /// `ir.model`.
-#[model(name = "ir.model", description = "Models")]
+#[model(name = "ir.model", description = "Models", rec_names_search = ["name", "model"])]
 pub struct IrModel {
     /// Model description.
     #[field(char, required = true)]

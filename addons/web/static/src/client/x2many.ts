@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { passwordResetRows } from "./password-editor.js";
 import { t } from "./translate.js";
 import { actionButton, button, el } from "./dom.js";
 import { renderFormLayout } from "./form-layout.js";
@@ -91,6 +92,10 @@ function lineLabel(line: Line, subview: Subview | undefined): string {
 export function one2manyField(environment: WidgetEnvironment): WidgetHandle {
   const { field, value, change, run } = environment;
   const subview = field.subview, items = lineList(value);
+  if (environment.model === "change.password.wizard" && field.name === "user_ids" && field.relation === "change.password.user") {
+    if (field.readonly || !subview?.form) throw new ClientError("validation", field.subviewError || "Password reset fields are unavailable.");
+    return passwordResetRows(items, subview.form.fields);
+  }
   const editable = !field.readonly && subview?.form !== undefined;
   const searchField = constantRelationContext(field)?.["inline_search_field"];
 
@@ -360,6 +365,29 @@ function missingLineField(subview: Subview, values: Line): Field | undefined {
   });
 }
 
+const nativeLineScalars = new Set(["char", "text", "integer", "float", "monetary"]);
+
+function lineDependency(value: unknown, name: string): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return "name" in value && value.name === name || "nodes" in value && Array.isArray(value.nodes)
+    && value.nodes.some(node => node?.kind === "name" && node.name === name);
+}
+
+/** Custom widgets and declarations that read a record value still get a fresh line presentation. */
+function presentationReads(nodes: readonly Node[], name: string): boolean {
+  return nodes.some(node => {
+    if (node.kind === "field") {
+      const { field, widget } = node;
+      return widget !== field.kind && widget !== "many2many_tags"
+        || Object.values(field.modifiers ?? {}).some(expression => lineDependency(expression, name))
+        || Object.values(field.options ?? {}).some(option => lineDependency(option, name));
+    }
+    if (node.kind === "widget") return true;
+    if ((node.kind === "page" || node.kind === "ribbon") && lineDependency(node.invisible, name)) return true;
+    return "children" in node && presentationReads(node.children, name);
+  });
+}
+
 /**
  *  Save & New keeps the dialog open for the next line; every saved line reaches the parent
  *  record in one change when the dialog closes. 
@@ -437,11 +465,17 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
     else if (prior instanceof HTMLElement && prior.isConnected) prior.focus();
   };
 
-  const applyLineChange = (names: readonly string[], patch: Readonly<Record<string, unknown>>): void => {
+  const applyLineChange = (names: readonly string[], patch: Readonly<Record<string, unknown>>, scalar?: string): void => {
     values = { ...values, ...patch };
     for (const name of names) changed.add(name);
     if (typeof values["__key"] === "string") touchNewLine(values["__key"], names);
-    render();
+    const source = scalar === undefined ? [] : widgetHandles.filter(item => item.name === scalar);
+    if (scalar !== undefined && source.length === 1 && !presentationReads(form.nodes, scalar)) {
+      // A plain input already displays its edit. Replacing the line on blur can detach
+      // the next field before that pointer or Tab interaction has reached it.
+      source[0]!.represented = values[scalar];
+      source[0]!.handle.node.classList.remove("field-dirty");
+    } else render();
     const epoch = lineEpoch;
     const priorWork = pendingChange;
     const work = (async () => {
@@ -454,7 +488,7 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
       const merged: Line = { ...values };
       const appliedKeys: string[] = [];
       for (const key of outcome.changedKeys) {
-        if (Object.is(values[key], sent[key])) {
+        if (Object.is(values[key], sent[key]) && JSON.stringify(values[key]) !== JSON.stringify(outcome.values[key])) {
           merged[key] = outcome.values[key];
           appliedKeys.push(key);
         }
@@ -463,7 +497,7 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
       for (const key of appliedKeys) changed.add(key);
       if (typeof values["__key"] === "string" && appliedKeys.length) touchNewLine(values["__key"], appliedKeys);
       if (outcome.warning) environment.messages?.warning(outcome.warning);
-      render();
+      if (appliedKeys.length) render();
     })();
     const tracked = work.finally(() => { if (pendingChange === tracked) pendingChange = undefined; });
     void tracked.catch(() => {});
@@ -501,7 +535,13 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
     const focused = document.activeElement instanceof HTMLElement && dialog.contains(document.activeElement)
       ? (document.activeElement as HTMLInputElement).name || undefined : undefined;
     const drafts = new Map<string, WidgetDraft>(), managed = new Set<string>();
-    for (const control of body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input,textarea")) if (control.name && (control.closest(".field-dirty,.field-invalid") || !control.validity.valid)) drafts.set(control.name, { value: control.value, message: control.validationMessage });
+    const represented = new Map(widgetHandles.map(item => [item.name, item.represented]));
+    for (const control of body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input,textarea")) {
+      if (control.name && Object.is(represented.get(control.name), values[control.name])
+          && (control.closest(".field-dirty,.field-invalid") || !control.validity.valid)) {
+        drafts.set(control.name, { value: control.value, message: control.validationMessage });
+      }
+    }
     for (const { name, represented, handle } of widgetHandles) if (Object.is(represented, values[name])) {
       const draft = handle.captureDraft?.(); if (draft) { drafts.set(name, draft); managed.add(name); }
     }
@@ -534,7 +574,10 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
             await environment.openRecord!(model, id);
           } finally { submitting = false; }
         } } : {}),
-        change: next => { applyLineChange([node.field.name], { [node.field.name]: next }); }
+        change: next => {
+          const scalar = node.widget === node.field.kind && nativeLineScalars.has(node.widget) ? node.field.name : undefined;
+          applyLineChange([node.field.name], { [node.field.name]: next }, scalar);
+        }
       });
       widgetHandles.push({ name: node.field.name, represented: values[node.field.name], handle });
       if (managed.has(node.field.name)) handle.restoreDraft?.(drafts.get(node.field.name)!);

@@ -857,3 +857,96 @@ test("line dialog recovers after a failed onchange and preserves newer local edi
   expect(change.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ title: "User Custom Title", product_uom_qty: 3, price_subtotal: 300 })]);
   handle.dispose(); messages.dispose();
 });
+
+test.each(["empty", "echo", "derived"] as const)("reviewer autocomplete survives a %s line onchange inside its modal", async response => {
+  const reviewers = field("user_ids", "many2many", { label: "Users", relation: "res.users", required: true, options: { no_create: true } });
+  const fields = [title, year, reviewers];
+  const owner = {
+    ...books(), relationField: null,
+    subview: {
+      ...subview, list: [title, year], fields: new Map(fields.map(candidate => [candidate.name, candidate])),
+      form: { ...formView, fields, nodes: [{ kind: "root" as const, children: [{ kind: "sheet" as const,
+        children: fields.map(candidate => ({ kind: "field" as const, field: candidate, label: candidate.label, widget: candidate === reviewers ? "many2many_tags" : candidate.kind })),
+      }] }] },
+    },
+  };
+  let finishChange!: () => void;
+  const pendingChange = new Promise<void>(resolve => { finishChange = resolve; });
+  const change = vi.fn();
+  const rpc = new RpcClient(async (input, init) => {
+    const path = String(input), body = JSON.parse(String(init?.body));
+    let value: unknown = {};
+    if (path.endsWith("/web_name_search")) {
+      value = body.name === "Riv" ? [{ id: 8, display_name: "Riley Rivera" }] : [];
+    } else if (path.endsWith("/onchange")) {
+      value = { value: {} };
+      if (body.field_names.includes("title")) {
+        await pendingChange;
+        value = { value: response === "derived" ? { publication_year: 2027 }
+          : response === "echo" ? { title: body.values.title } : {} };
+      }
+    } else if (path.endsWith("/default_get")) value = { publication_year: 2026 };
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+  const shown = new Set<HTMLElement>();
+  const showDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "showPopover");
+  const hideDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "hidePopover");
+  Object.defineProperty(HTMLElement.prototype, "showPopover", { configurable: true, value(this: HTMLElement) { shown.add(this); } });
+  Object.defineProperty(HTMLElement.prototype, "hidePopover", { configurable: true, value(this: HTMLElement) { shown.delete(this); } });
+  if (!globalThis.CSS?.escape) vi.stubGlobal("CSS", { escape: (name: string) => name });
+  const messages = new MessageServices(document.body, error => { reports.push(error); });
+  const handle = fieldWidgets.get("one2many").render({ field: owner, value: [], rpc, change, run, context: {}, messages, report: error => { reports.push(error); } });
+  try {
+    document.body.append(handle.node);
+    handle.node.querySelector<HTMLButtonElement>(".x2many-add")!.click();
+    await Promise.all(jobs);
+    const dialog = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
+    const stepName = dialog.querySelector<HTMLInputElement>('input[name="title"]')!;
+    const input = () => dialog.querySelector<HTMLInputElement>('input[name="user_ids"]')!;
+    const first = input();
+    stepName.focus();
+    stepName.value = "Review stage";
+    stepName.dispatchEvent(new Event("change"));
+    expect(input()).toBe(first);
+    first.focus();
+    first.value = "Riv";
+    first.dispatchEvent(new Event("input"));
+    const suggestion = () => dialog.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])');
+    await vi.waitFor(() => expect(suggestion()?.textContent).toBe("Riley Rivera"));
+    expect(shown.has(suggestion()!.closest<HTMLElement>("[popover=manual]")!)).toBe(true);
+
+    finishChange();
+    await Promise.all(jobs);
+    if (response === "derived") {
+      expect(dialog.querySelector<HTMLInputElement>('input[name="publication_year"]')?.value).toBe("2027");
+      expect(input()).not.toBe(first);
+    } else expect(input()).toBe(first);
+    expect(input().value).toBe("Riv");
+    expect(document.activeElement).toBe(input());
+    await vi.waitFor(() => expect(suggestion()?.textContent).toBe("Riley Rivera"));
+    if (response === "echo") suggestion()!.click();
+    else {
+      input().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+      expect(input().getAttribute("aria-activedescendant")).toBe(suggestion()!.id);
+      const select = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      input().dispatchEvent(select);
+      expect(select.defaultPrevented).toBe(true);
+    }
+    expect(dialog.querySelector(".relation-chip-name")?.textContent).toBe("Riley Rivera");
+    expect(input().value).toBe("");
+    expect(input().validity.valid).toBe(true);
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Save & Close")!.click();
+    await vi.waitFor(() => expect(change).toHaveBeenCalledWith([
+      expect.objectContaining({ title: "Review stage", user_ids: [{ id: 8, display_name: "Riley Rivera" }] }),
+    ]));
+    expect(shown.size).toBe(0);
+    expect(reports).toEqual([]);
+  } finally {
+    finishChange();
+    handle.dispose();
+    messages.dispose();
+    if (showDescriptor) Object.defineProperty(HTMLElement.prototype, "showPopover", showDescriptor); else Reflect.deleteProperty(HTMLElement.prototype, "showPopover");
+    if (hideDescriptor) Object.defineProperty(HTMLElement.prototype, "hidePopover", hideDescriptor); else Reflect.deleteProperty(HTMLElement.prototype, "hidePopover");
+    vi.unstubAllGlobals();
+  }
+});

@@ -201,10 +201,7 @@ test("workspace hands off the same active chat, reconciles filtered membership, 
     expect(args["context"]).toEqual(context);
     if (method === "conversation_search") return { items: args["query"] ? [] : [direct], next: null };
     if (method === "conversation_summary") return direct;
-    if (method === "messaging_inbox") return [
-      { message: 10, transport: "inbox", model: "sale.order", res_id: 44, subject: "Order ready" },
-      { message: 10, transport: "push", model: "sale.order", res_id: 44, subject: "Order ready" },
-    ];
+    if (method === "messaging_notifications") return [{ message: 10, model: "sale.order", res_id: 44, subject: "Order ready", unread: false }];
     throw new Error(method);
   });
   const openRecord = vi.fn();
@@ -229,4 +226,46 @@ test("workspace hands off the same active chat, reconciles filtered membership, 
   exit(); find(view.node, "Discuss").click();
   expect(view.node.querySelector(".discuss-identity h3")?.textContent).toBe("Ada");
   expect(mounts).toEqual([original]); view.dispose();
+});
+
+test("the notification shortcut focuses the inbox and acknowledgement updates the live count", async () => {
+  vi.stubGlobal("WebSocket", Socket);
+  vi.stubGlobal("BroadcastChannel", Bus);
+  const context = { allowed_company_ids: [5] };
+  let unread = true;
+  const call = vi.fn(async (_: string, method: string, args: Record<string, unknown>) => {
+    expect(args["context"]).toEqual(context);
+    if (method === "messaging_notification_count") return Number(unread);
+    if (method === "messaging_notifications") return [{ message: 10, model: "sale.order", res_id: 44, subject: "Order ready", unread }];
+    if (method === "messaging_notification_read") {
+      expect(args["message_id"]).toBe(10);
+      unread = false;
+      return null;
+    }
+    throw new Error(method);
+  });
+  const view = renderDiscuss({
+    store: new MessagingStore({ reportError: e => { throw e; } }),
+    rpc: { call } as unknown as RpcClient, uid: 5, userName: "Admin", context,
+    policy: { company: 5, csrf: "test", retry: [1, 4] },
+  });
+  document.body.append(view.node);
+  const changed = vi.fn();
+  const unsubscribe = view.notifications.subscribe(changed);
+  expect(Socket.all).toHaveLength(1);
+  Socket.all[0]!.replay();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(await view.notifications.count()).toBe(1);
+  view.notifications.open();
+  const nav = find(view.node, "Notifications");
+  expect(nav.getAttribute("aria-pressed")).toBe("true");
+  expect(document.activeElement).toBe(nav);
+  await vi.waitFor(() => find(view.node, "Mark Order ready as read"));
+  expect(call.mock.calls.some(([, method]) => method === "messaging_notification_read")).toBe(false);
+  find(view.node, "Mark Order ready as read").click();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+  expect(await view.notifications.count()).toBe(0);
+  await vi.waitFor(() => expect(view.node.querySelector('[data-key="readn10"]')).toBeNull());
+  unsubscribe();
+  view.dispose();
 });

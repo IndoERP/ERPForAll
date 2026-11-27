@@ -3,12 +3,14 @@
 export { registerPivotVariant, type PivotVariant } from "./pivot-view.js";
 export { Component, signal, onMounted, onWillDestroy } from "@erpforall/elang";
 export {
-  registerFieldWidget, resolveFieldWidget, registerServiceController, registerClientAction, registerControlPanelExtension, registerListHeaderExtension, elangFieldWidget,
+  registerFieldWidget, resolveFieldWidget, registerServiceController, registerClientAction, registerClientActionRedirect, registerControlPanelExtension, registerListHeaderExtension, elangFieldWidget,
   registerCogMenuItem, registerSystrayItem, registerCommandProvider, registerCommandCategory, registerCommandSetup,
   registerUserMenuItem, registerDebugSection, registerDebugItemProvider
 } from "./registry.js";
-export type { FieldWidgetProps, WidgetEnvironment, WidgetHandle, WidgetDraft, FieldWidget, ServiceEnvironment, ServiceFactory, ClientActionDescriptor, ClientActionEnvironment, ClientActionHandle, ClientActionFactory, ListHeaderEnvironment, ListHeaderHandle, ListHeaderExtension, ActionRequest, ShellNavigation } from "./registry.js";
-export type { RpcClient } from "./transport.js";
+export type { FieldWidgetProps, WidgetEnvironment, WidgetHandle, WidgetDraft, FieldWidget, ServiceEnvironment, ServiceFactory, ClientActionDescriptor, ClientActionEnvironment, ClientActionHandle, ClientActionFactory, ClientActionRedirectEnvironment, ListHeaderEnvironment, ListHeaderHandle, ListHeaderExtension, ActionRequest, ShellNavigation } from "./registry.js";
+export { ClientError, type RpcClient } from "./transport.js";
+export { el, button, errorMessage } from "./dom.js";
+export { rpcId } from "./route.js";
 export type { Route } from "./route.js";
 export { registerRefusedActionPage } from "./refused-action.js";
 export type { RefusedActionPage, RefusedActionEnvironment, RefusedActionHandle } from "./refused-action.js";
@@ -57,6 +59,7 @@ export { createModelFieldSelector } from "./model-field-selector.js";
 export { createSelectMenu } from "./select-menu.js";
 export { createSignaturePad } from "./signature-pad.js";
 export { createAutocomplete } from "./autocomplete.js";
+export { fieldShell } from "./field-shell.js";
 export {
   currencyExchangeRateControl, currencyDatePickerControl, refreshCurrencyRateControl,
   invertRate, formatRateDisplay, parseRateInput, getCurrencySwapPreference, setCurrencySwapPreference,

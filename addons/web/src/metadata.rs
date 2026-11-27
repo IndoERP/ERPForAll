@@ -3740,7 +3740,8 @@ async fn resolve_record_action(
 #[methods(IrActionsActWindow, addon = "web")]
 impl WebIrActionsActWindow {
     /// Load an authorized action and its bounded view descriptions in this transaction.
-    /// The action owns the model/view selection; a failed member rejects the whole RPC.
+    /// For a numeric bookmark with no typed menu, consult the action key table and dispatch to
+    /// the actual action loader. The key table itself conveys no read authority.
     #[method]
     #[rpc(effect = read)]
     async fn erp_load_web_action_views(
@@ -3748,8 +3749,35 @@ impl WebIrActionsActWindow {
         tx: &mut Transaction,
         wire_major: u64,
         options: Option<ValueMap>,
+        bookmark: Option<bool>,
     ) -> Result<Value> {
         let mut admission = ResponseAdmission::new();
+        if bookmark == Some(true) {
+            let id = this.as_records().ensure_one()?.int()?;
+            let rows = tx.query(
+                "SELECT type FROM ir_actions WHERE id=$1 AND type IN ('ir.actions.client','ir.actions.act_window')",
+                &[&id],
+            ).await?;
+            let denied = || Error::access("You may not open this action.");
+            let row = rows.first().ok_or_else(denied)?;
+            let kind: &str = row
+                .try_get(0)
+                .map_err(|e| Error::db(format!("Invalid action type: {e}")))?;
+            let result = if kind == "ir.actions.client" {
+                let records = this.env().records(kind)?.browse([id])?;
+                load_client_action(&records, tx, wire_major)
+                    .await
+                    .and_then(|a| admission.wire(&a))
+            } else {
+                load_action_views(this.as_records(), tx, wire_major, options, &mut admission)
+                    .await
+                    .and_then(|a| admission.wire(&a))
+            };
+            return result.map_err(|error| match error.kind() {
+                ErrorKind::Access | ErrorKind::Missing => denied(),
+                _ => error,
+            });
+        }
         let result =
             load_action_views(this.as_records(), tx, wire_major, options, &mut admission).await?;
         admission.wire(&result)

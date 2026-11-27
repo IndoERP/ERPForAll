@@ -8,6 +8,7 @@
     "src/client/vendor/ace-license.css",
     "src/client/vendor/ace.css",
     "src/client/client.css",
+    "src/client/activity-menu.css",
     "src/client/code-editor.css"
   ]
 }

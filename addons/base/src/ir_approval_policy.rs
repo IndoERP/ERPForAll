@@ -14,13 +14,16 @@
 //! may decide it now. Policies control RPC entry calls, not records: writes a method
 //! makes on other models, jobs and `System` calls never consult them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use erp_sdk::serde_json::Value as Json;
 
 use erp_sdk::prelude::*;
 use erp_sdk::rpc::{Effect, Exposure};
 use erp_sdk::{Actor, CompanyId, Operation, PrincipalKind, Row, SUPERUSER_ID, UserId};
 
-use crate::group_graph::Graph;
+/// Shared eligibility rules for one decision and for distinct scopes in a review queue.
+pub(super) const ELIGIBILITY: &str = include_str!("approval_request/eligible.sql");
 
 /// Hard ceiling on named references and eligible humans. Administrators may lower
 /// the operating bound with the global `base.approval_max_approvers` declared setting.
@@ -89,6 +92,9 @@ pub struct IrApprovalPolicy {
         required = true
     )]
     pub outcome: Option<Arc<str>>,
+    /// Ordered review stages. An empty plan uses the legacy approver users and groups.
+    #[field(json, string = "Review stages")]
+    pub review_steps: Option<Json>,
     /// Named users who may decide; a referenced user cannot be deleted.
     #[field(
         many2many,
@@ -468,13 +474,90 @@ fn check_combination(revision: &Stored) -> Result<()> {
     }
 }
 
+/// Validate the complete revision before it becomes selectable, including identities in later stages.
+async fn check_steps(
+    tx: &mut Transaction,
+    revision: &Stored,
+    value: Option<&Json>,
+    named: i64,
+    max: usize,
+) -> Result<bool> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(false);
+    };
+    let steps = value
+        .as_array()
+        .ok_or_else(|| revision.refuse("review_steps must be an ordered array."))?;
+    if steps.is_empty() {
+        return Ok(false);
+    }
+    if steps.len() > 16 || revision.outcome != Outcome::Approve || named != 0 {
+        return Err(revision.refuse("only an Approve revision may define up to 16 stages; staged revisions use the recipients of each stage."));
+    }
+    let mut users = BTreeSet::new();
+    let mut groups = BTreeSet::new();
+    for (i, step) in steps.iter().enumerate() {
+        let bad = |reason: &str| revision.refuse(&format!("review stage {} {reason}", i + 1));
+        let obj = step.as_object().ok_or_else(|| bad("must be an object."))?;
+        if obj
+            .keys()
+            .any(|k| !matches!(k.as_str(), "name" | "user_ids" | "group_ids"))
+        {
+            return Err(bad("contains an unsupported field."));
+        }
+        if obj
+            .get("name")
+            .and_then(Json::as_str)
+            .is_none_or(|s| s.trim().is_empty() || s.chars().count() > 128)
+        {
+            return Err(bad("needs a name of 1 to 128 characters."));
+        }
+        let mut count = 0;
+        for (key, all) in [("user_ids", &mut users), ("group_ids", &mut groups)] {
+            if let Some(ids) = obj.get(key) {
+                let ids = ids
+                    .as_array()
+                    .ok_or_else(|| bad("recipient IDs must be arrays."))?;
+                let mut distinct = BTreeSet::new();
+                for id in ids {
+                    let id = id
+                        .as_i64()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| bad("recipient IDs must be positive integers."))?;
+                    if !distinct.insert(id) {
+                        return Err(bad("contains a duplicate recipient."));
+                    }
+                }
+                count += distinct.len();
+                all.extend(distinct);
+            }
+        }
+        if count == 0 || count > max {
+            return Err(bad(&format!("needs between 1 and {max} named recipients.")));
+        }
+    }
+    let users: Vec<i64> = users.into_iter().collect();
+    let groups: Vec<i64> = groups.into_iter().collect();
+    let rows = tx.query("SELECT NOT EXISTS (SELECT FROM unnest($1::bigint[]) i WHERE NOT EXISTS
+        (SELECT FROM res_users u WHERE u.id=i AND u.active AND NOT u.share AND u.id<>$3::bigint))
+        AND NOT EXISTS (SELECT FROM unnest($2::bigint[]) i WHERE NOT EXISTS (SELECT FROM res_groups g WHERE g.id=i))",
+        &[&users,&groups,&SUPERUSER_ID.get()]).await?;
+    if !rows[0]
+        .try_get::<_, bool>(0)
+        .map_err(|_| unreadable("review_steps"))?
+    {
+        return Err(revision.refuse("review stages must name existing groups and active internal users eligible to approve."));
+    }
+    Ok(true)
+}
+
 /// Every write-time rule of the revisions `ids` (after the ORM wrote them).
 async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result<()> {
     tx.flush().await?;
     let max_approvers = crate::approval_settings::max_approvers(tx).await?;
     let sql = format!(
         "SELECT {COLUMNS}, (SELECT count(*) FROM ir_approval_policy_users_rel r WHERE r.policy_id = p.id) \
-         + (SELECT count(*) FROM ir_approval_policy_groups_rel g WHERE g.policy_id = p.id) \
+         + (SELECT count(*) FROM ir_approval_policy_groups_rel g WHERE g.policy_id = p.id), p.review_steps \
          FROM ir_approval_policy p WHERE p.id = ANY($1::int8[]) ORDER BY p.id"
     );
     let rows = tx.query(&sql, &[&ids]).await?;
@@ -483,6 +566,8 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
     for row in &rows {
         let revision = stored(row)?;
         let named: i64 = row.try_get(9).map_err(|_| unreadable("approvers"))?;
+        let stages: Option<Json> = row.try_get(10).map_err(|_| unreadable("review_steps"))?;
+        let staged = check_steps(tx, &revision, stages.as_ref(), named, max_approvers).await?;
         check_selector(env, tx, &revision)?;
         if revision.outcome != Outcome::Approve && named > 0 {
             return Err(revision.refuse("only an Approve revision names approvers."));
@@ -496,6 +581,7 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
             && revision.outcome == Outcome::Approve
             && revision.kind == PrincipalKind::User
             && named == 0
+            && !staged
         {
             return Err(
                 revision.refuse("requires approval but names no approver or approver group.")
@@ -722,6 +808,35 @@ impl IrApprovalPolicy {
         Ok(created)
     }
 
+    /// Claim an active workflow revision for replacement inside the same transaction as its
+    /// successor. All policy changes share the Settings fence, including other replacements.
+    #[method]
+    async fn erp_archive_for_workflow_replacement(
+        this: &RecordSet<IrApprovalPolicy>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let records = this.as_records();
+        records.check_access(tx, Operation::Read).await?;
+        records.check_access(tx, Operation::Write).await?;
+        let id = records.ensure_one()?.int()?;
+        crate::approval_settings::lock_policy_edit(tx).await?;
+        let eligible = tx
+            .query(
+                "SELECT id FROM ir_approval_policy WHERE id=$1 AND active AND outcome='approve'",
+                &[&id],
+            )
+            .await?;
+        if eligible.is_empty() {
+            return Err(Error::new(
+                erp_sdk::ErrorKind::Conflict,
+                "This workflow revision is no longer active. Refresh before replacing it.",
+            ));
+        }
+        records
+            .write(tx, RawVals::new().set_cell("active", Cell::Bool(false)))
+            .await
+    }
+
     /// Only `active` changes; reactivation checks the revision again.
     #[method(override)]
     async fn write(
@@ -752,9 +867,19 @@ impl IrApprovalPolicy {
         if activates {
             same_selector(tx, &records.ids()).await?;
         }
+        let archives = matches!(vals.get("active"), Some(Cell::Bool(false)));
         sup.call(tx, records, (vals,)).await?;
         if activates {
             check_revisions(this.env(), tx, &records.ids()).await?;
+        } else if archives {
+            // A later reactivation must not revive outstanding decisions from this revision.
+            tx.execute(
+                "UPDATE ir_approval_request SET expires_at = statement_timestamp() \
+                 WHERE revision_id = ANY($1::bigint[]) AND state IN ('pending','approved') \
+                   AND expires_at > statement_timestamp()",
+                &[&records.ids()],
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1177,96 +1302,77 @@ pub async fn eligible_approvers(
 ) -> Result<EligibleApprovers> {
     let company_ids = bounded(companies)?;
     let max_approvers = crate::approval_settings::max_approvers(tx).await?;
-    let named = tx
-        .query(
-            "SELECT (SELECT count(*) FROM ir_approval_policy_users_rel WHERE policy_id=$1) + \
-         (SELECT count(*) FROM ir_approval_policy_groups_rel WHERE policy_id=$1)",
-            &[&revision.get()],
-        )
-        .await?;
-    let named: i64 = named
-        .first()
-        .ok_or_else(|| unreadable("approvers"))?
-        .try_get(0)
-        .map_err(|_| unreadable("approvers"))?;
-    if usize::try_from(named).map_err(|_| unreadable("approvers"))? > max_approvers {
-        return Err(Error::validation(format!(
-            "Approval policy revision {} names more than {max_approvers} approvers and groups (base.approval_max_approvers).",
-            revision.get()
-        )));
-    }
+    let excluded = excluded.iter().map(|u| u.get()).collect::<Vec<_>>();
+    let sql = format!(
+        "WITH RECURSIVE scopes(revision_id, companies, excluded, viewer, step) AS (
+            SELECT p.id, to_jsonb($4::bigint[]), to_jsonb($5::bigint[]), NULL::bigint, levels.step
+            FROM ir_approval_policy p CROSS JOIN LATERAL generate_series(
+              1, greatest(1, jsonb_array_length(nullif(p.review_steps,'null')))) levels(step)
+            WHERE p.id=$1
+         ), {ELIGIBILITY}
+         SELECT outcome, named, users FROM eligibility ORDER BY step"
+    );
+    let limit = i64::try_from(max_approvers).map_err(|_| unreadable("approver ceiling"))?;
     let rows = tx
         .query(
-            "SELECT p.outcome, ARRAY(SELECT g.group_id::int8 FROM ir_approval_policy_groups_rel g \
-             WHERE g.policy_id = p.id ORDER BY g.group_id LIMIT $2::int8) \
-             FROM ir_approval_policy p WHERE p.id = $1::int8",
+            &sql,
             &[
                 &revision.get(),
-                &i64::try_from(MAX_APPROVERS + 1).map_err(|_| unreadable("approver ceiling"))?,
+                &limit,
+                &SUPERUSER_ID.get(),
+                &company_ids,
+                &excluded,
             ],
         )
         .await?;
-    let Some(row) = rows.first() else {
+    if rows.is_empty() {
         return Err(Error::validation(format!(
             "Approval policy revision {} does not exist.",
             revision.get()
         )));
-    };
-    let outcome: String = row.try_get(0).map_err(|_| unreadable("outcome"))?;
-    if outcome != "approve" {
-        return Err(Error::validation(format!(
-            "Approval policy revision {} is not an Approve revision.",
-            revision.get()
-        )));
     }
-    let groups: Vec<i64> = row.try_get(1).map_err(|_| unreadable("approver groups"))?;
-    if groups.len() > max_approvers {
-        return Err(Error::validation(format!(
-            "Approval policy revision {} names more than {max_approvers} approvers and groups (base.approval_max_approvers).",
-            revision.get()
-        )));
-    }
-    let holding: Vec<i64> = Graph::load(tx).await?.down(groups).into_iter().collect();
-    let excluded: Vec<i64> = excluded.iter().map(|u| u.get()).collect();
-    let limit = i64::try_from(
-        max_approvers
-            .checked_add(1)
-            .ok_or_else(|| Error::internal("The approver bound overflowed."))?,
-    )
-    .map_err(|_| Error::internal("The approver bound does not fit a statement limit."))?;
-    let rows = tx
-        .query(
-            "SELECT u.id::int8 FROM res_users u \
-             WHERE u.active AND NOT u.share AND u.id <> $5::int8 AND u.id <> ALL($2::int8[]) \
-             AND (EXISTS (SELECT 1 FROM ir_approval_policy_users_rel r \
-                          WHERE r.policy_id = $1::int8 AND r.user_id = u.id) \
-                  OR EXISTS (SELECT 1 FROM res_groups_users_rel m \
-                             WHERE m.uid = u.id AND m.gid = ANY($3::int8[]))) \
-             AND NOT EXISTS (SELECT 1 FROM unnest($4::int8[]) AS c(cid) WHERE NOT EXISTS \
-                 (SELECT 1 FROM res_company_users_rel a WHERE a.user_id = u.id AND a.cid = c.cid)) \
-             ORDER BY u.id LIMIT $6::int8",
-            &[
-                &revision.get(),
-                &excluded,
-                &holding,
-                &company_ids,
-                &SUPERUSER_ID.get(),
-                &limit,
-            ],
-        )
-        .await?;
-    if rows.len() > max_approvers {
-        return Err(Error::validation(format!(
-            "Approval policy revision {} has more than {max_approvers} eligible approvers \
+    let mut first = Vec::new();
+    let mut ready = true;
+    for (idx, row) in rows.iter().enumerate() {
+        let named: i64 = row.try_get("named").map_err(|_| unreadable("approvers"))?;
+        if named > limit {
+            return Err(Error::validation(format!(
+                "Approval policy revision {} names more than {max_approvers} approvers and groups (base.approval_max_approvers).",
+                revision.get()
+            )));
+        }
+        if row
+            .try_get::<_, &str>("outcome")
+            .map_err(|_| unreadable("outcome"))?
+            != "approve"
+        {
+            return Err(Error::validation(format!(
+                "Approval policy revision {} is not an Approve revision.",
+                revision.get()
+            )));
+        }
+        let users: Vec<i64> = row
+            .try_get("users")
+            .map_err(|_| unreadable_rel("res_users.id"))?;
+        if users.len() > max_approvers {
+            return Err(Error::validation(format!(
+                "Approval policy revision {} has more than {max_approvers} eligible approvers \
              (base.approval_max_approvers).",
-            revision.get()
-        )));
+                revision.get()
+            )));
+        }
+        ready &= !users.is_empty();
+        if idx == 0 {
+            first = users;
+        }
     }
-    let mut ids = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let id: i64 = row.try_get(0).map_err(|_| unreadable("res_users.id"))?;
-        ids.push(UserId::new(id)?);
+    if !ready {
+        first.clear();
     }
+    let ids = first
+        .into_iter()
+        .map(UserId::new)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(EligibleApprovers {
         users: ids.into_boxed_slice(),
         companies: companies.into(),

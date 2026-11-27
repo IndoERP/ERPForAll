@@ -6,7 +6,11 @@ use erp_sdk::prelude::*;
 #[model(name = "mail.notification", description = "Message Delivery", addon = "mail",
     company_access = parent(edge = "partner_id"),
     keys = [key(name = "_recipient_transport", fields = ["message_id", "partner_id", "transport"], message = "This message already has a delivery for this recipient and transport.")],
-    indexes = [("_pending", "(state, transport, id)")])]
+    indexes = [
+        ("_pending", "(state, transport, id)"),
+        ("_in_app_unread_message", "(partner_id, message_id DESC) WHERE transport IN ('inbox','push') AND state='delivered' AND inbox_read IS NOT TRUE"),
+        ("_in_app_read_message", "(partner_id, message_id DESC) WHERE transport IN ('inbox','push') AND state='delivered' AND inbox_read IS TRUE")
+    ])]
 pub struct MailNotification {
     #[field(
         many2one,
@@ -28,6 +32,9 @@ pub struct MailNotification {
     pub transport: Option<Arc<str>>,
     #[field(selection, selection = [("pending", "Pending"), ("delivered", "Delivered"), ("failed", "Failed"), ("revoked", "Revoked")], required = true)]
     pub state: Option<Arc<str>>,
+    /// The recipient acknowledged this message in Discuss.
+    #[field(boolean, default = false)]
+    pub inbox_read: bool,
 }
 
 /// The fan-out request is eventful. History-only messages and ordinary chatter reads incur no

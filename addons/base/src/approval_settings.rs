@@ -121,29 +121,23 @@ pub(crate) async fn check_active(env: &Env, tx: &mut Transaction, proposed: i64)
     // Membership goes from an approval group to every group implying it (Graph::down). UNION
     // terminates even for malformed cycles. Each lateral user probe stops at proposed + 1;
     // offenders are read in ten-row windows for access checks; only ten labels are retained.
-    let sql = "WITH RECURSIVE holding(policy_id,gid) AS ( \
-           SELECT r.policy_id,r.group_id FROM ir_approval_policy_groups_rel r \
-           JOIN ir_approval_policy p ON p.id=r.policy_id WHERE p.active AND p.outcome='approve' \
-           UNION SELECT h.policy_id,i.gid FROM holding h JOIN res_groups_implied_rel i ON i.hid=h.gid \
-         ), offenders AS ( \
-           SELECT p.id,p.name FROM ir_approval_policy p WHERE p.active AND p.outcome='approve' AND ( \
-             (SELECT count(*) FROM ir_approval_policy_users_rel r WHERE r.policy_id=p.id) + \
-             (SELECT count(*) FROM ir_approval_policy_groups_rel r WHERE r.policy_id=p.id)>$1 \
-             OR (SELECT count(*) FROM (SELECT u.id FROM res_users u \
-                 WHERE u.active AND NOT u.share AND u.id<>$2 AND ( \
-                   EXISTS(SELECT 1 FROM ir_approval_policy_users_rel r WHERE r.policy_id=p.id AND r.user_id=u.id) \
-                   OR EXISTS(SELECT 1 FROM holding h JOIN res_groups_users_rel m ON m.gid=h.gid \
-                             WHERE h.policy_id=p.id AND m.uid=u.id)) \
-                 AND (p.company_id IS NULL OR EXISTS(SELECT 1 FROM res_company_users_rel c \
-                     WHERE c.user_id=u.id AND c.cid=p.company_id)) LIMIT ($1+1)) eligible)>$1) \
-         ) SELECT id::int8,left(name,256),count(*) OVER()::int8 FROM offenders WHERE id>$3 ORDER BY id LIMIT 10";
+    let sql = format!("WITH RECURSIVE scopes(revision_id, companies, excluded, viewer, step) AS (
+        SELECT p.id, CASE WHEN p.company_id IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(p.company_id) END,
+               '[]'::jsonb, NULL::bigint, levels.step
+        FROM ir_approval_policy p CROSS JOIN LATERAL generate_series(1, greatest(1,jsonb_array_length(nullif(p.review_steps,'null')))) levels(step)
+        WHERE p.active AND p.outcome='approve' AND p.id > $1
+    ), {}, offenders AS (
+        SELECT DISTINCT revision_id FROM eligibility WHERE named > $2 OR cardinality(users) > $2
+    )
+    SELECT p.id, left(p.name,256), count(*) OVER() FROM offenders o JOIN ir_approval_policy p ON p.id=o.revision_id
+    ORDER BY p.id LIMIT 10", crate::ir_approval_policy::ELIGIBILITY);
     let mut after = 0_i64;
     let mut total = 0_i64;
     let mut seen = 0_i64;
     let mut names = Vec::new();
     loop {
         let rows = tx
-            .query(sql, &[&proposed, &SUPERUSER_ID.get(), &after])
+            .query(&sql, &[&after, &proposed, &SUPERUSER_ID.get()])
             .await?;
         let Some(first) = rows.first() else {
             break;

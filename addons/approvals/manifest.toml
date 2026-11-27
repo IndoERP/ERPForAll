@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name = "Approvals"
+summary = "Review requests, follow their progress and configure multi-step approval workflows"
+category = "Productivity"
+icon = "lucide:badge-check"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.1.0"
+exact_only = true
+depends = ["base", "web"]
+data = ["security/ir.access.csv", "data/workflows.xml", "data/requests.xml", "data/menus.xml"]

@@ -11,7 +11,7 @@ mod multiuser_fixture;
 #[path = "support/native_http.rs"]
 mod native_http;
 
-use multiuser_fixture::{Subject, run_with_assets, success};
+use multiuser_fixture::{Subject, UserSpec, run_with_assets, success};
 use serde_json::json;
 use std::{
     io::Write,
@@ -30,22 +30,79 @@ fn a_reviewed_change_finishes_in_the_requesters_browser() {
     let built = Command::new("bash").current_dir(root)
         .env("ERP_UI_COMPILER", compiler)
         .env("ERP_UI_OUTPUT_DIR", assets.path())
-        .args(["-ec", "toolchain_env=$(scripts/web-toolchain.sh env); eval \"$toolchain_env\"; exec node web/scripts/build-human-ui.mjs"])
+        .args(["-ec", "toolchain_env=$(scripts/web-toolchain.sh env); eval \"$toolchain_env\"; exec node web/scripts/build-human-ui.mjs --addons web,approvals"])
         .status().unwrap();
     assert!(built.success(), "approval browser assets did not build");
     run_with_assets(assets.path().to_owned(), move |f| {
+        success(&native_http::json_post(
+            f.native.port,
+            &f.native.cookies,
+            "/erp/module/install",
+            r#"{"modules":["approvals"]}"#,
+        ));
+        let workflows = f.xmlid("approvals", "configuration_action");
+        let unauthorized = f.rpc(
+            Subject::A,
+            "ir.actions.client",
+            "erp_load_web_client_action",
+            json!({"ids":[workflows], "wire_major":1}),
+        );
+        assert_eq!(
+            unauthorized.status, 403,
+            "configuration requires an administrator"
+        );
         let sender = f.user(Subject::A);
         let reviewer = f.user(Subject::Admin);
-        success(&f.rpc(Subject::Admin, "ir.approval.policy", "create", json!({"vals_list":[{
-            "name":"Review preferences in the browser", "principal_kind":"user", "effect":"write",
-            "model":"res.users", "method":"web_save", "outcome":"approve",
-            "approver_user_ids":[[6,0,[reviewer.id]]]
-        }]})));
+        let final_reviewer = f.provision(UserSpec {
+            login: "compliance-reviewer",
+            company: reviewer.company,
+            companies: vec![reviewer.company, sender.company],
+            groups: vec![f.group("group_user")],
+        });
+        let recipient = success(&f.rpc(
+            Subject::Admin,
+            "res.users",
+            "read",
+            json!({"ids":[sender.id],"fields":["partner_id"]}),
+        ));
+        let partner = &recipient[0]["partner_id"];
+        let partner = partner.as_i64().or_else(|| partner[0].as_i64()).unwrap();
+        success(&f.rpc(
+            Subject::Admin,
+            "res.users",
+            "write",
+            json!({"ids":[sender.id],"vals":{"notification_type":"inbox"}}),
+        ));
+        let product = success(&f.rpc(
+            Subject::Admin,
+            "product.template",
+            "create",
+            json!({"vals_list":[{"name":"Delivery schedule","company_id":null}]}),
+        ))[0]
+            .as_i64()
+            .unwrap();
+        success(&f.rpc(
+            Subject::Admin,
+            "product.template",
+            "thread_post",
+            json!({
+                "ids":[product], "post":{"body":"The delivery date is confirmed.",
+                "subject":"Delivery scheduled","partner_ids":[partner]}
+            }),
+        ));
+
         let mut browser = Command::new("bash").current_dir(root)
             .args(["-ec", "toolchain_env=$(scripts/web-toolchain.sh env); eval \"$toolchain_env\"; exec node web/scripts/browser-approval.mjs"])
             .stdin(Stdio::piped()).spawn().unwrap();
         let input = json!({"origin":format!("http://127.0.0.1:{}", f.native.port),
-            "requester":sender.login, "reviewer":reviewer.login, "password":format!("{} & = fixture £ password", f.native.db.name())});
+            "requester":sender.login, "reviewer":reviewer.login,
+            "configurationAction":f.xmlid("approvals","workflows_window"),
+            "legacyConfigurationAction":workflows,
+            "legacyRequestAction":f.xmlid("approvals","requests_action"),
+            "configurationMenu":f.xmlid("approvals","workflows_menu"),
+            "finalReviewer":final_reviewer.login,
+            "finalPassword":format!("{} & = boundary £ password", f.native.db.name()),
+            "password":format!("{} & = fixture £ password", f.native.db.name())});
         browser
             .stdin
             .take()
