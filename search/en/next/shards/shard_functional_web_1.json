@@ -4,9 +4,41 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "web",
     "web"
   ],
   "docs": [
+    {
+      "page_id": "user/data-import-and-export",
+      "title": "Guided Data Import, Templates, and Configurable Exports",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll provides a built-in **Import / Export** menu on list views so teams can onboard master data (such as Contacts, Products, Chart of Accounts, or Opening Balances) from spreadsheets with pre-built templates and dry-run validation, or export filtered lists into configurable **CSV** and **Excel (.xlsx)** files."
+        },
+        {
+          "anchor": "download-templates",
+          "text": "1. Open the list view for the records you want to import (for example, **Contacts**, **Sales → Products → Products**, or **Accounting → Configuration → Chart of Accounts**). 2. Click **Import / Export** beside the **+ New** button and choose **Import records**. 3. Click **Download Excel (.xlsx) template** or **Download CSV (.csv) template** to get a ready-to-fill spreadsheet containing valid column headers (models such as **Contacts** also include a guided sample layout). 4. Populate your rows in Excel, LibreOffice Calc, or Google Sheets while keeping the header row intact. ![The guided Import records dialog provides one-click Excel and CSV templates together with a drag-and-drop file upload zone.](/en/next/assets/docs/assets/user-manual/getting-started/guided-import-dialog.webp)"
+        },
+        {
+          "anchor": "guided-import",
+          "text": "1. In the **Import records** dialog, drag and drop your .csv or .xlsx file (maximum **10 MB**) or click to browse from your computer. 2. **Select Worksheet (.xlsx only)**: If your Excel workbook contains multiple sheets, choose the sheet holding your data to preview its rows. 3. **Review Column Mapping**: * ERPForAll automatically matches exact technical field names first, followed by unambiguous field labels, and previews the first rows directly in the dialog. * Technical relation paths (such as parent_id/name or category_id/.id) are preserved and validated against the server. * For any unmatched column, choose the target ERP field from the column dropdown or leave it unmapped to skip that column. 4. **Run Dry-Run Validation (Test)**: * Click **Test** before committing changes. ERPForAll validates every row—checking required fields, data types, company rules, and relational links—without writing to the database. * Fix any reported row-level errors in your file or column mapping and re-run **Test** until validation passes cleanly. 5. **Commit Records (Import)**: * Click **Import** to create or update the records in one validated batch. Once complete, ERPForAll shows the imported count and refreshes the list view automatically."
+        },
+        {
+          "anchor": "configurable-export",
+          "text": "1. Open any list view and apply search filters, group-bys, or check specific rows if you want to export a subset. 2. Click **Import / Export → Export**. 3. Choose the **Export format**: * **CSV (.csv)**: Lightweight UTF-8 text file ideal for scripts and system integrations. * **Excel (.xlsx)**: Native spreadsheet workbook with formatted column headers ready for business analysis. 4. Select, add, remove, or reorder the fields you want included in the exported file. 5. Click **Export** to download the file immediately."
+        },
+        {
+          "anchor": "best-practices",
+          "text": "* **Always Run Test First**: Dry-run validation catches missing required fields, bad dates, or unknown relational names before any record is saved. * **Respect the 10 MB Upload Limit**: For very large migrations, split spreadsheets into smaller batches (for example, 2,000–5,000 rows per file) to keep validation fast and easy to audit. * **Import Parent Records Before Children**: Import Companies before individual child Contacts, Product Categories before Products, and Products before Opening Stock or Orders so relational lookups resolve on the first pass. * **Access Rights Apply**: Import and export respect your exact model, record, and company access permissions; you can only import records you are authorized to create or write."
+        }
+      ]
+    },
     {
       "page_id": "user/report-barcodes",
       "title": "Barcodes in printed reports",

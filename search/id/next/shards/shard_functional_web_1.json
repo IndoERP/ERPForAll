@@ -4,9 +4,41 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "web",
     "web"
   ],
   "docs": [
+    {
+      "page_id": "user/data-import-and-export",
+      "title": "Impor Data Terpandu, Template, dan Ekspor Terkonfigurasi",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll menyediakan menu **Import / Export** bawaan pada tampilan daftar agar tim dapat mengunggah data master (seperti Kontak, Produk, Bagan Akun, atau Saldo Awal) dari spreadsheet menggunakan template siap pakai dan validasi uji coba, maupun mengekspor daftar tersaring ke berkas **CSV** dan **Excel (.xlsx)**."
+        },
+        {
+          "anchor": "download-templates",
+          "text": "1. Buka tampilan daftar untuk data yang ingin diimpor (misalnya **Contacts**, **Sales → Products → Products**, atau **Accounting → Configuration → Chart of Accounts**). 2. Klik **Import / Export** di sebelah tombol **+ New** lalu pilih **Import records**. 3. Klik **Download Excel (.xlsx) template** atau **Download CSV (.csv) template** untuk mendapatkan berkas siap isi dengan header kolom yang valid (model seperti **Contacts** juga menyediakan panduan contoh pengisian). 4. Isi baris data Anda di Excel, LibreOffice Calc, atau Google Sheets tanpa mengubah baris header. ![Dialog terpandu Import records menyediakan tombol unduh template Excel dan CSV sekali klik beserta area unggah berkas.](/id/next/assets/docs/assets/user-manual/getting-started/guided-import-dialog.webp)"
+        },
+        {
+          "anchor": "guided-import",
+          "text": "1. Pada dialog **Import records**, seret dan lepas berkas .csv atau .xlsx Anda (maksimal **10 MB**) atau klik untuk memilih berkas dari komputer. 2. **Pilih Lembar Kerja (khusus .xlsx)**: Jika berkas Excel memiliki lebih dari satu sheet, pilih lembar yang berisi data Anda untuk menampilkan pratinjau baris. 3. **Tinjau Pemetaan Kolom**: * ERPForAll otomatis mencocokkan nama teknis field terlebih dahulu, disusul label field yang tidak ambigu, lalu menampilkan pratinjau baris awal langsung di dialog. * Jalur relasi teknis (seperti parent_id/name atau category_id/.id) dipertahankan dan divalidasi oleh server. * Untuk kolom yang belum cocok, pilih field ERP tujuan melalui dropdown kolom atau biarkan tidak terpetakan agar kolom dilewati. 4. **Jalankan Validasi Uji Coba (Test)**: * Klik **Test** sebelum menyimpan data. ERPForAll memvalidasi seluruh baris—memeriksa field wajib, tipe data, aturan perusahaan, dan tautan relasi—tanpa menulis ke database. * Perbaiki galat baris yang dilaporkan pada berkas atau pemetaan kolom Anda, lalu jalankan **Test** kembali hingga lolos bersih. 5. **Simpan Data (Import)**: * Klik **Import** untuk membuat atau memperbarui data dalam satu proses tervalidasi. Setelah selesai, ERPForAll menampilkan jumlah baris terimpor dan menyegarkan daftar otomatis."
+        },
+        {
+          "anchor": "configurable-export",
+          "text": "1. Buka tampilan daftar mana pun lalu terapkan filter pencarian, pengelompokan, atau centang baris tertentu bila hanya ingin mengekspor sebagian data. 2. Klik **Import / Export → Export**. 3. Pilih **Format Ekspor**: * **CSV (.csv)**: Berkas teks UTF-8 ringan untuk skrip maupun integrasi sistem. * **Excel (.xlsx)**: Workbook spreadsheet native dengan header kolom rapi siap analisis. 4. Pilih, tambah, hapus, atau ubah urutan field yang ingin disertakan pada berkas hasil ekspor. 5. Klik **Export** untuk langsung mengunduh berkasnya."
+        },
+        {
+          "anchor": "best-practices",
+          "text": "* **Selalu Jalankan Test Terlebih Dahulu**: Validasi uji coba menangkap field wajib kosong, format tanggal keliru, atau nama relasi yang belum terdaftar sebelum ada data tersimpan. * **Perhatikan Batas Ukuran 10 MB**: Untuk migrasi berskala besar, pecah spreadsheet menjadi beberapa berkas lebih kecil (misalnya 2.000–5.000 baris per berkas) agar validasi cepat dan mudah diaudit. * **Impor Data Induk Sebelum Data Anak**: Impor Perusahaan sebelum Kontak perorangan di bawahnya, Kategori Produk sebelum Produk, dan Produk sebelum Stok Awal atau Pesanan agar pencarian relasi langsung berhasil. * **Hak Akses Tetap Berlaku**: Impor dan ekspor mematuhi izin model, record, dan perusahaan akun Anda; Anda hanya dapat mengimpor data yang berhak Anda buat atau ubah."
+        }
+      ]
+    },
     {
       "page_id": "user/report-barcodes",
       "title": "Barcode pada laporan cetak",

@@ -42,7 +42,7 @@
         },
         {
           "anchor": "failure-and-recovery",
-          "text": "* **Baris Nol Masih Terlihat Saat Terlipat**: Jika mengaktifkan **Hide lines at zero** masih menyisakan header bersaldo nol saat terlipat, klik **Unfold all lines** atau terapkan ulang filter periode untuk menyegarkan tampilan. * **Batas Baris Layar Tercapai**: Lipat bagian besar yang tidak diperlukan sebelum membuka bagian lain atau mengekspor. Administrator dapat menaikkan batas di **Settings → Technical → Reporting → Dynamic Reports**. * **Transaksi Terbaru Belum Muncul**: Pastikan faktur, tagihan, atau jurnal terkait sudah berstatus **Posted** (bukan *Draft*) dan berada dalam rentang tanggal serta cakupan perusahaan yang dipilih."
+          "text": "* **Penyaringan Baris Nol yang Bersih**: Mengaktifkan **Hide lines at zero** pada Neraca dan Laba Rugi otomatis menyembunyikan baris serta bagian bersaldo nol dengan bersih baik saat terlipat maupun dibuka. * **Invoice Analysis Interaktif**: Buka **Invoice Analysis** lalu gunakan pengalih tampilan di kanan atas untuk beralih antara tampilan **List**, **Pivot**, dan **Graph** guna analisis per pelanggan, pemasok, atau periode. * **Batas Baris Layar Tercapai**: Lipat bagian besar yang tidak diperlukan sebelum membuka bagian lain atau mengekspor. Administrator dapat menaikkan batas di **Settings → Technical → Reporting → Dynamic Reports**. * **Transaksi Terbaru Belum Muncul**: Pastikan faktur, tagihan, atau jurnal terkait sudah berstatus **Posted** (bukan *Draft*) dan berada dalam rentang tanggal serta cakupan perusahaan yang dipilih."
         }
       ]
     }

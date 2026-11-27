@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 132,
+  "doc_count": 134,
   "docs": [
     {
       "id": "index",
@@ -6641,6 +6641,44 @@
       "shard_id": "shard_functional_account_1"
     },
     {
+      "id": "user/approvals-workflows-and-inbox",
+      "title": "Multistage Approval Workflows and Activity Inbox",
+      "description": "Configure multistage approval workflows with ordered review steps, publish immutable policy revisions, and review, approve, or deny pending requests in the Approvals inbox.",
+      "audience": "functional",
+      "module": "approvals",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "roles-and-access",
+          "depth": 2,
+          "text": "Roles and Access Rights"
+        },
+        {
+          "id": "configure-workflows",
+          "depth": 2,
+          "text": "Configuring Multistage Approval Workflows"
+        },
+        {
+          "id": "workflow-lifecycle",
+          "depth": 2,
+          "text": "Managing Revisions and Archiving Workflows"
+        },
+        {
+          "id": "review-requests-inbox",
+          "depth": 2,
+          "text": "Reviewing Requests in the Approvals Inbox"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Approvals"
+        }
+      ],
+      "shard_id": "shard_functional_approvals_1"
+    },
+    {
       "id": "user/buy-and-receive",
       "title": "Purchasing, Receiving Goods, and Vendor Billing",
       "description": "Create requests for quotation, confirm and approve purchase orders, receive partial shipments with backorders, create 3-way matched vendor bills, and handle purchase returns.",
@@ -6690,8 +6728,8 @@
     },
     {
       "id": "user/configure-your-workspace",
-      "title": "Configure Your Workspace, Companies, and AI Assistant",
-      "description": "Configure module settings, manage users and active companies, collaborate in record chatter, and use the AI Assistant workspace safely.",
+      "title": "Configure Your Workspace, Discuss, Outbound Email, and AI Assistant",
+      "description": "Configure module settings, manage users, passwords, SSO, and companies, collaborate via Discuss, Chatter Activities, and outbound email, and use the AI Assistant safely.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -6721,7 +6759,22 @@
         {
           "id": "preserve-chat-and-chatter",
           "depth": 2,
-          "text": "Collaborating in Record Chatter"
+          "text": "Collaborating in Chatter, Activities, Discuss, and Outbound Email"
+        },
+        {
+          "id": "chatter-and-activities",
+          "depth": 3,
+          "text": "Record Chatter & Scheduled Activities"
+        },
+        {
+          "id": "discuss-workspace",
+          "depth": 3,
+          "text": "Discuss Workspace & Quick Chat"
+        },
+        {
+          "id": "outbound-email",
+          "depth": 3,
+          "text": "Sending Documents & External Email"
         },
         {
           "id": "ai-workspace-safe-drafts",
@@ -6735,6 +6788,39 @@
         }
       ],
       "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/data-import-and-export",
+      "title": "Guided Data Import, Templates, and Configurable Exports",
+      "description": "Download CSV or Excel import templates, map columns with dry-run validation before importing, and export filtered lists to CSV or Excel workbooks.",
+      "audience": "functional",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "download-templates",
+          "depth": 2,
+          "text": "Downloading Import Templates"
+        },
+        {
+          "id": "guided-import",
+          "depth": 2,
+          "text": "Uploading, Mapping, Testing, and Importing Records"
+        },
+        {
+          "id": "configurable-export",
+          "depth": 2,
+          "text": "Exporting Filtered Lists to CSV or Excel"
+        },
+        {
+          "id": "best-practices",
+          "depth": 2,
+          "text": "Import & Export Best Practices and Troubleshooting"
+        }
+      ],
+      "shard_id": "shard_functional_web_1"
     },
     {
       "id": "user/hr-contracts-skills-and-analytics",

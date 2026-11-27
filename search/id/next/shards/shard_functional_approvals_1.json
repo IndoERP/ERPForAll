@@ -1,0 +1,46 @@
+{
+  "shard_id": "shard_functional_approvals_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "approvals"
+  ],
+  "docs": [
+    {
+      "page_id": "user/approvals-workflows-and-inbox",
+      "title": "Alur Persetujuan Bertingkat (Approvals) dan Kotak Masuk Aktivitas",
+      "module": "approvals",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Aplikasi native **Approvals** memungkinkan organisasi menerapkan tata kelola persetujuan bertingkat atas operasi tulis maupun operasi destruktif yang sensitif—seperti konfirmasi pesanan bernilai besar, posting jurnal, atau aksi agen otomatis—sekaligus memberi setiap pengguna internal kotak masuk **Requests** yang jelas untuk meninjau, memantau, dan mengaudit setiap keputusan. > **Catatan pemasangan**: **Approvals** hadir sebagai addon native (approvals). Administrator dapat memasangnya melalui pengelola modul atau lewat CLI (--install approvals). Setelah terpasang, aplikasi **Approvals** muncul pada App Switcher dengan menu **Requests** (untuk pengguna internal) dan **Workflows** (untuk administrator)."
+        },
+        {
+          "anchor": "roles-and-access",
+          "text": "* **Internal User (base.group_user)**: Membuka **Approvals → Requests** untuk memproses permintaan tertunda yang ditugaskan kepada akun atau grupnya, memantau pengajuan miliknya sendiri (**My requests**), dan melihat riwayat keputusan (**Reviewed**). * **Settings Administration (base.group_system)**: Membuka **Approvals → Workflows** untuk merancang draf alur kerja, menyusun tahapan tinjauan beserta peninjau yang berwenang, menerbitkan revisi kebijakan permanen, serta mengarsipkan atau mengaktifkan kembali alur kerja."
+        },
+        {
+          "anchor": "configure-workflows",
+          "text": "Administrator menentukan operasi apa saja yang wajib mendapat persetujuan serta siapa yang berhak meninjau tiap tahap di **Approvals → Workflows**: 1. Buka **Approvals → Workflows** lalu klik **New** untuk membuat alur kerja dalam status **Draft**. 2. Isi **Workflow name** yang jelas (misalnya *Persetujuan pesanan pembelian* atau *Otorisasi pembayaran pemasok*). 3. Pada bagian **Applies to**, tentukan cakupan: * **Company**: Batasi alur kerja pada satu perusahaan, atau biarkan kosong (**All companies**) agar berlaku lintas seluruh database. * **Requester type**: Pilih apakah alur kerja mengawasi aksi **User** (pengguna manusia) atau aksi **Agent** (agen terdelegasi). 4. Pada bagian **Operation**, tentukan pemicu alur kerja: * **Operation effect**: Pilih **Write** (aksi bisnis yang mengubah status/data) atau **Destructive** (pembatalan, penghapusan, atau pembalikan berdampak besar). * **Model**: Pilih model ERP target (misalnya Purchase Order atau Journal Entry), atau kosongkan untuk **All models**. * **Method**: Pilih operasi yang terekspos melalui pemilih **Method** yang dapat dicari (otomatis disaring sesuai model dan efek operasi yang dipilih). 5. Buka tab **Review steps** lalu tambahkan 1 hingga 16 tahap berurutan: * **Order (sequence)**: Menentukan urutan eksekusi (Tahap 1 harus disetujui terlebih dahulu sebelum Tahap 2 aktif). * **Step name**: Nama tahap yang ditampilkan kepada peninjau (misalnya *Manajer Departemen*, *Tinjauan Keuangan*, *Persetujuan Direktur*). * **Eligible reviewers**: Tetapkan **Users** (pengguna internal aktif) dan/atau **Groups** yang berhak memutuskan tahap tersebut. 6. Klik **Save**, lalu klik **Publish** untuk mengaktifkan alur kerja."
+        },
+        {
+          "anchor": "workflow-lifecycle",
+          "text": "Alur kerja yang telah diterbitkan didukung revisi kebijakan permanen (*immutable*) agar jejak audit permintaan yang berjalan maupun selesai tidak pernah berubah surut: * **Draft → Active (Publish)**: Mengunci definisi alur kerja dan langsung mulai mencegat operasi yang cocok. * **Memperbarui Alur Kerja Aktif (Create revision → Publish revision)**: Buka alur kerja aktif atau terarsip lalu klik **Create revision** untuk menggandakannya menjadi draf baru yang tertaut ke kebijakan sebelumnya. Ubah tahapan atau peninjau, lalu klik **Publish revision**. Konfirmasi akan mengarsipkan revisi lama dan mengakhiri permintaan yang belum selesai pada revisi sebelumnya. * **Menjeda atau Menonaktifkan (Archive / Activate)**: Klik **Archive** pada alur kerja aktif untuk berhenti mencegat operasi baru (sekaligus mengakhiri permintaan yang masih menggantung). Alur terarsip dapat diaktifkan kembali lewat **Activate**."
+        },
+        {
+          "anchor": "review-requests-inbox",
+          "text": "Setiap pengguna internal mengelola antrean persetujuannya melalui **Approvals → Requests**: 1. **Pilih Filter Antrean**: * **To review** *(bawaan)*: Menampilkan permintaan berstatus tertunda pada tahap di mana Anda (atau grup Anda) termasuk peninjau yang berwenang. * **My requests**: Menampilkan permintaan persetujuan yang timbul dari operasi Anda sendiri untuk memantau tahap tinjauan saat ini. * **Reviewed**: Menampilkan permintaan yang sudah Anda putuskan atau telah selesai. 2. Buka satu permintaan untuk meninjau form read-only **Approval request**: * **Request**: Nomor permintaan, **Requested by**, **Companies**, dan batas waktu **Expires**. * **Progress**: **Status** saat ini (Pending, Approved, Executed, Denied, atau Expired), **Current stage**, **Total stages**, dan nama **Review stage**. * Tab **Approval stages**: Jejak audit lengkap tiap tahap beserta siapa yang memutuskan dan waktunya. * Tab **Technical details**: **Target model**, **Operation**, digest **Payload SHA-256**, dan **Execution receipt** setelah dieksekusi. 3. Pada permintaan tertunda yang berwenang Anda putuskan, pilih tombol di header: * **Approve**: Melanjutkan permintaan ke tahap tinjauan berikutnya (atau mengeksekusi operasi yang disetujui secara otomatis setelah tahap terakhir disetujui). * **Deny**: Menolak permintaan setelah konfirmasi; operasi yang dijaga tidak dieksekusi."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Alur Kerja Terbit Tidak Bisa Disunting**: Alur kerja yang sudah diterbitkan sengaja bersifat read-only demi integritas audit. Klik **Create revision** untuk mengubahnya secara aman, lalu **Publish revision**. * **Tombol Approve / Deny Tidak Muncul**: Pastikan status permintaan masih **Pending**, akun Anda masuk dalam **Users** atau **Groups** yang berwenang pada **Current stage**, dan permintaan belum kedaluwarsa. * **Peringatan Ketidaksesuaian Tahap atau Digest**: ERPForAll mengikat setiap keputusan persetujuan ke nomor tahap serta **Payload SHA-256** persisnya. Jika peninjau lain sudah memproses tahap tersebut atau revisi baru menggantikan kebijakan, muat ulang permintaan untuk melihat status terbaru."
+        }
+      ]
+    }
+  ]
+}

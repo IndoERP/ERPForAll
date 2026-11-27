@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "total_shards": 10,
+  "total_shards": 11,
   "shards": [
     {
       "shard_id": "shard_functional_account_1",
@@ -10,7 +10,7 @@
         "account"
       ],
       "doc_count": 8,
-      "byte_size": 58566
+      "byte_size": 59024
     },
     {
       "shard_id": "shard_functional_account_reporting_1",
@@ -19,7 +19,16 @@
         "account_reporting"
       ],
       "doc_count": 1,
-      "byte_size": 6784
+      "byte_size": 6986
+    },
+    {
+      "shard_id": "shard_functional_approvals_1",
+      "audience": "functional",
+      "modules": [
+        "approvals"
+      ],
+      "doc_count": 1,
+      "byte_size": 6594
     },
     {
       "shard_id": "shard_functional_base_1",
@@ -28,7 +37,7 @@
         "base"
       ],
       "doc_count": 2,
-      "byte_size": 15372
+      "byte_size": 19374
     },
     {
       "shard_id": "shard_functional_hr_1",
@@ -46,7 +55,7 @@
         "product"
       ],
       "doc_count": 1,
-      "byte_size": 5230
+      "byte_size": 6493
     },
     {
       "shard_id": "shard_functional_purchase_1",
@@ -55,7 +64,7 @@
         "purchase"
       ],
       "doc_count": 3,
-      "byte_size": 19527
+      "byte_size": 20127
     },
     {
       "shard_id": "shard_functional_quality_control_1",
@@ -64,7 +73,7 @@
         "quality_control"
       ],
       "doc_count": 1,
-      "byte_size": 4112
+      "byte_size": 4262
     },
     {
       "shard_id": "shard_functional_sale_1",
@@ -73,7 +82,7 @@
         "sale"
       ],
       "doc_count": 3,
-      "byte_size": 17518
+      "byte_size": 18508
     },
     {
       "shard_id": "shard_functional_stock_1",
@@ -82,7 +91,7 @@
         "stock"
       ],
       "doc_count": 4,
-      "byte_size": 20722
+      "byte_size": 21627
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -90,8 +99,8 @@
       "modules": [
         "web"
       ],
-      "doc_count": 1,
-      "byte_size": 3003
+      "doc_count": 2,
+      "byte_size": 7142
     }
   ],
   "page_to_shard": {
@@ -104,6 +113,7 @@
     "user/accounting-setup-and-ledger": "shard_functional_account_1",
     "user/record-and-settle-invoices": "shard_functional_account_1",
     "user/read-financial-reports": "shard_functional_account_reporting_1",
+    "user/approvals-workflows-and-inbox": "shard_functional_approvals_1",
     "user/configure-your-workspace": "shard_functional_base_1",
     "user/operations-guide": "shard_functional_base_1",
     "user/hr-contracts-skills-and-analytics": "shard_functional_hr_1",
@@ -120,6 +130,7 @@
     "user/inventory-traceability-and-routes": "shard_functional_stock_1",
     "user/manage-warehouse": "shard_functional_stock_1",
     "user/stock-receipt-admission": "shard_functional_stock_1",
+    "user/data-import-and-export": "shard_functional_web_1",
     "user/report-barcodes": "shard_functional_web_1"
   }
 }

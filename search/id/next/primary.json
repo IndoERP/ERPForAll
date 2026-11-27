@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 26,
+  "doc_count": 28,
   "docs": [
     {
       "id": "user/accounting-bank-reconciliation",
@@ -320,6 +320,44 @@
       "shard_id": "shard_functional_account_1"
     },
     {
+      "id": "user/approvals-workflows-and-inbox",
+      "title": "Alur Persetujuan Bertingkat (Approvals) dan Kotak Masuk Aktivitas",
+      "description": "Mengatur alur persetujuan bertingkat dengan langkah tinjauan berurutan, menerbitkan revisi kebijakan yang tidak dapat diubah, serta meninjau, menyetujui, atau menolak permintaan di kotak masuk Approvals.",
+      "audience": "functional",
+      "module": "approvals",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "roles-and-access",
+          "depth": 2,
+          "text": "Peran dan Hak Akses"
+        },
+        {
+          "id": "configure-workflows",
+          "depth": 2,
+          "text": "Mengatur Alur Persetujuan Bertingkat"
+        },
+        {
+          "id": "workflow-lifecycle",
+          "depth": 2,
+          "text": "Mengelola Revisi dan Mengarsipkan Alur Kerja"
+        },
+        {
+          "id": "review-requests-inbox",
+          "depth": 2,
+          "text": "Meninjau Permintaan di Kotak Masuk Approvals"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Approvals"
+        }
+      ],
+      "shard_id": "shard_functional_approvals_1"
+    },
+    {
       "id": "user/buy-and-receive",
       "title": "Pembelian, Penerimaan Barang, dan Tagihan Pemasok",
       "description": "Membuat permintaan penawaran (RFQ), mengonfirmasi dan menyetujui pesanan pembelian, menerima pengiriman parsial dengan backorder, membuat tagihan pemasok 3-way match, serta menangani retur pembelian.",
@@ -369,8 +407,8 @@
     },
     {
       "id": "user/configure-your-workspace",
-      "title": "Mengatur Ruang Kerja, Perusahaan, dan Asisten AI",
-      "description": "Mengatur konfigurasi modul, mengelola pengguna dan perusahaan aktif, berkolaborasi lewat chatter dokumen, serta menggunakan Asisten AI secara aman.",
+      "title": "Mengatur Ruang Kerja, Discuss, Email Keluar, dan Asisten AI",
+      "description": "Mengatur konfigurasi modul, mengelola pengguna, kata sandi, SSO, dan perusahaan, berkolaborasi lewat Discuss, Aktivitas Chatter, dan email keluar, serta memakai Asisten AI secara aman.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -400,7 +438,22 @@
         {
           "id": "preserve-chat-and-chatter",
           "depth": 2,
-          "text": "Berkolaborasi di Chatter Dokumen"
+          "text": "Berkolaborasi di Chatter, Aktivitas, Discuss, dan Email Keluar"
+        },
+        {
+          "id": "chatter-and-activities",
+          "depth": 3,
+          "text": "Chatter Dokumen & Aktivitas Terjadwal"
+        },
+        {
+          "id": "discuss-workspace",
+          "depth": 3,
+          "text": "Ruang Kerja Discuss & Obrolan Cepat"
+        },
+        {
+          "id": "outbound-email",
+          "depth": 3,
+          "text": "Mengirim Dokumen & Email Eksternal"
         },
         {
           "id": "ai-workspace-safe-drafts",
@@ -414,6 +467,39 @@
         }
       ],
       "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/data-import-and-export",
+      "title": "Impor Data Terpandu, Template, dan Ekspor Terkonfigurasi",
+      "description": "Mengunduh template impor CSV atau Excel, memetakan kolom dengan validasi uji coba (dry-run) sebelum impor, serta mengekspor daftar tersaring ke CSV atau Excel.",
+      "audience": "functional",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "download-templates",
+          "depth": 2,
+          "text": "Mengunduh Template Impor"
+        },
+        {
+          "id": "guided-import",
+          "depth": 2,
+          "text": "Mengunggah, Memetakan Kolom, Menguji, dan Mengimpor Data"
+        },
+        {
+          "id": "configurable-export",
+          "depth": 2,
+          "text": "Mengekspor Daftar Tersaring ke CSV atau Excel"
+        },
+        {
+          "id": "best-practices",
+          "depth": 2,
+          "text": "Praktik Terbaik dan Mengatasi Kendala Impor & Ekspor"
+        }
+      ],
+      "shard_id": "shard_functional_web_1"
     },
     {
       "id": "user/hr-contracts-skills-and-analytics",

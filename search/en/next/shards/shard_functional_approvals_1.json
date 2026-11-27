@@ -1,0 +1,46 @@
+{
+  "shard_id": "shard_functional_approvals_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "approvals"
+  ],
+  "docs": [
+    {
+      "page_id": "user/approvals-workflows-and-inbox",
+      "title": "Multistage Approval Workflows and Activity Inbox",
+      "module": "approvals",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "The native **Approvals** application lets organizations enforce multi-step governance over sensitive write and destructive ERP operations—such as confirming high-value orders, posting entries, or approving automated agent actions—while giving every internal user a clear **Requests** inbox to review, track, and audit decisions. > **Installation note**: **Approvals** ships as a native addon (approvals). Administrators can install it from the module manager or via CLI (--install approvals). Once installed, the **Approvals** app appears in the App Switcher with **Requests** (for internal users) and **Workflows** (for administrators)."
+        },
+        {
+          "anchor": "roles-and-access",
+          "text": "* **Internal User (base.group_user)**: Opens **Approvals → Requests** to act on pending requests assigned to their user or group, monitor requests they submitted (**My requests**), and review completed decision history (**Reviewed**). * **Settings Administration (base.group_system)**: Opens **Approvals → Workflows** to design draft workflows, define ordered review steps and eligible reviewers, publish immutable revisions, and archive or reactivate workflows."
+        },
+        {
+          "anchor": "configure-workflows",
+          "text": "Administrators define which operations require approval and who must review each stage under **Approvals → Workflows**: 1. Open **Approvals → Workflows** and click **New** to create a workflow in **Draft** state. 2. Enter a clear **Workflow name** (for example, *Purchase order approval* or *Vendor payment release*). 3. Under **Applies to**, choose the scope: * **Company**: Limit the workflow to one company, or leave blank (**All companies**) to apply database-wide. * **Requester type**: Choose whether the workflow governs **User** actions or delegated **Agent** actions. 4. Under **Operation**, select what triggers the workflow: * **Operation effect**: Choose **Write** (state-changing business actions) or **Destructive** (cancellations, deletions, or high-impact reversals). * **Model**: Choose the target ERP model (for example, Purchase Order or Journal Entry), or leave blank for **All models**. * **Method**: Pick an exposed operation from the live searchable **Method** selector (filtered automatically to methods matching the selected model and operation effect). 5. Open the **Review steps** tab and add between 1 and 16 ordered stages: * **Order (sequence)**: Controls the exact execution order (Stage 1 must approve before Stage 2 becomes actionable). * **Step name**: Descriptive label shown to reviewers (for example, *Department Manager*, *Finance Review*, *Director Sign-off*). * **Eligible reviewers**: Assign specific **Users** (active internal users) and/or **Groups** permitted to decide that stage. 6. Click **Save**, then click **Publish** to activate the workflow."
+        },
+        {
+          "anchor": "workflow-lifecycle",
+          "text": "Published workflows are backed by immutable policy revisions so completed and in-flight audit trails can never be altered retroactively: * **Draft → Active (Publish)**: Locks the workflow definition and starts intercepting matching operations immediately. * **Updating an Active Workflow (Create revision → Publish revision)**: Open an active or archived workflow and click **Create revision** to clone it into an editable draft linked to the prior policy. Adjust steps or reviewers, then click **Publish revision**. Confirming archives the old revision and expires any incomplete requests under the superseded revision. * **Pausing or Retiring (Archive / Activate)**: Click **Archive** on an active workflow to stop intercepting new operations (and expire incomplete requests). Archived workflows can be restored later via **Activate**."
+        },
+        {
+          "anchor": "review-requests-inbox",
+          "text": "Every internal user manages their approval queue under **Approvals → Requests**: 1. **Switch Queue Filters**: * **To review** *(default)*: Displays pending requests currently at a stage where you (or one of your groups) are an eligible reviewer. * **My requests**: Displays approval requests initiated by your own operations so you can track which stage is currently reviewing them. * **Reviewed**: Displays requests you have already decided or completed. 2. Open any request to inspect the read-only **Approval request** form: * **Request**: Request identifier, **Requested by**, **Companies**, and **Expires** timestamp. * **Progress**: Current **Status** (Pending, Approved, Executed, Denied, or Expired), **Current stage**, **Total stages**, and **Review stage** name. * **Approval stages** tab: Full stage-by-stage audit log showing who decided each stage and when. * **Technical details** tab: **Target model**, **Operation**, **Payload SHA-256** digest, and **Execution receipt** once executed. 3. For a pending request where you are authorized to decide, choose an action in the header: * **Approve**: Advances the request to the next review stage (or executes the approved operation automatically after the final stage approves). * **Deny**: Rejects the request after confirmation; the guarded operation is not executed."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Cannot Edit a Published Workflow**: Published workflows are intentionally read-only for audit integrity. Click **Create revision** to make changes safely, then **Publish revision**. * **Approve / Deny Buttons Not Shown**: Confirm the request status is still **Pending**, you belong to the eligible **Users** or **Groups** for the **Current stage**, and the request has not expired. * **Stage or Digest Mismatch Notice**: ERPForAll binds every approval decision to the exact stage number and **Payload SHA-256** digest. If another reviewer already decided the stage or a new revision expired the request, reload the request to see its latest state."
+        }
+      ]
+    }
+  ]
+}

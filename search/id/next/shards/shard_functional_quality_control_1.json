@@ -26,7 +26,7 @@
         },
         {
           "anchor": "quality-checks",
-          "text": "1. Buka **Inventory → Operations → Quality Checks** untuk meninjau inspeksi tertunda (To Do), lolos, atau gagal. 2. Buka satu pemeriksaan (misalnya QC-2026-0003) untuk melihat produk, referensi transfer, lot, dan instruksi pemeriksaan, lalu catat hasilnya (**Pass** atau **Fail**). ![Daftar Quality Checks menampilkan seluruh inspeksi gudang terjadwal maupun selesai beserta produk, tim, dan statusnya.](/id/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
+          "text": "1. Buka **Inventory → Operations → Quality Checks**. Strip dasbor di bagian atas menampilkan kartu ikon berkode warna untuk inspeksi **To Do**, **Passed**, dan **Failed**—klik kartu mana saja untuk menyaring seketika. 2. Buka satu pemeriksaan (misalnya QC-2026-0003) untuk melihat produk, referensi transfer, lot, dan instruksi pemeriksaan, lalu klik **Pass** atau **Fail** untuk mencatat hasil inspeksi. ![Daftar Quality Checks menampilkan seluruh inspeksi gudang terjadwal maupun selesai beserta produk, tim, dan statusnya.](/id/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
         },
         {
           "anchor": "quality-alerts",
@@ -42,7 +42,7 @@
         },
         {
           "anchor": "troubleshooting",
-          "text": "* **Quality Check Tidak Muncul Saat Penerimaan**: Pastikan **Quality Control Point** aktif dan cocok dengan produk/kategori serta **Operation Type** (misalnya *Receiving*) pada transfer terkait. * **Galat Tak Terduga Saat Mencatat Hasil Quality Check**: Jika klik **Pass** menghasilkan galat server, muat ulang halaman, catat **Quality Alert** untuk menjaga jejak audit, dan laporkan Error ID kepada administrator sistem."
+          "text": "* **Quality Check Tidak Muncul Saat Penerimaan**: Pastikan **Quality Control Point** aktif dan cocok dengan produk/kategori serta **Operation Type** (misalnya *Receiving*) pada transfer terkait. * **Mencatat Cacat Setelah Pemeriksaan Gagal**: Bila suatu pemeriksaan ditandai **Fail**, buat **Quality Alert** terkait di **Inventory → Operations → Quality Alerts** untuk menugaskan investigasi akar masalah dan tindak lanjut korektif ke tim QA."
         }
       ]
     }

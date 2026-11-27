@@ -42,7 +42,7 @@
         },
         {
           "anchor": "failure-and-recovery",
-          "text": "* **Zero Rows Still Showing When Folded**: If enabling **Hide lines at zero** leaves folded zero-balance section headers visible, click **Unfold all lines** or re-apply the period filter to refresh the display. * **Screen Row Limit Reached**: Fold wide sections to clear cached pages before expanding another section or exporting. Administrators can adjust report limits under **Settings → Technical → Reporting → Dynamic Reports**. * **Missing Recent Transaction**: Verify that the underlying invoice, bill, or journal entry is **Posted** (not *Draft*) and falls within the selected date range and active company scope."
+          "text": "* **Clean Zero-Row Filtering**: Enabling **Hide lines at zero** on Balance Sheet and Profit and Loss automatically hides zero-balance rows and empty sections cleanly whether sections are folded or expanded. * **Interactive Invoice Analysis**: Open **Invoice Analysis** and use the top-right view switcher to toggle between **List**, **Pivot**, and **Graph** views for customer, vendor, or period slicing. * **Screen Row Limit Reached**: Fold wide sections to clear cached pages before expanding another section or exporting. Administrators can adjust report limits under **Settings → Technical → Reporting → Dynamic Reports**. * **Missing Recent Transaction**: Verify that the underlying invoice, bill, or journal entry is **Posted** (not *Draft*) and falls within the selected date range and active company scope."
         }
       ]
     }

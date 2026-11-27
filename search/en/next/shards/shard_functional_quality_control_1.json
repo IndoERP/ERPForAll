@@ -26,7 +26,7 @@
         },
         {
           "anchor": "quality-checks",
-          "text": "1. Open **Inventory → Operations → Quality Checks** to review pending (To Do), passed, or failed inspections. 2. Open a check (for example, QC-2026-0003) to review the linked product, transfer/picking reference, lot, and inspection instructions, then record the inspection result (**Pass** or **Fail**). ![Quality Checks lists every scheduled and completed warehouse inspection together with its product, team, and status.](/en/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
+          "text": "1. Open **Inventory → Operations → Quality Checks**. The top dashboard strip displays color-coded icon cards for **To Do**, **Passed**, and **Failed** inspections—click any card to filter immediately. 2. Open a check (for example, QC-2026-0003) to review the linked product, transfer/picking reference, lot, and inspection instructions, then click **Pass** or **Fail** to record the inspection outcome. ![Quality Checks lists every scheduled and completed warehouse inspection together with its product, team, and status.](/en/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
         },
         {
           "anchor": "quality-alerts",
@@ -42,7 +42,7 @@
         },
         {
           "anchor": "troubleshooting",
-          "text": "* **Quality Check Not Triggering on Receipt**: Verify the **Quality Control Point** is active and matches both the product/category and the exact **Operation Type** (e.g., *Receiving*) on the transfer. * **Unexpected Error When Recording Quality Check Result**: If clicking **Pass** on a check returns a server error, reload the page, log a **Quality Alert** to preserve the audit trail, and notify your system administrator with the error ID."
+          "text": "* **Quality Check Not Triggering on Receipt**: Verify the **Quality Control Point** is active and matches both the product/category and the exact **Operation Type** (e.g., *Receiving*) on the transfer. * **Logging Defects After a Failed Check**: When a check is marked **Fail**, create a linked **Quality Alert** under **Inventory → Operations → Quality Alerts** to assign root-cause investigation and corrective follow-up to the responsible QA team."
         }
       ]
     }
