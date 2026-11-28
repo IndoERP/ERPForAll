@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <erp>
-  <menuitem id="menu_crm" name="CRM" groups="sales_team.group_sale_salesman" web_icon="lucide:target" sequence="28">
+  <menuitem id="menu_crm" name="CRM" groups="sales_team.group_sale_salesman" web_icon="lucide:target" sequence="30">
     <menuitem id="menu_pipeline" name="Pipeline" action="pipeline_window" sequence="10"/>
     <menuitem id="menu_leads" name="Leads" action="lead_window" sequence="20"/>
     <menuitem id="menu_submit_lead" name="Submit Lead" action="submit_lead_window" sequence="25"/>

@@ -10,7 +10,7 @@
     <field name="tag">approvals.configuration</field>
   </record>
   <menuitem id="approvals_menu" name="Approvals" action="requests_window"
-            groups="base.group_user" web_icon="lucide:badge-check" sequence="14"/>
+            groups="base.group_user" web_icon="lucide:badge-check" sequence="15"/>
   <menuitem id="requests_menu" name="Requests" parent="approvals_menu" action="requests_window"
             groups="base.group_user" sequence="10"/>
   <menuitem id="workflows_menu" name="Workflows" parent="approvals_menu" action="workflows_window"

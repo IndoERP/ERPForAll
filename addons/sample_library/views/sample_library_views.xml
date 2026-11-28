@@ -336,7 +336,7 @@
         <field name="res_model">sample_library.genre</field>
         <field name="view_mode">list,form</field>
     </record>
-    <menuitem id="library_menu" name="Library" groups="base.group_user" sequence="70" web_icon="lucide:library">
+    <menuitem id="library_menu" name="Library" groups="base.group_user" sequence="190" web_icon="lucide:library">
         <menuitem id="book_menu" name="Books" action="book_action" sequence="10"/>
         <menuitem id="author_menu" name="Authors" action="author_action" sequence="20"/>
         <menuitem id="loan_menu" name="Loans" action="loan_action" sequence="30"/>

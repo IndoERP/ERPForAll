@@ -99,6 +99,19 @@ fn manifest_lists_all_views_rules_and_data_and_matches_the_native_addon() {
         }
     }
     assert_eq!(values("data"), shipped);
+    let mut demo = BTreeSet::new();
+    for file in fs::read_dir(root.join("demo")).expect("addon demo directory") {
+        let path = file.expect("file").path();
+        if path.is_file() {
+            demo.insert(
+                path.strip_prefix(root)
+                    .expect("relative")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    assert_eq!(values("demo"), demo);
     assert_eq!(
         values("depends"),
         erp_addon_crm::ADDON

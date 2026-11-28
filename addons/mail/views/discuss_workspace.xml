@@ -6,5 +6,5 @@
     <field name="tag">mail.discuss</field>
   </record>
   <menuitem id="discuss_workspace_menu" name="Discuss" action="discuss_workspace_action"
-            groups="base.group_user" web_icon="lucide:messages-square" sequence="12"/>
+            groups="base.group_user" web_icon="lucide:messages-square" sequence="10"/>
 </erp>

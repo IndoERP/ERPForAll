@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Demo CRM assignment/scoring rules, leads, opportunities across all stages, and stakeholder contact roles.
+     No demo users are referenced: ERPForAll demo data never ships user accounts or credentials. -->
+<erp noupdate="1">
+  <!-- Lead assignment and scoring rules. -->
+  <record id="rule_demo_enterprise_referral" model="crm.rule">
+    <field name="name">Referral Korporat</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="sequence">10</field>
+    <field name="source">Referral</field>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="points">35</field>
+  </record>
+  <record id="rule_demo_website_jabodetabek" model="crm.rule">
+    <field name="name">Website Jabodetabek</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="sequence">20</field>
+    <field name="source">Website</field>
+    <field name="region">Jabodetabek</field>
+    <field name="team_id" ref="sales_team.team_demo_online"/>
+    <field name="points">25</field>
+  </record>
+  <record id="rule_demo_exhibition" model="crm.rule">
+    <field name="name">Pameran Industri</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="sequence">30</field>
+    <field name="source">Pameran</field>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="points">20</field>
+  </record>
+
+  <!-- Open leads in the Lead Queue (scored and routed by the rules above). -->
+  <record id="lead_demo_bintang_logistik" model="crm.lead">
+    <field name="name">Integrasi Gudang &amp; Distribusi</field>
+    <field name="kind">lead</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_prospect"/>
+    <field name="company_name">PT Bintang Logistik Pratama</field>
+    <field name="contact_name">Rudi Hartono</field>
+    <field name="email">rudi@bintang-logistik.example</field>
+    <field name="phone">+62 21 555 0301</field>
+    <field name="source">Referral</field>
+    <field name="region">Jabodetabek</field>
+    <field name="deal_amount">18500</field>
+    <field name="next_step">Jadwalkan panggilan discovery kebutuhan multi-gudang</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_b2b'), ref('sales_team.tag_demo_priority')])]"/>
+  </record>
+  <record id="lead_demo_surya_retail" model="crm.lead">
+    <field name="name">Ekspansi POS 12 Gerai</field>
+    <field name="kind">lead</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_prospect"/>
+    <field name="company_name">CV Surya Retail Nusantara</field>
+    <field name="contact_name">Siti Marlina</field>
+    <field name="email">siti@surya-retail.example</field>
+    <field name="phone">+62 22 555 0302</field>
+    <field name="source">Website</field>
+    <field name="region">Jawa Barat</field>
+    <field name="deal_amount">9200</field>
+    <field name="next_step">Kirim profil produk dan estimasi paket implementasi</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_retail')])]"/>
+  </record>
+  <record id="lead_demo_nusantara_pangan" model="crm.lead">
+    <field name="name">Pengadaan Bahan Baku &amp; Cold Chain</field>
+    <field name="kind">lead</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_prospect"/>
+    <field name="company_name">PT Nusantara Pangan Sejahtera</field>
+    <field name="contact_name">Bambang Wijaya</field>
+    <field name="email">bambang@nusantara-pangan.example</field>
+    <field name="phone">+62 31 555 0303</field>
+    <field name="source">Pameran</field>
+    <field name="region">Jawa Timur</field>
+    <field name="deal_amount">24000</field>
+    <field name="next_step">Follow-up hasil demo di pameran dan konfirmasi PIC pengadaan</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_b2b')])]"/>
+  </record>
+
+  <!-- Open opportunities across all 4 Direct Sales pipeline stages. -->
+  <record id="opp_demo_kopi_gunung" model="crm.lead">
+    <field name="name">Langganan Suplai Kopi &amp; Kemasan Q4</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_kopi_gunung"/>
+    <field name="team_id" ref="sales_team.team_demo_online"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_prospect"/>
+    <field name="deal_amount">7500</field>
+    <field name="date_deadline">2026-11-30</field>
+    <field name="source">Website</field>
+    <field name="region">Jawa Barat</field>
+    <field name="next_step">Konfirmasi volume pengiriman bulanan dengan Dewi Anggraini</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_retail')])]"/>
+  </record>
+  <record id="opp_demo_mitra_kayu" model="crm.lead">
+    <field name="name">Pengadaan Furnitur &amp; Rak Showroom</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_mitra_kayu"/>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_qualify"/>
+    <field name="deal_amount">14800</field>
+    <field name="date_deadline">2026-11-29</field>
+    <field name="source">Referral</field>
+    <field name="region">Jabodetabek</field>
+    <field name="next_step">Presentasi spesifikasi teknis ke Hendra Gunawan</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_b2b')])]"/>
+  </record>
+  <record id="opp_demo_baja_sentosa" model="crm.lead">
+    <field name="name">Kontrak Pasokan Material Proyek Semarang</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_baja_sentosa"/>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_qualify"/>
+    <field name="deal_amount">22000</field>
+    <field name="date_deadline">2026-12-15</field>
+    <field name="source">Pameran</field>
+    <field name="region">Jawa Tengah</field>
+    <field name="next_step">Review jadwal pengiriman bertahap bersama Agus Setiawan</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_b2b'), ref('sales_team.tag_demo_contract')])]"/>
+  </record>
+  <record id="opp_demo_griya_persada" model="crm.lead">
+    <field name="name">Paket Perangkat Kerja Studio Denpasar</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_griya_persada"/>
+    <field name="team_id" ref="sales_team.team_demo_online"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_proposal"/>
+    <field name="deal_amount">16500</field>
+    <field name="date_deadline">2026-11-30</field>
+    <field name="source">Website</field>
+    <field name="region">Bali</field>
+    <field name="next_step">Kirim revisi proposal paket laptop dan aksesori ke Wayan Suartika</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_priority')])]"/>
+  </record>
+  <record id="opp_demo_cipta_digital" model="crm.lead">
+    <field name="name">Lisensi Tahunan &amp; Pelatihan Tim Surabaya</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_cipta_digital"/>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_proposal"/>
+    <field name="deal_amount">28000</field>
+    <field name="date_deadline">2026-12-12</field>
+    <field name="source">Referral</field>
+    <field name="region">Jawa Timur</field>
+    <field name="next_step">Finalisasi ruang lingkup pelatihan dengan Nadia Rahmawati</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_b2b'), ref('sales_team.tag_demo_contract')])]"/>
+  </record>
+  <record id="opp_demo_toko_maju" model="crm.lead">
+    <field name="name">Kontrak Distribusi Tahunan Toko Maju</field>
+    <field name="kind">opportunity</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_toko_maju"/>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="pipeline_id" ref="pipeline_direct"/>
+    <field name="stage_id" ref="stage_negotiate"/>
+    <field name="deal_amount">36000</field>
+    <field name="date_deadline">2026-11-29</field>
+    <field name="source">Referral</field>
+    <field name="region">DI Yogyakarta</field>
+    <field name="next_step">Review draf perjanjian pembayaran termin 30 hari bersama Lestari Handayani</field>
+    <field name="tag_ids" eval="[(6, 0, [ref('sales_team.tag_demo_priority'), ref('sales_team.tag_demo_contract')])]"/>
+  </record>
+
+  <!-- Stakeholder contact roles on demo opportunities. -->
+  <record id="contact_role_demo_toko_maju" model="crm.lead.contact">
+    <field name="lead_id" ref="opp_demo_toko_maju"/>
+    <field name="partner_id" ref="base.partner_demo_toko_maju_lestari"/>
+    <field name="role">decision</field>
+  </record>
+  <record id="contact_role_demo_griya_persada" model="crm.lead.contact">
+    <field name="lead_id" ref="opp_demo_griya_persada"/>
+    <field name="partner_id" ref="base.partner_demo_griya_persada_wayan"/>
+    <field name="role">purchasing</field>
+  </record>
+  <record id="contact_role_demo_cipta_digital" model="crm.lead.contact">
+    <field name="lead_id" ref="opp_demo_cipta_digital"/>
+    <field name="partner_id" ref="base.partner_demo_cipta_digital_nadia"/>
+    <field name="role">decision</field>
+  </record>
+  <record id="contact_role_demo_mitra_kayu" model="crm.lead.contact">
+    <field name="lead_id" ref="opp_demo_mitra_kayu"/>
+    <field name="partner_id" ref="base.partner_demo_mitra_kayu_hendra"/>
+    <field name="role">influencer</field>
+  </record>
+</erp>
