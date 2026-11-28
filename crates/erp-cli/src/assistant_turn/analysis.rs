@@ -299,7 +299,7 @@ impl Analysis {
         self.push(canvas::grounded_canvas_payload(call, source)?)
     }
 
-    fn push(&mut self, payload: Json) -> Result<()> {
+    pub(super) fn push(&mut self, payload: Json) -> Result<()> {
         let size = serde_json::to_vec(&payload)
             .map_err(|_| Error::invariant("Could not size the canvas."))?
             .len();

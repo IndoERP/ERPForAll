@@ -15,8 +15,9 @@ pub const DISPLAY_TYPES: [&str; 3] = ["line_section", "line_subsection", "line_n
 /// the down-payment flag the guards read, and the invoicing method, quantities and status. Refused
 /// on create and write for every caller, also with sudo, through the order's line commands and as
 /// `default_<field>` context keys.
-const DERIVED_FIELDS: [&str; 10] = [
+const DERIVED_FIELDS: [&str; 11] = [
     "state",
+    "date_order",
     "company_id",
     "order_partner_id",
     "salesman_id",
@@ -150,6 +151,15 @@ pub struct SaleOrderLine {
         string = "Salesperson"
     )]
     pub salesman_id: Option<RecId>,
+    /// The order date used for filtering and grouping sales lines across periods.
+    #[field(
+        datetime,
+        related = "order_id.date_order",
+        store = true,
+        index = true,
+        string = "Order Date"
+    )]
+    pub date_order: Option<DateTime>,
     /// The order's state.
     #[field(
         selection,
@@ -1339,5 +1349,26 @@ impl SaleOrderLine {
             .collect();
         sup.call(tx, this.as_records(), ()).await?;
         crate::amounts::sync_orders(tx, this.env(), &orders).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DERIVED_FIELDS;
+
+    #[test]
+    fn order_projections_are_protected_on_line_inputs() {
+        for field in [
+            "state",
+            "date_order",
+            "company_id",
+            "order_partner_id",
+            "salesman_id",
+        ] {
+            assert!(
+                DERIVED_FIELDS.contains(&field),
+                "{field} must come from the order"
+            );
+        }
     }
 }

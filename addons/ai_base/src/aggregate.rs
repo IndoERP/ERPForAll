@@ -18,6 +18,16 @@ const TERMS: &str = "ai_base.aggregate_terms";
 const BYTES: &str = "ai_base.aggregate_result_bytes";
 const OPERAND: &str = "ai_base.aggregate_operand_bytes";
 
+/// Maximum groups that can also be looked up in a single authorized record search.
+///
+/// # Errors
+/// Returns the underlying configuration error if the administrator's read limits cannot be read.
+pub async fn ranked_lookup_limit(tx: &mut Transaction) -> Result<usize> {
+    let groups = crate::catalog::limit(tx, ROWS).await?;
+    let rows = crate::catalog::limit(tx, crate::search::ROWS).await?;
+    Ok(groups.min(rows))
+}
+
 fn parameters() -> Result<Vec<ParameterDecl>> {
     Ok(vec![
         ParameterDecl::integer(
@@ -194,7 +204,18 @@ impl AggregatePlan {
         );
         map.insert("offset".to_string(), json!(0));
         if !self.order.is_empty() {
-            map.insert("order".to_string(), json!(self.order));
+            // A replayed top-N query must pick the same groups when measure values tie.
+            let order = match self.groupby.as_slice() {
+                [group]
+                    if self.order.split_whitespace().next().is_some_and(|key| {
+                        self.aggregates.iter().any(|measure| measure == key)
+                    }) =>
+                {
+                    format!("{}, {group} asc", self.order)
+                }
+                _ => self.order.clone(),
+            };
+            map.insert("order".to_string(), json!(order));
         }
         map.insert(
             "context".to_string(),
@@ -678,6 +699,25 @@ mod projection_tests {
         assert!(validate_measure(&FieldType::Boolean, "bool_and").is_ok());
         assert!(validate_measure(&FieldType::Date, "max").is_ok());
     }
+    #[test]
+    fn a_limited_ranking_breaks_measure_ties_before_slicing_the_groups() {
+        let query = AggregatePlan {
+            model: "sale.order.line".into(),
+            groupby: vec!["product_id".into()],
+            aggregates: vec!["product_uom_qty:sum".into()],
+            domain: json!([]),
+            order: "product_uom_qty:sum desc".into(),
+            limit: 3,
+            company: 1,
+            byte_limit: 4096,
+        };
+        assert_eq!(
+            query.rpc_arguments()["order"],
+            "product_uom_qty:sum desc, product_id asc"
+        );
+        assert_eq!(query.rpc_arguments()["limit"], 4);
+    }
+
     #[test]
     fn multi_axis_queries_keep_distinct_measures_and_do_not_guess_a_total() {
         let query = AggregatePlan {

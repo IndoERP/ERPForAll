@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 lettre.workspace = true
+jiff.workspace = true
 erp-modules = { workspace = true }
 # `erp access`: the policy of a database through erp-security, as the System principal
 erp-addon-base = { workspace = true }

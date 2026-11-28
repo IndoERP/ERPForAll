@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Native assistant composition with multi-turn tool calling, live data aggregation, and canvas staging.
 mod analysis;
+mod ranking;
 mod selection;
 
 use crate::{assistant_business, assistant_read};
@@ -9,8 +10,8 @@ use erp_fields::{Error, Result, Value};
 use erp_orm::{BoxFuture, CompanyId, Context, CredentialOptions};
 use erp_rpc::RpcService;
 use erp_sdk::ai::{
-    ContentPart, DataSource, Instruction, LabelledData, ToolName, ToolResult, ToolTurnRequest,
-    TurnMessage, TurnRole, UserText,
+    ContentPart, DataSource, Instruction, LabelledData, ToolCallId, ToolName, ToolResult,
+    ToolTurnRequest, TurnMessage, TurnRole, UserText,
 };
 use erp_security::auth::{Auth, SessionSecret};
 use erp_server::web::WebAssistant;
@@ -209,6 +210,36 @@ impl TextAssistant {
                     "erp.ai.message_invalid: enter a message within the configured length limit.",
                 ));
             }
+            let mut ranking = ranking::Ranking::parse(&message);
+            if let Ok(Some(request)) = &ranking {
+                let limit =
+                    erp_addon_ai_base::aggregate::ranked_lookup_limit(&mut begun.tx).await?;
+                if let Err(clarify) = request.check_limit(limit) {
+                    ranking = Err(clarify);
+                }
+            }
+            let ranking_call = if let Ok(Some(request)) = &ranking {
+                let user_context = if request.scoped_year() {
+                    Some(
+                        erp_security::auth::user_context(&mut begun.tx, begun.session.user())
+                            .await?
+                            .ok_or_else(|| {
+                                Error::access("The current user's time zone could not be read.")
+                            })?,
+                    )
+                } else {
+                    None
+                };
+                let zone = user_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.tz())
+                    .unwrap_or("UTC");
+                let call = request.query(zone, erp_fields::DateTime::now())?;
+                let unit_id = erp_addon_product::defaults::default_unit_id(&mut begun.tx).await?;
+                Some((call, unit_id))
+            } else {
+                None
+            };
             let correction_rounds = usize::try_from(
                 erp_sdk::params::get_int(
                     &mut begun.tx,
@@ -430,13 +461,73 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                 usage: None,
             };
             let result: Result<()> = async {
-                if price_followup && previous_read.is_none() {
+                if let Err(clarify) = &ranking {
+                    meter.usage = Some((0, 0));
+                    final_text = clarify.message().to_owned();
+                    return Ok(());
+                }
+                if price_followup && previous_read.as_ref().is_none_or(|q| selection::needs_unit_rerun(&q["arguments"])) {
                     meter.usage = Some((0, 0));
                     final_text = if message.to_lowercase().contains("harga") {
                         "Kirim ulang pertanyaan peringkat produk tadi, lalu minta harganya lagi. Pilihan produk dari percakapan lama ini belum bisa diverifikasi.".into()
                     } else {
                         "Please rerun the previous product ranking and then ask for prices. The selection from this older conversation cannot be verified.".into()
                     };
+                    return Ok(());
+                }
+                if let (Ok(Some(request)), Some((base, unit_id))) = (&ranking, &ranking_call) {
+                    meter.usage = Some((0, 0));
+                    tool_count = 1;
+                    let probe = request.unit_query(base)?;
+                    let units = assistant_read::aggregate_records(
+                        &service, auth.clone(), secret_arc.clone(), company, &probe,
+                    ).await?;
+                    let call = match request.verified_query(base, units.data().value(), *unit_id) {
+                        Ok(call) => call,
+                        Err(e) if e.kind() == erp_fields::ErrorKind::UserError => {
+                            final_text = e.message().into();
+                            return Ok(());
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    tool_count += 1;
+                    let result = assistant_read::aggregate_records(
+                        &service, auth.clone(), secret_arc.clone(), company, &call,
+                    ).await?;
+                    selection::remember(&mut read_query, &call);
+                    let groups = result.data().value()["groups"].as_array()
+                        .ok_or_else(|| Error::invariant("The ranking has no group result."))?;
+                    final_text = request.summary(groups.is_empty()).into();
+                    if !groups.is_empty() {
+                        visuals.push(canvas::analytical_output(request.view(), request.title(), result.data())?)?;
+                    }
+                    return Ok(());
+                }
+                if price_followup && let Some(previous) = &previous_read {
+                    meter.usage = Some((0, 0));
+                    tool_count = 2;
+                    let id = ToolCallId::new("ranked_prices").map_err(|e| Error::programming(e.to_string()))?;
+                    let call = selection::saved(&id, previous)?;
+                    let groups = assistant_read::aggregate_records(
+                        &service, auth.clone(), secret_arc.clone(), company, &call,
+                    ).await?;
+                    let lookup = selection::price_query(&call, groups.data().value())?;
+                    let prices = assistant_read::search_records(
+                        &service, auth.clone(), secret_arc.clone(), company, &lookup,
+                    ).await?;
+                    let mut tx = auth.begin_session(secret, options()).await?.tx;
+                    let currency = selection::catalog_currencies(&mut tx, prices.data().source().ids()).await?;
+                    tx.rollback().await?;
+                    let joined = selection::ranked_prices(groups.data().value(), &prices, &currency)?;
+                    let indonesian = message.to_lowercase().contains("harga");
+                    let title = if indonesian { "Harga katalog produk dalam peringkat" } else { "Catalog prices of ranked products" };
+                    visuals.push(canvas::analytical_output("table", title, joined.data())?)?;
+                    selection::remember(&mut read_query, &call);
+                    final_text = if indonesian {
+                        "Tabel di Canvas menampilkan harga katalog dan mata uang untuk produk dalam urutan peringkat yang sama."
+                    } else {
+                        "The Canvas table shows the catalog price and currency of each product in ranking order."
+                    }.into();
                     return Ok(());
                 }
                 'attempts: for attempt in 0..max_attempts {
@@ -522,7 +613,6 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                             tool_count += 1;
                             let resolved = selection::resolve(&call, previous_read.as_ref(), price_followup);
                             let effective = resolved.as_ref().unwrap_or(&call);
-                            let mut visual_read = None;
                             let tool_result = if let Err(error) = &resolved {
                                 Err(Error::validation(error.message().to_owned()))
                             } else {
@@ -536,25 +626,9 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                                     "search_records" => assistant_read::search_records(
                                         &service, auth.clone(), secret_arc.clone(), company, effective,
                                     ).await,
-                                    "aggregate_records" => async {
-                                        let groups = assistant_read::aggregate_records(
-                                            &service, auth.clone(), secret_arc.clone(), company, effective,
-                                        ).await?;
-                                        if !price_followup || !selection::is_product_ranking(effective.arguments()) {
-                                            return Ok(groups);
-                                        }
-                                        let lookup = selection::price_query(effective, groups.data().value())?;
-                                        tool_count += 1;
-                                        let prices = assistant_read::search_records(
-                                            &service, auth.clone(), secret_arc.clone(), company, &lookup,
-                                        ).await?;
-                                        let mut tx = auth.begin_session(secret, options()).await?.tx;
-                                        let currency = selection::catalog_currencies(&mut tx, prices.data().source().ids()).await?;
-                                        tx.rollback().await?;
-                                        let joined = selection::ranked_prices(groups.data().value(), &prices, &currency)?;
-                                        visual_read = Some(lookup);
-                                        Ok(joined)
-                                    }.await,
+                                    "aggregate_records" => assistant_read::aggregate_records(
+                                        &service, auth.clone(), secret_arc.clone(), company, effective,
+                                    ).await,
                                     "find_actions" => {
                                         let mut tx = auth.begin_session(secret, options()).await?.tx;
                                         let found = actions.find(&service, auth, &mut tx, &call).await;
@@ -622,8 +696,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                                 Ok(result) => {
                                     if matches!(effective.name(), "search_records" | "aggregate_records") {
                                         selection::remember(&mut read_query, effective);
-                                        let read = visual_read.as_ref().unwrap_or(effective);
-                                        visuals.read(read, Ok(result.data()));
+                                        visuals.read(effective, Ok(result.data()));
                                     }
                                     if matches!(effective.name(), "search_records" | "aggregate_records" | "run_action" | "find_models") {
                                         actions.seal();
@@ -663,13 +736,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
 
                         messages.push(TurnMessage::new(TurnRole::User, tool_results).map_err(invalid)?);
                     }
-                    let needs_prices = price_followup && read_query.is_none() && operations.is_empty();
-                    if needs_prices && attempt + 1 == max_attempts {
-                        return Err(Error::validation("Harga katalog untuk peringkat sebelumnya belum dapat diverifikasi. Buka kembali peringkat tersebut dan coba lagi."));
-                    }
-                    let correction = if needs_prices {
-                        Some("Read the previous product ranking with its original filters and limit to verify catalog prices before answering.")
-                    } else if operations.is_empty() { visuals.correction() } else { None };
+                    let correction = if operations.is_empty() { visuals.correction() } else { None };
                     if correction.is_none() || attempt + 1 == max_attempts {
                         if operations.is_empty() { visual_notices = visuals.complete(); }
                         if !final_text.trim().is_empty() || !text.trim().is_empty() || !visuals.cards.is_empty() || !visual_notices.is_empty() {

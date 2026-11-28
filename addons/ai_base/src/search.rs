@@ -11,7 +11,7 @@ use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeSet;
 
 const TOOL: &str = "search_records";
-const ROWS: &str = "ai_base.search_rows";
+pub(crate) const ROWS: &str = "ai_base.search_rows";
 const FIELDS: &str = "ai_base.search_fields";
 const TERMS: &str = "ai_base.search_terms";
 const TEXT: &str = "ai_base.search_text_chars";

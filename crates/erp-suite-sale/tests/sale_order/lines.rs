@@ -514,6 +514,69 @@ fn the_least_values_create_a_product_an_order_and_a_line() {
 }
 
 #[test]
+fn line_order_dates_follow_the_order_and_backfill_existing_rows() {
+    run(async {
+        let (_db, orm) = cloned_sale().await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let world = world(&mut tx).await;
+        let desk = product(&mut tx, "Desk", "consu", "order").await;
+        let quotation = new_order(&mut tx, &world).await;
+        let december = DateTime::parse_odoo("2025-12-31 23:59:59").unwrap();
+        let january = DateTime::parse_odoo("2026-01-01 00:00:00").unwrap();
+        write(
+            &mut tx,
+            &quotation,
+            RawVals::new().set_cell("date_order", Cell::DateTime(december)),
+        )
+        .await
+        .unwrap();
+        let desk_line = product_line(&mut tx, &quotation, desk, 1).await;
+        assert_eq!(
+            desk_line.cell(&mut tx, "date_order").await.unwrap(),
+            Cell::DateTime(december)
+        );
+        write(
+            &mut tx,
+            &quotation,
+            RawVals::new().set_cell("date_order", Cell::DateTime(january)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            desk_line.cell(&mut tx, "date_order").await.unwrap(),
+            Cell::DateTime(january)
+        );
+
+        let line_id = desk_line.ids()[0];
+        tx.execute(
+            "UPDATE sale_order_line SET date_order = NULL WHERE id = $1",
+            &[&line_id],
+        )
+        .await
+        .unwrap();
+        let migration = include_str!(
+            "../../../../addons/sale/migrations/1.13/post-backfill-line-order-date.sql"
+        );
+        assert!(tx.execute(migration, &[]).await.unwrap() >= 1);
+        assert_eq!(tx.execute(migration, &[]).await.unwrap(), 0);
+        let matching = tx
+            .query(
+                "SELECT id FROM sale_order_line WHERE id = $1 AND date_order >= '2026-01-01'
+               AND date_order < '2027-01-01'",
+                &[&line_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            matching.len(),
+            1,
+            "the historical line is in the 2026 ranking"
+        );
+        tx.rollback().await.unwrap();
+    });
+}
+
+#[test]
 fn derived_line_fields_are_refused() {
     run(async {
         let (_db, orm) = cloned_sale().await;
@@ -525,7 +588,12 @@ fn derived_line_fields_are_refused() {
         act(&mut tx, &quotation, "action_confirm").await.unwrap();
         let order = quotation.ids()[0];
         let lines = tx.env().records("sale.order.line").unwrap();
-        let derived: [(&str, Cell, Value); 9] = [
+        let derived: [(&str, Cell, Value); 10] = [
+            (
+                "date_order",
+                Cell::DateTime(DateTime::now()),
+                Value::DateTime(DateTime::now()),
+            ),
             (
                 "state",
                 Cell::Str("draft".into()),

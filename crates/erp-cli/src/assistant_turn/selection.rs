@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Re-run the preceding selection with today's permissions. Only the query is persisted.
 use erp_fields::{Error, Result};
-use erp_sdk::ai::{LabelledData, ToolCall, ToolName, ToolResult, ToolSpec};
+use erp_sdk::ai::{LabelledData, ToolCall, ToolCallId, ToolName, ToolResult, ToolSpec};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 
@@ -23,16 +23,16 @@ pub(super) fn repeat(call: &ToolCall, previous: Option<&Json>) -> Result<ToolCal
         ));
     }
     let query = previous.ok_or_else(|| Error::validation("No saved query for the preceding turn. Reconstruct the selection from the previous question first."))?;
+    saved(call.id(), query)
+}
+
+pub(super) fn saved(id: &ToolCallId, query: &Json) -> Result<ToolCall> {
     let name = query["tool"]
         .as_str()
         .filter(|s| matches!(*s, "aggregate_records" | "search_records"))
         .ok_or_else(|| Error::invariant("Invalid saved assistant query."))?;
-    ToolCall::new(
-        call.id().clone(),
-        name.to_owned(),
-        query["arguments"].clone(),
-    )
-    .map_err(|e| Error::programming(e.to_string()))
+    ToolCall::new(id.clone(), name.to_owned(), query["arguments"].clone())
+        .map_err(|e| Error::programming(e.to_string()))
 }
 
 pub(super) fn wants_previous_prices(question: &str) -> bool {
@@ -41,19 +41,44 @@ pub(super) fn wants_previous_prices(question: &str) -> bool {
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
         .collect();
-    if [
-        "harga transaksi",
-        "harga beli",
-        "harga rata",
-        "harga faktur",
-        "unit price",
-        "purchase price",
-        "invoiced",
-        "average price",
-    ]
-    .iter()
-    .any(|term| normalized.contains(term))
-    {
+    // Only a plain catalog-price follow-up can bypass the general assistant. Additional fields,
+    // currency conversions and mutations need to go through ordinary planning and authorization.
+    if !words.iter().all(|word| {
+        matches!(
+            *word,
+            "tolong"
+                | "coba"
+                | "tampilkan"
+                | "tunjukkan"
+                | "tambahkan"
+                | "sertakan"
+                | "berapa"
+                | "harga"
+                | "harganya"
+                | "katalog"
+                | "jual"
+                | "produk"
+                | "tersebut"
+                | "tadi"
+                | "juga"
+                | "please"
+                | "what"
+                | "are"
+                | "their"
+                | "those"
+                | "the"
+                | "products"
+                | "catalog"
+                | "catalogue"
+                | "price"
+                | "prices"
+                | "show"
+                | "me"
+                | "include"
+                | "also"
+                | "too"
+        )
+    }) {
         return false;
     }
     words
@@ -74,6 +99,25 @@ pub(super) fn is_product_ranking(data: &Json) -> bool {
         Some("sale.order.line" | "purchase.order.line")
     ) && data.get("groupby").or_else(|| data.get("group_by")) == Some(&json!(["product_id"]))
 }
+/// Older sales rankings could have added quantities across different packaging units.
+pub(super) fn needs_unit_rerun(args: &Json) -> bool {
+    if args["model"] != "sale.order.line" || !is_product_ranking(args) {
+        return false;
+    }
+    let sums_units = args["aggregates"].as_array().is_some_and(|measures| {
+        measures.iter().any(|m| match m.as_str() {
+            Some(spec) => matches!(spec, "product_uom_qty" | "product_uom_qty:sum"),
+            None => m["field"] == "product_uom_qty" && m.get("function").is_none_or(|f| f == "sum"),
+        })
+    });
+    let pinned_unit = args["domain"].as_array().is_some_and(|domain| {
+        domain.iter().any(|term| term.as_array().is_some_and(|triple| matches!(
+            triple.as_slice(), [field, op, id] if field == "product_uom_id" && op == "=" && id.as_i64().is_some_and(|v| v > 0)
+        )))
+    });
+    sums_units && !pinned_unit
+}
+
 fn variant_id(group: &Json) -> Option<i64> {
     let value = &group["product_id"];
     value
@@ -236,6 +280,30 @@ mod tests {
         ToolCall::new(ToolCallId::new("followup").unwrap(), name.into(), args).unwrap()
     }
     #[test]
+    fn historical_sales_unit_rankings_must_have_a_pinned_unit_before_price_replay() {
+        let mut args = json!({"model":"sale.order.line","group_by":["product_id"],"domain":[],"aggregates":[]});
+        for measure in [
+            json!("product_uom_qty:sum"),
+            json!("product_uom_qty"),
+            json!({"field":"product_uom_qty"}),
+            json!({"field":"product_uom_qty","function":"sum"}),
+        ] {
+            args["aggregates"] = json!([measure]);
+            assert!(needs_unit_rerun(&args));
+        }
+        args["domain"] = json!([["product_uom_id", "!=", 10]]);
+        assert!(needs_unit_rerun(&args));
+        args["domain"] = json!([["product_uom_id", "=", 10]]);
+        assert!(!needs_unit_rerun(&args));
+        args["domain"] = json!([]);
+        args["model"] = json!("purchase.order.line");
+        assert!(!needs_unit_rerun(&args));
+        args["model"] = json!("sale.order.line");
+        args["aggregates"] = json!(["price_subtotal:sum"]);
+        assert!(!needs_unit_rerun(&args));
+    }
+
+    #[test]
     fn price_followup_refreshes_top_three_and_joins_by_variant_id_in_rank_order() {
         let args = json!({"model":"sale.order.line","domain":[["state","=","sale"]],"order":"product_uom_qty desc","groupby":["product_id"],"aggregates":["product_uom_qty:sum"],"limit":3});
         let mut receipt = None;
@@ -277,6 +345,14 @@ mod tests {
         );
         assert!(resolve(&other_ranking, None, true).is_err());
         assert!(wants_previous_prices("tampilkan harganya juga"));
+        assert!(wants_previous_prices("Berapa harga katalog produk tadi?"));
+        assert!(wants_previous_prices("What are their prices?"));
+        assert!(!wants_previous_prices(
+            "Buat quotation dan tambahkan harganya juga"
+        ));
+        assert!(!wants_previous_prices("Update their prices"));
+        assert!(!wants_previous_prices("also show their prices and stock"));
+        assert!(!wants_previous_prices("Tampilkan harganya juga dalam USD"));
         assert!(!wants_previous_prices("buat daftar harga semua produk"));
         assert!(!wants_previous_prices("tampilkan harga beli juga"));
         let groups = json!({"model":"sale.order.line","groupby":["product_id"],"aggregates":["product_uom_qty:sum"],"groups":[{"product_id":[83,"Desk"],"product_uom_qty:sum":12},{"product_id":[5,"Chair"],"product_uom_qty:sum":6},{"product_id":[120,"Pen"],"product_uom_qty:sum":4}]});
