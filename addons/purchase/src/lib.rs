@@ -15,6 +15,7 @@ pub mod billing;
 mod direct_bill;
 mod direct_bill_integrity;
 pub mod line;
+mod migrations;
 pub mod order;
 mod partner_product_buttons;
 pub mod report;
