@@ -331,6 +331,38 @@ test("an addon's own settings menu opens on its app, and an app without settings
     .rejects.toThrow("The addon 'sale' declares no settings for this page.");
 });
 
+test("the compact category picker follows desktop selection, search results and unsaved fields", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = await settingsView(host, settingsRpc(twoApps), [], job => { void job(); }, () => {}, {}, ["global"]);
+  const picker = host.querySelector<HTMLSelectElement>(".settings-category-picker select");
+  expect(picker).not.toBeNull();
+  if (!picker) throw new Error("Missing Settings category picker");
+  expect(picker.labels?.[0]?.textContent).toContain("Settings category");
+  expect([...picker.options].map(option => option.text)).toEqual(["Notes", "Mail Server"]);
+  expect(picker.value).toBe("notes");
+  const field = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  field.checked = true;
+  field.dispatchEvent(new Event("change"));
+  picker.value = "mail_server";
+  picker.dispatchEvent(new Event("change"));
+  expect(host.querySelector('[data-app="mail_server"]')?.getAttribute("aria-selected")).toBe("true");
+  expect(mounted.dirty()).toBe(true);
+  host.querySelector<HTMLButtonElement>('[data-app="notes"]')!.click();
+  expect(picker.value).toBe("notes");
+  expect(field.checked).toBe(true);
+  const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+  search.value = "outgoing";
+  search.dispatchEvent(new Event("input"));
+  expect([...picker.options].map(option => option.text)).toEqual(["Search results", "Mail Server"]);
+  picker.value = "mail_server";
+  picker.dispatchEvent(new Event("change"));
+  expect(search.value).toBe("");
+  expect(picker.value).toBe("mail_server");
+  expect(host.querySelector<HTMLElement>('[data-app-section="mail_server"]')?.style.display).toBe("");
+  mounted.dispose?.();
+});
+
 test("settings page groups by target app then block with sequence ordering", async () => {
   const declarations = [
     { key: "sale_stock.returns", label: "Allow Returns", kind: "boolean", default: false, choices: null, writable: true, app: "stock", block: "Operations", sequence: 20 },

@@ -116,7 +116,6 @@
   :root[data-office-theme="office-blue"] .office-nav-children .office-nav-children .office-nav-children { padding-inline-start: 0; border: 0; }
   :root[data-office-theme="office-blue"] .office-nav-children :is(.office-nav-item,.office-nav-group > summary) > svg:first-child { width: 16px; height: 16px; flex-shrink: 0; color: var(--office-nav-muted); }
   :root[data-office-theme="office-blue"] :is(.office-nav-item,.office-nav-group > summary):hover { background: var(--office-nav-hover); }
-  :root[data-office-theme="office-blue"] .office-nav-item[aria-current="page"] { background: var(--office-nav-selected); color: var(--office-nav-fg); }
   :root[data-office-theme="office-blue"] :is(.office-navigation,.app-bar .brand) :focus-visible { outline-color: var(--office-nav-focus); }
   :root[data-office-theme="office-blue"] .app-bar .brand:focus-visible { outline-color: var(--office-nav-focus); }
 }
@@ -169,7 +168,7 @@
     padding-block: 6px;
     line-height: 1.35;
   }
-  :root[data-office-theme="office-blue"] .office-nav-item[aria-current="page"] {
+  :root[data-office-theme="office-blue"] .office-navigation .office-nav-item[aria-current="page"] {
     color: var(--selected-text);
     background: var(--selected);
     font-weight: 600;
@@ -270,14 +269,8 @@
 
 /* Office Blue workspace views. Keep the application controls and their behavior. */
 :root[data-office-theme="office-blue"] .settings-container {
+  --settings-rail-width: clamp(164px, 15vw, 208px);
   background: var(--surface);
-}
-
-:root[data-office-theme="office-blue"] .settings-sidebar {
-  width: clamp(164px, 15vw, 208px);
-  border-inline-start: 0;
-  border-inline-end: 1px solid var(--line);
-  background: var(--surface-subtle);
 }
 
 :root[data-office-theme="office-blue"] .settings-sidebar-list {
@@ -397,17 +390,6 @@
   min-width: 0;
 }
 
-@container (min-width: 901px) {
-  :root[data-office-theme="office-blue"] .control-panel-list:has(.selection-box) {
-    grid-template-columns: auto minmax(344px, 1fr) minmax(160px, 456px) auto;
-    column-gap: 12px;
-  }
-  :root[data-office-theme="office-blue"] .control-panel-list .breadcrumbs:has(> .selection-box) :is(h1, .breadcrumb-current) {
-    flex-shrink: 0;
-    max-inline-size: 20ch;
-  }
-}
-
 @media (min-width: 769px) and (max-width: 1040px) {
   :root[data-office-theme="office-blue"] .settings-blocks {
     grid-template-columns: minmax(0, 1fr);
@@ -415,20 +397,6 @@
 }
 
 @media (max-width: 768px) {
-  :root[data-office-theme="office-blue"] .settings-sidebar {
-    width: 100%;
-    border-inline-end: 0;
-  }
-
-  :root[data-office-theme="office-blue"] .settings-sidebar-list {
-    padding: 6px 12px;
-  }
-
-  :root[data-office-theme="office-blue"] .settings-app-tab {
-    min-height: 44px;
-    padding: 6px 10px;
-  }
-
   :root[data-office-theme="office-blue"] .settings-scope-option {
     min-height: 44px;
   }
@@ -553,10 +521,10 @@
 
 /* Shared record forms for invoices, transfers, purchase orders and sales orders. */
 :root[data-office-theme="office-blue"] #erp-content {
-  --office-record-gutter: 24px;
+  --record-gutter: 24px;
 }
-:root[data-office-theme="office-blue"] #erp-content :is(.record-form-viewport, .control-panel-form:has(> .form-record-smart)) {
-  padding-inline: max(var(--office-record-gutter), calc((100% - 1596px) / 2));
+:root[data-office-theme="office-blue"] #erp-content :is(.record-form-viewport:not(.record-form-workspace > *), .control-panel-form:has(> .form-record-smart)) {
+  padding-inline: max(var(--record-gutter), calc((100% - 1596px) / 2));
 }
 :root[data-office-theme="office-blue"] .record-form-viewport > .content-sheet:has(> .record-form:not(.settings-form)) {
   box-sizing: border-box;
@@ -577,10 +545,10 @@
 }
 
 @media (max-width: 1120px) {
-  :root[data-office-theme="office-blue"] #erp-content { --office-record-gutter: 16px; }
+  :root[data-office-theme="office-blue"] #erp-content { --record-gutter: 16px; }
 }
 @media (max-width: 700px) {
-  :root[data-office-theme="office-blue"] #erp-content { --office-record-gutter: 12px; }
+  :root[data-office-theme="office-blue"] #erp-content { --record-gutter: 12px; }
   :root[data-office-theme="office-blue"] .kanban-grid:has(:is(.dashboard-card, .dashboard-card-error)) { gap: 12px; }
   :root[data-office-theme="office-blue"] .dashboard-card :is(.dashboard-card-stat, .dashboard-card-buttons button) { min-height: 44px; }
   :root[data-office-theme="office-blue"] .dashboard-items {

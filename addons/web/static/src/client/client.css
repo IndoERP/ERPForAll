@@ -197,6 +197,7 @@ html.erp-scroll-locked, html.erp-scroll-locked body { overflow: hidden; overscro
 .app-bar .brand:hover { background: var(--header-control-hover); }
 :where(.app-bar) .brand img { display: block; height: 30px; width: auto; }
 .systray { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.discuss-trigger > svg { display: none; }
 .user-menu { position: relative; }
 .user-button { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; border-radius: var(--radius-panel); height: 32px; min-height: 0; padding: 0 8px 0 4px; color: var(--header-fg); font-size: 14px; }
 .user-button:hover { background: var(--header-control-hover); }
@@ -212,6 +213,7 @@ html.erp-scroll-locked, html.erp-scroll-locked body { overflow: hidden; overscro
 button.company-menu-button { display: inline-flex; align-items: center; gap: 4px; height: 32px; min-height: 0; padding: 0 10px; border: 0; border-radius: var(--radius-panel); background: transparent; color: var(--header-fg); font-size: 14px; }
 button.company-menu-button:hover, button.company-menu-button[aria-expanded=true] { background: var(--hover); }
 button.company-menu-button svg { width: 14px; height: 14px; color: var(--muted); }
+button.company-menu-button > [data-icon="building"] { display: none; }
 .company-menu > .company-menu-name { padding: 0 10px; font-size: 14px; color: var(--header-fg); }
 .company-dropdown { position: absolute; right: 0; top: calc(100% + 8px); width: 18rem; max-width: calc(100vw - 16px); max-height: calc(100dvh - var(--app-bar-height) - 24px); overflow-y: auto; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-overlay); box-shadow: var(--shadow-menu); padding: var(--overlay-padding); z-index: 100; display: none; flex-direction: column; gap: 4px; }
 .company-dropdown.open { display: flex; }
@@ -223,10 +225,20 @@ button.company-menu-button svg { width: 14px; height: 14px; color: var(--muted);
   .user-button { padding-inline: 4px; }
 }
 @media (max-width: 768px) {
-  .systray { gap: 4px; }
+  .systray { gap: 4px; min-width: 0; }
+  .systray .discuss-trigger { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; }
+  .systray .discuss-trigger > svg { display: block; width: 18px; height: 18px; }
+  .discuss-trigger > span { display: none; }
+  .systray .company-menu, .systray .company-menu-button { min-width: 0; }
+  .systray .company-menu-button { max-width: 100%; }
   .company-menu-name { max-width: 3.5rem; }
   button.company-menu-button { padding: 0 6px; }
   .company-dropdown { position: fixed; top: calc(var(--app-bar-height) + 4px); right: 8px; left: 8px; width: auto; }
+}
+@media (max-width: 440px) {
+  .systray .company-menu-button { justify-content: center; width: 44px; height: 44px; padding: 0; }
+  .company-menu-button > :is(.company-menu-name, [data-icon="chevron-down"]) { display: none; }
+  .company-menu-button > svg[data-icon="building"] { display: block; width: 18px; height: 18px; color: currentColor; }
 }
 .company-switcher { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
 .company-search-input { width: 100%; min-height: 32px; font-size: 14px; padding: 4px 8px; border: 1px solid var(--input-line); border-radius: var(--radius-control); background: var(--surface); color: var(--text); box-sizing: border-box; }
@@ -312,7 +324,7 @@ button.company-menu-button svg { width: 14px; height: 14px; color: var(--muted);
 .drawer-item { display: flex; align-items: center; justify-content: flex-start; gap: 8px; background: transparent; border: 0; text-align: left; min-height: 44px; padding: 10px 12px; border-radius: var(--radius-panel); font-size: 14px; line-height: 1.4; width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .drawer-item > svg { flex: 0 0 auto; }
 .drawer-item:hover { background: var(--selected); color: var(--accent); }
-.drawer-item[aria-current=page] { background: var(--selected); color: var(--accent-hover); font-weight: 600; box-shadow: inset 0 0 0 2px var(--accent); }
+.drawer-item[aria-current=page] { background: var(--selected); color: var(--selected-text); font-weight: 600; border-inline-start: 3px solid var(--accent); }
 .mobile-drawer :focus-visible { outline-offset: -3px; }
 @media (prefers-reduced-motion: reduce) {
   .mobile-drawer, .mobile-drawer-backdrop { transition: none; }
@@ -469,9 +481,19 @@ button.pager-count:focus-visible {
 .selection-box { display: inline-flex; flex: none; align-items: center; gap: 8px; margin-inline-start: 12px; }
 .selection-count { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
 .control-panel-list .breadcrumbs { min-height: var(--list-action-control-size, 32px); }
-/* Room for the title and the selection summary side by side, so the summary never sits under the search box. */
-.control-panel-list { grid-template-columns: auto minmax(240px, 1fr) minmax(160px, 540px) auto; }
-.breadcrumbs:has(> .selection-box) { flex-wrap: nowrap; }
+/* Keep list commands by the title and give the record search its share of the available workspace. */
+.control-panel-list { grid-template-columns: auto minmax(0, 1fr) minmax(220px, 1.25fr) auto; }
+.control-panel-list .breadcrumbs:has(> .selection-box) { flex-wrap: nowrap; }
+.control-panel-list .list-crumb-trail { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.control-panel-list .breadcrumbs > .list-data-dropdown { flex: none; }
+.control-panel-list .breadcrumbs .list-data-toggle-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--list-action-control-size, 32px); min-height: var(--list-action-control-size, 32px);
+  padding: 0; border: 0; background: transparent; color: var(--muted);
+}
+.control-panel-list .breadcrumbs .list-data-toggle-btn:is(:hover, [aria-expanded=true]) { background: var(--hover); color: var(--text); }
+.list-data-menu .list-wrap-toggle[aria-checked=true]::after { content: "✓" / ""; margin-inline-start: auto; }
+.list-data-menu .action-delete-btn[hidden] { display: none; }
 
 .action-dropdown > .action-toggle-btn, :not(.form-record-menus) > .print-dropdown > .print-toggle-btn { min-height: var(--list-action-control-size, 32px) !important; padding: 2px 8px !important; font-size: 12px !important; border-radius: var(--radius-control); background: var(--surface) !important; border: 1px solid var(--selected-line) !important; color: var(--selected-text) !important; } /* list selection controls (Actions and Print); the form Actions button stays a plain control; ui-lint: allow important */
 .form-record-menus { display: inline-flex; gap: 8px; align-items: center; margin-inline-start: 8px; }
@@ -562,6 +584,11 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .list-table th[aria-sort=ascending] .sort-indicator { transform: rotate(180deg); }
 .list-table th.sortable-column { padding-right: 18px; }
 .list-table .sort-button { width: 100%; min-height: 28px; border-radius: 2px; justify-content: flex-start; font-weight: inherit; overflow: hidden; text-overflow: ellipsis; }
+/* The text needs its own shrinking box. An ellipsis on a flex container cannot paint for its anonymous text child. */
+.list-table .sort-label, .list-table .many2one-value {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.list-table .field-cell > .many2one-readonly { min-width: 0; max-width: 100%; }
 .list-table .sort-button:hover { background: transparent; }
 .list-table .sort-button:focus-visible { outline-offset: -2px; }
 .list-table .list-record-selector { width: 40px; padding: 0; text-align: center; }
@@ -629,7 +656,8 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .choice-dialog .actions { justify-content: flex-end; margin-top: 20px; }
 .erp-client:has(> main > .addons-view) { display: flex; flex-direction: column; min-height: 100vh; }
 .erp-client:has(> main > .addons-view) > main { display: flex; flex-direction: column; flex: 1 0 auto; }
-.addons-view { display: flex; flex-direction: column; flex: 1 0 auto; background: var(--surface); }
+.addons-view { display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; container: addon-catalog / inline-size; background: var(--surface); }
+.addons-category-pickers { display: none; }
 .addons-layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); align-items: stretch; flex: 1 0 auto; }
 .addons-panel { display: flex; flex-direction: column; gap: 20px; padding: 18px 12px 24px; background: var(--surface-subtle); border-right: 1px solid var(--line); }
 .addons-panel-section { display: flex; flex-direction: column; gap: 2px; }
@@ -638,28 +666,29 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .addons-panel-item:hover { background: var(--hover); }
 .addons-panel-item.active { background: var(--selected); color: var(--selected-text); font-weight: 600; }
 .addons-panel-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.addons-main { min-width: 0; padding: 16px 24px 32px; }
+.addons-main { min-width: 0; padding: 16px 24px 32px; container: addon-results / inline-size; }
 .addons-demo-zone { margin-top: 32px; padding: 12px 16px; border: 1px solid var(--danger-line, var(--danger)); border-radius: 8px; display: grid; gap: 8px; justify-items: start; }
-.addons-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-.addons-search-box { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; min-width: 200px; max-width: 420px; height: 34px; padding: 0 10px; border: 1px solid var(--input-line); border-radius: 6px; background: var(--surface); color: var(--muted); }
+.addons-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "search search refresh" "filters group count"; align-items: center; gap: 10px 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.addons-search-box { grid-area: search; display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 32rem; height: 34px; padding: 0 10px; border: 1px solid var(--input-line); border-radius: 6px; background: var(--surface); color: var(--muted); }
 .addons-search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-wash); }
 .addons-search-box > .erp-icon { width: 16px; height: 16px; }
 .addons-search-box > .addons-search { flex: 1 1 auto; min-width: 0; height: 100%; border: 0; padding: 0; background: transparent; color: var(--text); outline: none; box-shadow: none; }
-.addons-filters { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.addons-filters { grid-area: filters; display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .addons-filter { min-height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px; }
 .addons-filter.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .addons-filter.active:hover { background: var(--accent-hover); }
-.addons-toolbar .addons-groupby-field { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.addons-toolbar .addons-groupby-field { grid-area: group; display: inline-flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .addons-groupby { height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
-.addons-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
-.addons-refresh { min-height: 32px; padding: 0 12px; }
+.addons-count { grid-area: count; justify-self: end; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.addons-refresh { grid-area: refresh; justify-self: end; min-height: 32px; padding: 0 12px; }
 .addons-refresh > .erp-icon { width: 16px; height: 16px; }
 .addons-results { padding-top: 16px; }
-.addons-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.addons-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
 .addons-group + .addons-group { margin-top: 24px; }
 .addons-group-title { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
 .addons-empty { margin: 32px 0; text-align: center; }
-.addon-card.addon-tile { display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-areas: "icon meta" "summary summary" "facts facts" "actions actions"; column-gap: 12px; row-gap: 10px; margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); box-shadow: var(--shadow-sm); transition-property: border-color, box-shadow; transition-duration: 150ms; }
+.addon-card.addon-tile { display: grid; min-width: 0; grid-template-columns: 48px minmax(0, 1fr) auto; grid-template-areas: "icon meta status" "summary summary summary" "facts facts facts" "actions actions actions"; grid-template-rows: auto 1fr auto auto; column-gap: 10px; row-gap: 10px; margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); box-shadow: var(--shadow-sm); transition-property: border-color, box-shadow; transition-duration: 150ms; }
+.addon-tile > .addon-badge { grid-area: status; align-self: start; }
 .addon-card.addon-tile:hover { border-color: var(--input-line); box-shadow: var(--shadow-sm); }
 .addon-icon { grid-area: icon; width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 20px; background: var(--tone-bg, #ede9fe); color: var(--tone-fg, #6d28d9); }
 .addon-icon::after { content: attr(data-letter); }
@@ -680,8 +709,8 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .addon-facts > div { display: flex; gap: 6px; min-width: 0; }
 .addon-facts dt { color: var(--muted); }
 .addon-facts dd { margin: 0; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.addon-actions { grid-area: actions; display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--hover); }
-.addon-actions .addon-badge { margin-left: auto; }
+.addon-actions { grid-area: actions; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.addon-actions .addon-info-btn { margin-inline-end: auto; }
 .addon-actions button { min-height: 30px; padding: 0 12px; font-size: 13px; }
 .addon-info-btn { border-color: transparent; background: transparent; color: var(--accent); padding-inline: 6px !important; }
 .addon-info-btn:hover { background: var(--selected); }
@@ -690,6 +719,20 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .addon-badge-uninstalled, .addon-badge-uninstallable, .addon-badge-unavailable { background: var(--canvas); color: var(--muted); }
 .addon-badge-to-install, .addon-badge-to-upgrade, .addon-badge-to-remove { background: var(--warning-bg); color: var(--warning); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@container addon-catalog (max-width: 740px) {
+  .addons-layout { grid-template-columns: minmax(0, 1fr); align-content: start; }
+  .addons-panel { display: none; }
+  .addons-category-pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
+  .addons-category-pickers select { min-width: 0; width: 100%; min-height: 40px; }
+  .addons-main { padding: 12px 16px 24px; }
+}
+@container addon-results (max-width: 650px) {
+  .addons-toolbar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "search refresh" "filters filters" "group count"; gap: 8px; }
+  .addons-search-box { max-width: none; height: 40px; }
+  .addons-refresh { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; }
+  .addons-refresh > span { display: none; }
+  .addons-filter, .addon-actions button { min-height: 36px; }
+}
 .addon-info-dialog { width: min(560px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-overlay); box-shadow: var(--shadow-dialog); color: inherit; }
 .addon-info-dialog::backdrop { background: var(--backdrop); }
 .addon-info-head { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto auto; grid-template-areas: "icon titles badge close"; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
@@ -832,7 +875,7 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .field-error { border-color: var(--danger); }
 
 /* Settings is a full-width service, never one column of a record editor. */
-.content-sheet.settings-sheet { width: 100%; max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--surface); }
+.content-sheet.settings-sheet { container: settings / inline-size; width: 100%; max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--surface); }
 .record-form.settings-form { display: block; margin: 0; }
 .settings-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; width: 100%; }
 .settings-toolbar-actions { display: flex; align-items: center; gap: 6px; }
@@ -854,8 +897,9 @@ td button.link { border: 0; background: transparent; color: var(--accent); paddi
 .settings-search-box { width: 100%; }
 .settings-search-box .search-input { width: 100%; min-width: 0; min-height: 36px; padding: 7px 12px; border: 1px solid var(--input-line); border-radius: var(--radius-control); }
 .settings-container { display: flex; min-height: calc(100dvh - var(--app-bar-height) - var(--control-panel-height, 61px)); background: var(--surface); }
-.settings-sidebar { width: clamp(12.5rem, 16vw, 15rem); flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-subtle); }
+.settings-sidebar { width: var(--settings-rail-width, clamp(12.5rem, 16vw, 15rem)); flex-shrink: 0; border-inline-end: 1px solid var(--line); background: var(--surface-subtle); }
 .settings-sidebar-list { display: flex; flex-direction: column; padding: 12px 8px; gap: 2px; }
+.settings-category-picker { display: none; }
 .settings-app-tab { text-align: start; white-space: normal; overflow-wrap: break-word; word-break: normal; background: transparent; border: 0; border-left: 3px solid transparent; border-radius: var(--radius-control); padding: 8px 12px; min-height: 40px; font-size: 14px; font-weight: 500; color: var(--text); }
 .settings-app-tab:hover { background: var(--hover); }
 .settings-app-tab.active { background: var(--selected); color: var(--selected-text); font-weight: 600; border-left-color: var(--accent); }
@@ -914,12 +958,6 @@ mark.highlight { background: var(--highlight); color: inherit; padding: 0 2px; b
   .record-form:not(.settings-form) .field-label { grid-template-columns: 1fr; gap: 4px; }
   .login-card { padding: 28px; }
   .home-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 14px; margin: 16px auto; }
-  .addons-grid { grid-template-columns: 1fr; }
-  .addons-layout { grid-template-columns: 1fr; align-content: start; }
-  .addons-panel { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 12px 16px; }
-  .addons-main { padding: 12px 16px 24px; }
-  .addons-search-box { max-width: none; flex-basis: 100%; }
-  .addons-count { margin-left: 0; }
   .addon-info-facts { grid-template-columns: 1fr; gap: 2px; }
   .addon-info-facts dd { margin-bottom: 8px; }
   .control-panel:has(.settings-toolbar) { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
@@ -931,11 +969,6 @@ mark.highlight { background: var(--highlight); color: inherit; padding: 0 2px; b
   .settings-search-box .search-input { min-height: 44px; }
   .settings-toggle { min-height: 44px; }
   .form-status-indicator { margin-left: 4px; }
-  .settings-container { flex-direction: column; }
-  .settings-sidebar { width: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
-  .settings-sidebar-list { flex-direction: row; overflow-x: auto; padding: 6px 12px; gap: 6px; }
-  .settings-app-tab { border-left: 0; border-bottom: 3px solid transparent; padding: 8px 12px; white-space: nowrap; }
-  .settings-app-tab.active { border-left-color: transparent; border-bottom-color: var(--brand, var(--accent)); }
   .settings-content { padding: 8px 8px 20px; }
   .settings-section-title { padding: 12px 16px; }
   .settings-block-title { padding: 8px 16px; }
@@ -996,6 +1029,14 @@ mark.highlight { background: var(--highlight); color: inherit; padding: 0 2px; b
 .pager-count { font-variant-numeric: tabular-nums; }
 
 .list-table td.list-text, .list-table td.list-text button.link { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Leave the single-line measuring pass intact when the user wraps values. */
+.list-wrap .list-table:not(.list-auto-layout) tbody tr[data-id] :is(td:not(.list-number), button.link, .many2one-value, .field-read-value, .field-badge, .relation-chip) {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.list-wrap .list-table:not(.list-auto-layout) .sort-label { white-space: normal; overflow-wrap: anywhere; }
+.list-wrap .list-table:not(.list-auto-layout) .many2many-tags .tag-list { flex-wrap: wrap; }
+.list-wrap .list-table .many2many-tags .relation-chip { height: auto; max-width: 100%; }
+.list-wrap .list-table:not(.list-auto-layout) .list-number .field-read-value { white-space: nowrap; }
 
 /* Declared form layout: the arena root is transparent, and each structural block owns its grid. */
 .record-form > *, .form-sheet-layout > *, .form-group-grid > *, .form-tab-panel > * { min-width: 0; }
@@ -1183,7 +1224,10 @@ input[type=checkbox].boolean-toggle:focus-visible { outline: 2px solid var(--acc
 
 /* Native action modal keeps the caller inert while nested choice/error dialogs own focus. */
 .wizard-dialog { width: min(56rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); padding: 0; border: 1px solid var(--border, var(--line)); border-radius: 10px; overflow: auto; }
-.wizard-dialog::backdrop { background: rgb(15 23 42 / 35%); }
+.wizard-dialog::backdrop { background: var(--backdrop); }
+.wizard-dialog[open], .message-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
+.wizard-dialog > :is(.wizard-heading, .wizard-footer), .message-dialog > :is(.message-dialog-header, .message-dialog-footer) { flex: none; }
+.wizard-dialog[open] > .content-sheet { min-block-size: 0; overflow: auto; overscroll-behavior: contain; }
 .wizard-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem .75rem .75rem 1rem; border-bottom: 1px solid var(--border, var(--line)); }
 .wizard-heading h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .wizard-dialog .content-sheet { margin: 0; min-width: 0; }
@@ -1263,20 +1307,40 @@ mark.highlight { color: var(--highlight-text); }
   width: 100%;
   margin: 0;
 }
-/* The chatter is its own column on wide viewports (any theme): the aside, when declared, sits above it in the same
-   column, and the chatter stays in view while the sheet scrolls. The tabs host spans the full width above both. */
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) {
-  display: grid;
-  grid-template-columns: minmax(0, 1140px) minmax(360px, 440px);
-  justify-content: center;
-  align-items: start;
-  gap: 16px;
-  padding: 16px 24px 32px;
+/* The workspace measures the usable width after navigation and page gutters. Reflow the same
+   sheet and chatter nodes so an open notebook, keyboard focus and message drafts survive a resize. */
+.record-form-workspace {
+  container: record-workspace / inline-size;
+  margin-inline: max(var(--record-gutter, 24px), calc((100% - 1596px) / 2));
 }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) > .content-sheet { width: 100%; margin: 0; grid-column: 1; grid-row: 1 / span 2; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-chatter { grid-column: 2; grid-row: 1; min-width: 0; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-aside { grid-column: 2; grid-row: 2; min-width: 0; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) { grid-template-rows: auto 1fr; }
+.record-form-workspace > .record-form-viewport:has(> .record-form-chatter) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "actions" "document" "chatter" "details";
+  gap: 0 16px;
+  align-items: start;
+  padding: 0 0 32px;
+}
+.record-form-workspace > .record-form-viewport > .form-record-header { grid-area: actions; }
+.record-form-workspace > .record-form-viewport > .form-record-header:not(:empty) { margin-block-end: 12px; }
+.record-form-workspace > .record-form-viewport > .content-sheet {
+  grid-area: document;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+.record-form-workspace > .record-form-viewport > .record-form-chatter { grid-area: chatter; min-width: 0; margin-block-start: 16px; }
+.record-form-workspace > .record-form-viewport > .record-form-aside { grid-area: details; min-width: 0; margin-block-start: 16px; }
+@container record-workspace (min-width: 1056px) {
+  .record-form-workspace > .record-form-viewport:has(> .record-form-chatter:not(:empty)) {
+    grid-template-columns: minmax(720px, 1fr) clamp(320px, 30%, 440px);
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas: "actions actions" "document chatter" "document details";
+  }
+  .record-form-workspace > .record-form-viewport > .record-form-chatter { margin-block-start: 0; }
+}
 .record-form-chatter:empty { display: none; }
 .form-chatter-slot { min-height: 0; }
 .record-form-aside { min-width: 0; }
@@ -1299,16 +1363,8 @@ mark.highlight { color: var(--highlight-text); }
 .control-panel-form > .form-record-header:empty { display: none; }
 .control-panel-form > .form-record-header .form-header { margin: 0; padding: 0; border: 0; }
 @media (max-width: 1120px) {
-  .record-form-viewport:has(> .record-form-aside:not(:empty)) { grid-template-columns: minmax(0, 1fr); padding: 12px; }
-  /* Medium and narrow: the chatter follows the sheet at the sheet's own width, never edge to edge. */
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) { grid-template-columns: minmax(0, 1fr); justify-content: stretch; padding: 12px; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .content-sheet { grid-row: auto; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-aside,
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-chatter { grid-column: 1; width: 100%; max-width: 1140px; margin-inline: auto; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) { grid-template-rows: none; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-chatter,
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-aside { grid-row: auto; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .record-form-aside { order: 2; }
+  .record-form-viewport:has(> .record-form-aside:not(:empty)):not(:has(> .record-form-chatter)) { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .record-form-workspace { margin-inline: var(--record-gutter, 12px); }
 }
 
 .form-title-block { grid-column: 1 / -1; min-width: 0; }
@@ -1376,9 +1432,10 @@ dialog .client-notifications { position: sticky; inset: auto; width: auto; margi
 .message-dialog[data-size="xl"] { width: min(1140px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }
 .message-dialog-header { display: flex; gap: 16px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .message-dialog-header h2 { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 18px; }
-.message-dialog-close { min-width: 32px; min-height: 32px; padding: 0; font-size: 20px; line-height: 1; }
+.message-dialog-close, .wizard-close { display: inline-grid; place-items: center; }
+.message-dialog-close { min-width: 32px; min-height: 32px; padding: 0; }
 .message-dialog button { min-height: 32px; padding-block: 4px; }
-.message-dialog-body { padding: var(--overlay-dialog-padding); max-height: 65dvh; overflow: auto; overflow-wrap: anywhere; white-space: normal; }
+.message-dialog-body { min-block-size: 0; padding: var(--overlay-dialog-padding); overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; white-space: normal; }
 .message-dialog-body > p { white-space: pre-wrap; }
 .message-dialog-footer { display: flex; justify-content: flex-end; padding: 12px var(--overlay-dialog-padding); border-top: 1px solid var(--line); }
 .message-dialog-footer button.danger { border-color: var(--danger-line); background: var(--danger-bg); }
@@ -1397,9 +1454,6 @@ dialog .client-notifications { position: sticky; inset: auto; width: auto; margi
 .export-dialog-body h3, .import-dialog-body h3 { font-size: 14px; }
 .export-dialog-body [hidden], .import-dialog-body [hidden] { display: none; }
 .export-dialog-body > .impex-error:not(:empty) { margin-block-start: 12px; }
-.message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] { display: flex; flex-direction: column; overflow: hidden; }
-.message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] > .message-dialog-body { min-block-size: 0; }
-.message-dialog:is(.impex-export-dialog, .impex-import-dialog) > :is(.message-dialog-header, .message-dialog-footer) { flex: none; }
 .record-export-settings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 168px); align-items: center; gap: 12px; }
 .export-dialog-body fieldset.record-export-scope { min-inline-size: 0; gap: 2px; padding: 4px 12px 8px; margin: 0; border-radius: var(--radius-control); }
 .record-export-scope legend { padding-inline: 4px; font-weight: 600; }
@@ -1441,9 +1495,6 @@ dialog .client-notifications { position: sticky; inset: auto; width: auto; margi
 .impex-import-feedback :is(p, ul):not(:empty), .impex-import-feedback button:not([hidden]) { margin-block-end: 8px; }
 .impex-messages { max-block-size: min(130px, 22dvh); overflow-y: auto; padding-inline-start: 20px; }
 .impex-messages li + li { margin-block-start: 4px; }
-@media (max-width: 639px) {
-  .message-dialog:is(.impex-export-dialog, .impex-import-dialog)[open] > .message-dialog-body { flex: 1 1 auto; max-block-size: none; }
-}
 @media (max-width: 560px) {
   .record-export-settings { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .record-export-settings > .field-label { flex-direction: row; align-items: center; gap: 8px; }
@@ -2936,9 +2987,9 @@ dialog, .client-block-feedback { box-shadow: var(--shadow-dialog); }
 @media (min-width: 641px) { .record-form:not(.settings-form) .form-group-grid:not(:has(> .form-group)) > .field-shell:has(> .field-link-action) > input { grid-column: 2; grid-row: 1; } }
 @media (min-width: 769px) { .record-form:not(.settings-form) .field-shell:has(> .field-link-action) > input { grid-column: 2; grid-row: 1; } }
 .record-form:not(.settings-form) .field-shell:has(> .field-link-action) > textarea { grid-column: 1 / -1; }
-/* A many2one at rest stays calm: Clear, Open and Search more show on hover and focus (touch screens keep them, they have no hover). */
+/* Keep the related record link available. Secondary controls reclaim their space on pointer devices until hover or keyboard focus. */
 @media (hover: hover) and (pointer: fine) {
-  .many2one-control:not(:hover):not(:focus-within) :is(.many2one-clear-btn, .many2one-open-btn, .relation-search-more) { visibility: hidden; }
+  .many2one-control:not(:hover):not(:focus-within) :is(.many2one-clear-btn, .relation-search-more) { visibility: hidden; position: absolute; inset-inline-end: 0; }
 }
 .record-form:not(.settings-form) .many2one-readonly > .related-record-link > .related-record-arrow { width: 13px; height: 13px; color: var(--muted); opacity: .75; }
 .record-form:not(.settings-form) .many2one-readonly > .related-record-link:hover > .related-record-arrow { color: var(--accent); opacity: 1; }
@@ -2946,19 +2997,38 @@ dialog, .client-block-feedback { box-shadow: var(--shadow-dialog); }
 /* The inline message under an invalid field. */
 .field-invalid > .field-error { margin-top: 2px; }
 .record-form .field-label > .field-error { grid-column: 2; }
+/* At rest a selected address can wrap across lines. The actual combobox remains the sole
+   pointer and keyboard target in the same grid cell; focus exposes its normal single-line editor. */
+.many2one-rest-value { display: none; }
+.record-form-viewport .record-form .many2one-control:not(.x2many-table *):not(:focus-within):has(> .many2one-rest-value:not(:empty)) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  --relation-input-height: 100%;
+}
+.record-form-viewport .many2one-control:not(.x2many-table *):not(:focus-within):has(> .many2one-rest-value:not(:empty)) > .many2one-input { grid-area: 1 / 1; }
+.record-form-viewport .many2one-control:not(.x2many-table *):not(:focus-within) > .many2one-rest-value:not(:empty) {
+  grid-area: 1 / 1;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
 /* The title's caption is hidden, but its error message is not: it reads as an ordinary field message under the title. */
 .record-form .form-title-heading .field-label > .field-error, .record-form .form-title-field .field-label > .field-error { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; font-size: .82rem; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--danger); }
 
-/* Form header band (UI-INTEGRATION). Row 1, the control row, holds New, the breadcrumb, the smart-button strip and the
-   pager; row 2, the action row, heads the sheet column: the model's header buttons on the left, the statusbar ending on
-   the sheet's right edge. The chatter column starts on the same row, so its button row and the action row share a top. */
+/* The control row holds New, the breadcrumb, related records and the pager. The next row belongs to the document actions and status. */
 .control-panel-form:has(> .form-record-smart) { --form-width: 1596px; padding-inline: max(24px, calc((100% - var(--form-width)) / 2)); grid-template-columns: auto minmax(120px, auto) minmax(0, 1fr) auto; }
 :root { --form-control-height: 32px; }
 .control-panel-form:has(> .form-record-smart) [data-control-tools] { grid-column: 4; }
 .form-record-smart { grid-column: 3; grid-row: 1; justify-self: center; min-width: 0; max-width: 100%; }
 .form-record-smart:not(:has(> .form-button-box)) { display: none; }
 .form-record-smart .form-button-box { display: flex; flex-wrap: nowrap; gap: 0; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; }
-.form-record-smart .form-button-box > :is(.form-stat-button, .form-overflow-toggle) { flex: 0 0 auto; box-sizing: border-box; min-width: 0; height: 38px; min-height: 38px; margin: 0; padding: 4px 14px; border: 0; border-radius: 0; background: transparent; box-shadow: none; transition: background-color 0.12s ease; }
+.form-record-smart .form-button-box > :is(.form-stat-button, .form-overflow-toggle) { flex: 0 0 auto; box-sizing: border-box; min-width: 0; height: calc(var(--form-control-height) - 2px); min-height: calc(var(--form-control-height) - 2px); margin: 0; padding: 0 14px; border: 0; border-radius: 0; background: transparent; box-shadow: none; transition: background-color 0.12s ease; }
 .form-record-smart .form-button-box > .form-stat-button { min-width: 104px; }
 .form-record-smart .form-button-box > .form-overflow-toggle { padding: 0 12px; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
 .form-record-smart .form-button-box > .form-overflow-toggle > svg.erp-icon { width: 14px; height: 14px; flex: none; color: var(--muted); }
@@ -2987,31 +3057,19 @@ dialog, .client-block-feedback { box-shadow: var(--shadow-dialog); }
 .record-form-viewport > .form-record-header .form-statusbar { flex: 0 1 auto; margin-inline-start: auto; max-width: 100%; overflow-x: auto; padding-block: 2px; margin-block: -2px; }
 /* Without a chatter column the header and the sheet are one centred column that lines up with the control row. */
 /* Without a side column the sheet takes the whole block, so every form has the same left and right edge, in every theme. */
-.record-form-viewport:not(:has(> .record-form-chatter:not(:empty))):not(:has(> .record-form-aside:not(:empty))) { padding: 0 max(24px, calc((100% - 1596px) / 2)) 32px; }
+.record-form-viewport:not(:has(> .record-form-chatter)):not(:has(> .record-form-aside:not(:empty))) { padding: 0 max(24px, calc((100% - 1596px) / 2)) 32px; }
 .record-form-viewport:not(:has(> .record-form-chatter:not(:empty))):not(:has(> .record-form-aside:not(:empty))) > .content-sheet { width: auto; max-width: none; margin: 0; }
 .record-form-viewport:not(:has(> .record-form-chatter:not(:empty))) > .form-record-header { margin-block: 0; }
 .record-form-viewport:not(:has(> .record-form-chatter:not(:empty))):not(:has(> .record-form-aside:not(:empty))):has(> .form-record-header:not(:empty)) > .content-sheet { margin-top: 12px; }
-/* With a chatter column the action row is row 1 of the sheet column; the chatter spans the rows beside it. */
-.record-form-viewport:has(> .record-form-chatter:not(:empty)) > .form-record-header { grid-column: 1; grid-row: 1; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .content-sheet { grid-row: 2; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .record-form-chatter { grid-row: 1 / span 2; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .record-form-aside { grid-row: 3; }
-.record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) { grid-template-rows: auto auto 1fr; row-gap: 12px; }
-/* The chatter sits on the page, not in a card; its button row is one 32px row that shares its top with the action row. */
+/* Chatter controls wrap within their own column. */
 .record-form-chatter { container-type: inline-size; }
 .record-form-chatter .erp-mail-chatter { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
-.record-form-chatter .erp-mail-chatter-header { flex-wrap: nowrap; min-height: var(--form-control-height); margin: 0; border: 0; }
-.record-form-chatter .erp-mail-chatter-header { align-items: center; }
+.record-form-chatter .erp-mail-chatter-header { flex-wrap: wrap; min-height: var(--form-control-height); margin: 0; border: 0; }
+.record-form-chatter .erp-mail-chatter-header { align-items: center; justify-content: flex-start; }
 .record-form-chatter .erp-mail-chatter-header :is(.erp-mail-activities-button, .erp-mail-chatter-attachment-btn, .erp-mail-followers-button) { box-sizing: border-box; height: var(--form-control-height); min-height: var(--form-control-height); padding-block: 0; }
 .record-form-chatter .erp-mail-kind { box-sizing: border-box; height: var(--form-control-height); min-height: 0; padding-block: 0; }
 @container (max-width: 420px) { .record-form-chatter .erp-mail-activities-button > span:not(.erp-mail-activities-count) { display: none; } }
 @media (max-width: 1120px) {
-  /* Below the aside breakpoint everything stacks: action row, sheet, chatter, aside. */
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)) > .form-record-header { grid-column: 1; grid-row: auto; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .content-sheet,
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .record-form-chatter,
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) > .record-form-aside { grid-row: auto; }
-  .record-form-viewport:has(> .record-form-chatter:not(:empty)):has(> .form-record-header:not(:empty)) { grid-template-rows: none; }
   .control-panel-form:has(> .form-record-smart) { padding-inline: 12px; }
 }
 @media (max-width: 900px) {
@@ -3045,13 +3103,24 @@ dialog, .client-block-feedback { box-shadow: var(--shadow-dialog); }
   .record-form:not(.settings-form) .form-group-grid > .field-label:has(textarea) { grid-column: 1 / -1; }
   .record-form:not(.settings-form) .form-group-grid > .form-notebook, .record-form:not(.settings-form) .form-group-grid > .form-separator { grid-column: 1 / -1; }
 }
+/* A sheet can be narrower than the device when a sidebar or chatter is open. */
+.record-form-viewport > .content-sheet:has(> .record-form:not(.settings-form)) { container: record-sheet / inline-size; }
+@container record-sheet (max-width: 700px) {
+  .record-form:not(.settings-form) .form-group-grid { --form-columns: 1 !important; }
+  .record-form .form-group-grid > .form-group { grid-column: 1 / -1 !important; }
+  .record-form:not(.settings-form) :is(.form-sheet-layout, .form-tab-panel) { grid-template-columns: minmax(0, 1fr); }
+}
+.record-form:not(.settings-form) .field-label > span:first-child,
+.record-form .field-label > .field-read-value,
+.record-form .many2one-readonly > .many2one-value { overflow-wrap: anywhere; }
+.record-form .field-label > .many2one-readonly > .related-record-link { white-space: normal; }
 /* Every control of a row is exactly the row height (28px, 40px on a phone), so rows sit on the 32px pitch whatever the widget. */
 .record-form:not(.settings-form) :is(.field-shell > :is(input, select), .many2one-control > .many2one-input, .datetime-input-area > :is(input, .datetime-open), .field-currency-value > input, .field-copy-clipboard > input):not([type=checkbox]):not([type=radio]):not(.form-title-heading *, .form-title-field *) { box-sizing: border-box; height: var(--form-row-height); min-height: var(--form-row-height); padding-block: 0; }
 .record-form:not(.settings-form) .many2one-control:not(.form-title-heading *, .form-title-field *) { box-sizing: border-box; min-height: var(--form-row-height); }
 .record-form:not(.settings-form) .many2one-buttons button { min-height: calc(var(--form-row-height) - 2px); height: calc(var(--form-row-height) - 2px); padding-block: 0; }
 .record-form:not(.settings-form) .field-label { row-gap: 0; }
 .record-form:not(.settings-form) .field-label > :is(small, .field-error):empty { display: none; }
-.record-form.record-form:not(.settings-form) .many2one-control > .many2one-input:not([type=checkbox]):not([type=radio]):not(.form-title-heading *, .form-title-field *) { height: calc(var(--form-row-height) - 1px); min-height: calc(var(--form-row-height) - 1px); }
+.record-form.record-form:not(.settings-form) .many2one-control > .many2one-input:not([type=checkbox]):not([type=radio]):not(.form-title-heading *, .form-title-field *) { height: var(--relation-input-height, calc(var(--form-row-height) - 1px)); min-height: calc(var(--form-row-height) - 1px); }
 
 /* Radio: our own control in the accent colour. The choices sit in one row that wraps when it does not fit (a view that says
    `horizontal: false` keeps a column); the field label lines up with the first row. */
@@ -3192,7 +3261,9 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 }
 @container (max-width: 600px) {
   .control-panel-list { grid-template-columns: auto minmax(0, 1fr); }
-  .control-panel-list .breadcrumbs { grid-column: 1 / -1; grid-row: 1; }
+  .control-panel-list .breadcrumbs { grid-column: 1 / -1; grid-row: 1; position: relative; }
+  .control-panel-list .breadcrumbs > .list-data-dropdown { position: static; }
+  .control-panel-list .list-data-menu { inset-inline-start: 0; max-width: 100%; }
   .control-panel-list [data-control-actions] { grid-column: 1; grid-row: 2; }
   .control-panel-list [data-control-tools] { grid-column: 2; grid-row: 2; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
   .control-panel-list [data-control-search] { grid-row: 3; }
@@ -3228,7 +3299,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
   .record-form-viewport:has(> .record-form-aside:not(:empty)):not(:has(> .record-form-chatter:not(:empty))) > .record-form-aside { grid-column: 2; grid-row: 2; min-width: 0; }
 }
 @media (max-width: 1120px) {
-  .record-form-viewport:not(:has(> .record-form-chatter:not(:empty))):not(:has(> .record-form-aside:not(:empty))) { padding: 0 12px 24px; }
+  .record-form-viewport:not(:has(> .record-form-chatter)):not(:has(> .record-form-aside:not(:empty))) { padding: 0 12px 24px; }
 }
 /* The breadcrumb block is as tall as the buttons beside it (16 + 18 = 34px). The trail spans the name and the
    record menu's columns, so the menu always follows the record name, however long the parent's name is. */
@@ -3253,7 +3324,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .breadcrumb-previous > .breadcrumb-origin ~ .breadcrumb-back svg { display: none; }
 .control-panel-form:has(> .form-record-smart) .form-breadcrumb-record { line-height: 18px; }
 /* The record menu keeps its 24px target; the negative block margin keeps it from making the name's row taller. */
-.control-panel-form:has(> .form-record-smart) .form-record-menus { margin-block: -3px; }
+@media (min-width: 769px) { .control-panel-form:has(> .form-record-smart) .form-record-menus { margin-block: -3px; } }
 /* The HTML editor is one block across its group or tab: toolbar, content, status. It never takes the label and value columns. */
 .record-form:not(.settings-form) .html-editor.field-label { display: block; grid-column: 1 / -1; }
 
@@ -3824,6 +3895,9 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
   .dashboard-icon > svg { width: 16px; height: 16px; }
   .dashboard-value { font-size: 19px; }
   .dashboard-controls select, .dashboard-status button { min-height: 44px; }
+}
+@media (max-width: 440px) {
+  .dashboard-items .dashboard-icon { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dashboard-count, .dashboard-kpi, .dashboard-period-field { transition: none; }
@@ -4895,14 +4969,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
   min-width: 3.2ch;
   text-align: end;
 }
-.many2one-avatar-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-}
-.many2one-avatar-badge {
+.many2one-avatar-chip, .many2one-avatar-badge {
   display: inline-grid;
   place-items: center;
   width: 22px;
@@ -5547,6 +5614,9 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .erp-mail-chatter-file-thumbnail.is-viewable { cursor: zoom-in; }
 
 /* The same conversation surface lives in the shell popover or the Discuss workspace. */
+.control-panel[hidden], .systray .discuss-trigger[hidden] { display: none; }
+:where(.erp-client):has(> main > .discuss-workspace) { display: flex; flex-direction: column; height: 100dvh; }
+main:has(> .discuss-workspace) { display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; }
 .discuss-panel {
   position: fixed; inset: calc(var(--app-bar-height) + 8px) 12px auto auto; z-index: 30;
   width: min(56rem, calc(100vw - 24px)); height: min(39rem, calc(100dvh - var(--app-bar-height) - 20px));
@@ -5555,15 +5625,15 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
   background: var(--surface); color: var(--text); text-align: start; font-weight: normal;
 }
 .discuss-panel.discuss-workspace {
-  position: relative; inset: auto; z-index: auto; width: 100%; height: calc(100dvh - var(--app-bar-height) - 4rem);
-  min-height: min(27rem, 65dvh); grid-template-columns: clamp(15rem, 28%, 23rem) minmax(0, 1fr);
-  border-radius: var(--radius-panel); box-shadow: var(--shadow-sm);
+  position: relative; inset: auto; z-index: auto; flex: 1 1 0; width: 100%; height: auto;
+  min-height: 0; grid-template-columns: clamp(15rem, 28%, 23rem) minmax(0, 1fr);
+  border: 0; border-radius: 0; box-shadow: none;
 }
 .discuss-panel [hidden], .discuss-panel[hidden], .discuss-window [hidden] { display: none !important; }
 .discuss-sidebar { display: flex; flex-direction: column; min-height: 0; border-inline-end: 1px solid var(--line); background: var(--surface-subtle); }
 .discuss-sidebar-head, .discuss-thread-head, .discuss-window > header { display: flex; align-items: center; gap: 6px; padding: 12px 16px; }
-.discuss-sidebar h2, .discuss-main h3, .discuss-window h3 { margin: 0; line-height: 1.25; }
-.discuss-sidebar h2 { flex: 1; font-size: 1.25rem; }
+.discuss-sidebar-head :is(h1, h2), .discuss-main h3, .discuss-window h3 { margin: 0; line-height: 1.25; }
+.discuss-sidebar-head :is(h1, h2) { flex: 1; font-size: 1.25rem; }
 .discuss-panel button, .discuss-window button { cursor: pointer; }
 .app-bar :is(.discuss-panel, .discuss-window) button:not(.primary) { color: var(--text); background: var(--surface); border-color: var(--line); }
 .discuss-panel .discuss-icon, .discuss-window .discuss-icon { width: 2rem; height: 2rem; padding: 5px; border: 0; display: grid; place-items: center; background: transparent; color: var(--muted); }
@@ -5572,6 +5642,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .discuss-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .discuss-search input { min-width: 0; width: 100%; padding: 8px 0; outline: 0; border: 0; background: transparent; color: var(--text); }
 .discuss-nav { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 12px 10px; border-bottom: 1px solid var(--line); }
+.discuss-workspace .discuss-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .discuss-nav button { padding: 4px 8px; min-height: 28px; font-size: .81rem; border: 1px solid transparent; background: transparent; color: var(--muted); }
 .discuss-nav button[aria-pressed=true], .app-bar .discuss-nav button[aria-pressed=true] { color: var(--selected-text); background: var(--selected); border-color: var(--selected-line); }
 .discuss-list { overflow: auto; padding: 5px; flex: 1; overscroll-behavior: contain; }
@@ -5690,6 +5761,26 @@ select.styled-select::picker-icon { display: none; }
     max-height: calc(100dvh - var(--app-bar-height) - var(--control-panel-height, 0px));
     overflow-y: auto;
   }
+}
+
+/* A second rail would crowd the workspace when the application sidebar is open. */
+@container settings (max-width: 768px) {
+  .settings-container { flex-direction: column; }
+  .settings-container > .settings-sidebar {
+    position: static; align-self: stretch; width: auto; min-height: 0; max-height: none;
+    overflow: visible; border-inline: 0; border-block-end: 1px solid var(--line);
+  }
+  .settings-sidebar-list { display: none; }
+  .settings-category-picker:not([hidden]) {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
+    gap: 12px; padding: 6px 16px; color: var(--label); font-size: 13px; font-weight: 600;
+  }
+  .settings-category-picker select {
+    width: 100%; min-width: 0; min-height: 44px; padding-inline: 10px;
+    color: var(--text); background-color: var(--surface); border: 1px solid var(--input-line);
+    border-radius: var(--radius-control); font: inherit;
+  }
+  .settings-blocks { grid-template-columns: minmax(0, 1fr); }
 }
 
 .mcp-connections { display: grid; gap: 8px; min-width: 0; }

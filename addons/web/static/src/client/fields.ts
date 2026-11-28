@@ -295,13 +295,19 @@ function many2oneControl({ field, value, rpc, context, change: changed, run, ope
   const input = combobox({ field, className: "many2one-input", placeholder: `Search ${field.label}…`, values, fields: authorizedFields });
   input.id = `relation-input-${++relationInputIdentity}`;
   input.required = field.required;
-  input.value = currentName;
+  const restValue = viewContext === "form" ? el("span", undefined, "many2one-rest-value") : undefined;
+  restValue?.setAttribute("aria-hidden", "true");
+  const displaySelection = (name: string): void => {
+    currentName = name;
+    input.value = name;
+    if (restValue) restValue.textContent = name;
+  };
+  displaySelection(currentName);
 
   const buttonsDiv = el("div", undefined, "many2one-buttons");
   const clearBtn = button("", () => {
     currentId = null;
-    currentName = "";
-    input.value = "";
+    displaySelection("");
     clearBtn.style.display = "none";
     if (openBtn) openBtn.style.display = "none";
     complete.close();
@@ -329,8 +335,7 @@ function many2oneControl({ field, value, rpc, context, change: changed, run, ope
   area.append(input);
   const complete = relationAutocomplete({ field, input, host: area, rpc, context, run, exclude: () => new Set(), representedValue: () => currentName, editor, values, fields: authorizedFields, pick: item => {
     currentId = item.id;
-    currentName = item.display_name;
-    input.value = item.display_name;
+    displaySelection(item.display_name);
     clearBtn.style.display = "inline-flex";
     if (openBtn) openBtn.style.display = "inline-flex";
     changed(item);
@@ -340,7 +345,8 @@ function many2oneControl({ field, value, rpc, context, change: changed, run, ope
   input.addEventListener("focus", () => input.select());
   input.addEventListener("click", () => complete.toggle(input.value === currentName ? "" : input.value.trim()));
 
-  area.append(input, buttonsDiv);
+  if (restValue) area.append(restValue);
+  area.append(buttonsDiv);
   // The input moves into a touch sheet. A wrapping label would then retarget the
   // in-progress native activation to Clear; an explicit association keeps its identity.
   const wrapper = el("div", undefined, "field-label"); wrapper.setAttribute("role", "group");

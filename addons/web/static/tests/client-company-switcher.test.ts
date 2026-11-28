@@ -182,7 +182,10 @@ test("renders company switcher hierarchy with checkboxes, role treeitem and swit
   const section = switcher.closest<HTMLElement>(".company-dropdown")!;
   expect(section.getAttribute("role")).toBe("group");
   expect(section.getAttribute("aria-label")).toBe("Companies");
-  expect(root.querySelector(".company-menu-button")!.getAttribute("aria-haspopup")).toBe("dialog");
+  const trigger = root.querySelector<HTMLButtonElement>(".company-menu-button")!;
+  expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+  expect(trigger.getAttribute("aria-label")).toBe("Companies, current: Main Corp");
+  expect(trigger.querySelector('[data-icon="building"]')?.getAttribute("aria-hidden")).toBe("true");
 
   // Role treeitem and accessibility
   for (const row of rows) {

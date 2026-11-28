@@ -55,6 +55,13 @@ export class MobileDrawer {
       if (branch === document.body) break;
     }
     this.panel.querySelector<HTMLButtonElement>(".drawer-close-btn")?.focus();
+    const content = this.panel.querySelector<HTMLElement>(".mobile-drawer-content");
+    const current = content?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (content && current) {
+      const frame = content.getBoundingClientRect(), item = current.getBoundingClientRect();
+      if (item.top < frame.top) content.scrollTop += item.top - frame.top;
+      else if (item.bottom > frame.bottom) content.scrollTop += item.bottom - frame.bottom;
+    }
   }
 
   close = (): void => {

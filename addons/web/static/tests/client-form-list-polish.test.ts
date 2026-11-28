@@ -160,6 +160,17 @@ test("the content-sizing layout measures one-line values in a table as wide as i
   expect(last(".list-table .list-number .sort-button")).toMatch(/justify-content:\s*safe flex-end/);
 });
 
+test("compact list headers and related names ellipsize on the element painting the text; Wrap includes column titles", () => {
+  for (const selector of [".list-table .sort-label", ".list-table .many2one-value"]) {
+    const compact = last(selector);
+    expect(compact).toMatch(/min-width:\s*0/);
+    expect(compact).toMatch(/text-overflow:\s*ellipsis/);
+    expect(compact).toMatch(/overflow:\s*hidden/);
+    expect(compact).toMatch(/white-space:\s*nowrap/);
+  }
+  expect(last(".list-wrap .list-table:not(.list-auto-layout) .sort-label")).toMatch(/white-space:\s*normal/);
+});
+
 test("the open home menu takes the app's menus and phone burger out of the top bar", () => {
   for (const selector of ["[data-client-navigation].home-menu-open .app-sections", "[data-client-navigation].home-menu-open .burger-btn"]) {
     expect(last(selector)).toMatch(/visibility:\s*hidden/);

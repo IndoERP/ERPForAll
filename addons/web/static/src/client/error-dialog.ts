@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { button, el, errorMessage } from "./dom.js";
+import { button, dialogCloseButton, el, errorMessage } from "./dom.js";
 import type { DialogHandle, DialogService } from "./dialog-service.js";
 import { ClientError } from "./transport.js";
 
@@ -76,7 +76,7 @@ export class ErrorDialog {
   private present(dialog: HTMLDialogElement, heading: HTMLElement, body: HTMLElement, content: HTMLElement[], close: HTMLButtonElement): void {
     const actions = el("div", undefined, "actions"); actions.append(close);
     const header = el("header", undefined, "message-dialog-header");
-    const headerClose = button("×", () => this.dispose(), "message-dialog-close"); headerClose.setAttribute("aria-label", "Close");
+    const headerClose = dialogCloseButton(() => this.dispose());
     header.append(heading, headerClose);
     body.append(...content);
     const footer = el("footer", undefined, "message-dialog-footer"); footer.append(actions);

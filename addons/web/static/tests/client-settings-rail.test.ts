@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { readSettingsItems, readSettingsTarget, readMenuModule } from "../src/client/settings-items.js";
 import { settingsView } from "../src/client/services.js";
 import { RpcClient } from "../src/client/transport.js";
@@ -77,9 +77,16 @@ test("Inventory and general entry share all authorized app tabs across scopes", 
     expect([...host.querySelectorAll("[data-app]")].map(tab => tab.getAttribute("data-app"))).toEqual(["base","stock"]);
     expect(host.querySelector('[aria-selected="true"]')?.getAttribute("data-app")).toBe(entry ?? "base");
     const other = entry ? "base" : "stock";
-    host.querySelector<HTMLButtonElement>(`[data-app="${other}"]`)!.click();
+    const picker = host.querySelector<HTMLSelectElement>(".settings-category-picker select")!;
+    if (entry) host.querySelector<HTMLButtonElement>(`[data-app="${other}"]`)!.click();
+    else {
+      picker.value = other;
+      picker.dispatchEvent(new Event("change"));
+      expect(picker.value).toBe("base");
+    }
     await pending;
     expect(host.querySelector('[aria-selected="true"]')?.getAttribute("data-app")).toBe(other);
+    expect(picker.value).toBe(other);
     expect(readScopes.at(-1)).toBe(entry ? "global" : "company");
     mounted.dispose?.();
   }
@@ -103,6 +110,37 @@ test("module toggle items decode all three states and reject malformed payloads"
   ] as const) {
     expect(() => readSettingsItems({ items: [bad] }, [])).toThrowError(expect.objectContaining({ kind, message }));
   }
+});
+
+test("cancelling a category scope switch keeps the current app, edit and picker focus", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value(this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value(this: HTMLDialogElement) { this.open = false; } });
+  const rpc = new RpcClient(async (path, init) => {
+    if (String(path).endsWith("erp_available_addons")) return new Response(JSON.stringify({addons: []}), { headers: {"Content-Type":"application/json"} });
+    const { scope } = JSON.parse(String(init?.body));
+    const app = scope.kind === "global" ? "base" : "stock";
+    const key = app + ".enabled";
+    const response = String(path).endsWith("erp_describe")
+      ? { wire_major: 1, registry_version: "r1", scope, declarations: [{ key, app, label: "Enabled", block: "General",
+        kind: "boolean", default: false, choices: null, writable: true, sequence: 1 }] }
+      : { wire_major: 1, scope, revision: "1", values: [{ key, value: false, source: "default" }] };
+    return new Response(JSON.stringify(response), { headers: {"Content-Type":"application/json"} });
+  }, () => {});
+  const host = document.body.appendChild(document.createElement("div"));
+  let pending = Promise.resolve();
+  const mounted = await settingsView(host, rpc, [{id: 1, name: "Demo"}], job => { pending = job(); }, () => {}, {}, ["global","company"], "r1");
+  const field = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  field.click();
+  const picker = host.querySelector<HTMLSelectElement>(".settings-category-picker select")!;
+  picker.focus(); picker.value = "stock"; picker.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(document.querySelector("dialog[open]")).not.toBeNull());
+  const cancel = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(button => button.textContent === "Cancel")!;
+  cancel.focus(); cancel.click(); await pending;
+  expect(picker.value).toBe("base");
+  expect(mounted.dirty()).toBe(true);
+  expect(field.checked).toBe(true);
+  expect(document.activeElement).toBe(picker);
+  mounted.dispose?.();
 });
 
 test("group toggle items decode every state, a reason only when unavailable, and refuse unknown members, states and groups", () => {

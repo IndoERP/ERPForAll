@@ -729,7 +729,7 @@ test("list view header and row selection with count and delete action", async ()
       context: null
     }, description) : path.endsWith("get_views") ? description
       : path.endsWith("web_search_read") ? { length: records.length, records }
-      : [];
+      : path.endsWith("erp_impex_rights") ? { export: false, import: false } : [];
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   }));
 
@@ -855,7 +855,7 @@ test("a many2one in the first list column is the row's open button", async () =>
   expect(paths.some(path => path.includes("/res.partner/"))).toBe(false);
 });
 
-test("the list control row offers Import / Export and reads its rights only when opened", async () => {
+test("one Actions menu beside the list title offers wrapping, selection actions and permitted file operations", async () => {
   history.replaceState(null, "", "/erp/action-20");
   const paths: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
@@ -872,12 +872,23 @@ test("the list control row offers Import / Export and reads its rights only when
   app = new HumanApp(root, bootstrap);
   await app.start();
   await vi.waitFor(() => expect(root.querySelector("table.list-table")).not.toBeNull());
-  const toggle = root.querySelector<HTMLButtonElement>("[data-control-actions] .list-data-toggle-btn")!;
-  expect(toggle.textContent).toBe("Import / Export");
+  const toggle = root.querySelector<HTMLButtonElement>("[data-control-breadcrumbs] button[aria-label='Actions']")!;
+  expect(toggle).not.toBeNull();
+  expect(root.querySelector("[data-control-actions] .list-data-toggle-btn")).toBeNull();
   expect(paths.some(path => path.endsWith("erp_impex_rights"))).toBe(false);
   toggle.click();
-  await vi.waitFor(() => expect([...root.querySelectorAll(".list-data-menu button")].map(item => item.textContent)).toEqual(["Import records", "Export"]));
+  await vi.waitFor(() => expect([...root.querySelectorAll(".list-data-menu .list-file-action")].map(item => item.textContent)).toEqual(["Import records", "Export"]));
   expect(paths.filter(path => path.endsWith("/test.note/erp_impex_rights"))).toHaveLength(1);
+  const wrap = root.querySelector<HTMLButtonElement>("[role=menuitemcheckbox]")!;
+  expect(wrap.textContent).toBe("Wrap cell text");
+  wrap.click();
+  expect(root.querySelector(".list-results")?.classList.contains("list-wrap")).toBe(true);
+  expect(wrap.getAttribute("aria-checked")).toBe("true");
+  expect(document.activeElement).toBe(toggle);
+  expect(root.querySelector<HTMLButtonElement>(".action-delete-btn")?.hidden).toBe(true);
+  root.querySelector<HTMLInputElement>(".list-row-select")!.click();
+  expect(root.querySelector<HTMLButtonElement>(".action-delete-btn")?.hidden).toBe(false);
+  expect(root.querySelectorAll("button[aria-label='Actions']")).toHaveLength(1);
 });
 
 test("list columns settle synchronously on initial load and reload (no auto-layout frame)", async () => {
@@ -1120,7 +1131,8 @@ test("list view column sort with direction indicator and row click opens form", 
   await app.start();
 
   const sortBtn = root.querySelector<HTMLButtonElement>(".sort-button")!;
-  expect(sortBtn.textContent).toContain("Name");
+  expect(sortBtn.querySelector(".sort-label")?.textContent).toBe("Name");
+  expect(sortBtn.title).toBe("Name");
 
   // Click sort to toggle to name asc
   sortBtn.click();
@@ -1488,6 +1500,7 @@ function pagedFetch(total: number, log: { unlink: number[][]; offsets: number[] 
         const ids = Array.from({ length: Math.max(0, Math.min(40, total - body.offset)) }, (_, i) => body.offset + i + 1);
         return { length: total, records: ids.map(id => ({ id, name: `Note ${id}` })) };
       })()
+      : path.endsWith("erp_impex_rights") ? { export: false, import: false }
       : path.endsWith("unlink") ? (log.unlink.push(body.ids), true)
       : path.endsWith("web_read") ? [{ id: body.ids[0], name: `Note ${body.ids[0]}` }]
       : [];
@@ -1549,6 +1562,69 @@ test("form pager reports an empty adjacent page without leaving the current reco
   expect(new URLSearchParams(window.location.search).get("id")).toBe("40");
   expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Note 40");
   expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("40 / 41");
+});
+
+test("returning from a record restores the list page, display preference, horizontal position and row focus", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  vi.stubGlobal("fetch", pagedFetch(41, { unlink: [], offsets: [] }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  root.querySelector<HTMLButtonElement>(".pager-next")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-record-open='41']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>(".list-data-toggle-btn")!.click();
+  const wrap = root.querySelector<HTMLButtonElement>(".list-data-menu [role=menuitemcheckbox]")!;
+  expect(wrap).not.toBeNull();
+  wrap.click();
+  const widthHandle = root.querySelector<HTMLElement>(".column-resize-handle")!;
+  widthHandle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  const manualWidth = root.querySelector<HTMLTableColElement>("colgroup col:nth-child(2)")!.style.width;
+  expect(manualWidth).toMatch(/^\d+px$/);
+  root.querySelector<HTMLElement>(".list-results")!.scrollLeft = 72;
+  root.querySelector<HTMLButtonElement>("[data-record-open='41']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("41 / 41"));
+  root.querySelector<HTMLButtonElement>(".breadcrumb-back")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".list-table [data-record-open='41']")).not.toBeNull());
+  expect(root.querySelector(".pager-count")?.textContent).toBe("41–41 / 41");
+  expect(root.querySelector<HTMLElement>(".list-results.list-wrap")?.scrollLeft).toBe(72);
+  expect(root.querySelector<HTMLTableColElement>("colgroup col:nth-child(2)")!.style.width).toBe(manualWidth);
+  expect(document.activeElement).toBe(root.querySelector("[data-record-open='41']"));
+});
+
+test("a second browser Back after Forward restores the same list page", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  vi.stubGlobal("fetch", pagedFetch(41, { unlink: [], offsets: [] }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  root.querySelector<HTMLButtonElement>(".pager-next")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-record-open='41']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-record-open='41']")!.click();
+  const form = () => vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("41 / 41"));
+  const list = () => vi.waitFor(() => expect(root.querySelector(".list-table [data-record-open='41']")).not.toBeNull());
+  await form();
+  history.back(); await list();
+  history.forward(); await form();
+  history.back(); await list();
+  expect(document.activeElement).toBe(root.querySelector("[data-record-open='41']"));
+});
+
+test("returning to a list whose last page disappeared loads the nearest available page", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const log = { unlink: [] as number[][], offsets: [] as number[] };
+  let server = pagedFetch(41, log);
+  vi.stubGlobal("fetch", (path: string, init: RequestInit) => server(path, init));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  root.querySelector<HTMLButtonElement>(".pager-next")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-record-open='41']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-record-open='41']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".breadcrumb-back")).not.toBeNull());
+  server = pagedFetch(40, log);
+  root.querySelector<HTMLButtonElement>(".breadcrumb-back")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".list-table [data-record-open='1']")).not.toBeNull());
+  expect(root.querySelector(".pager-count")?.textContent).toBe("1–40 / 40");
 });
 
 test("list selection is cleared on page change so Delete cannot reach hidden records", async () => {
@@ -2487,6 +2563,22 @@ test("mobile drawer desktop resize restores scroll and focuses the visible navig
   expect(drawer.classList.contains("hidden")).toBe(true);
   expect(document.body.style.overflow).toBe("");
   expect(document.activeElement).toBe(root.querySelector("[data-app-switcher]"));
+});
+
+test("opening a long drawer reveals the active menu and keeps the close button focused", async () => {
+  const root = await mobileNavigationFixture();
+  const toggle = root.querySelector<HTMLButtonElement>("[data-burger-menu]")!;
+  const close = root.querySelector<HTMLButtonElement>(".drawer-close-btn")!;
+  const content = root.querySelector<HTMLElement>(".mobile-drawer-content")!;
+  const current = content.querySelector<HTMLElement>('[aria-current="page"]')!;
+  close.click();
+  vi.spyOn(content, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 60, 320, 400));
+  vi.spyOn(current, "getBoundingClientRect").mockReturnValue(new DOMRect(8, 600, 290, 44));
+  toggle.click();
+  expect(content.scrollTop).toBe(184);
+  expect(document.activeElement).toBe(close);
+  close.click();
+  expect(document.activeElement).toBe(toggle);
 });
 
 test("Office Blue can hide and restore the sidebar without navigating or changing the active record", async () => {

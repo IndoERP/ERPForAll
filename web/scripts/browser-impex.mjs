@@ -77,7 +77,7 @@ const mail = "workbook@example.test";
 const tag = "CSV browser tag";
 async function openAction(action) {
   await page
-    .getByRole("button", { name: "Import / Export", exact: true })
+    .getByRole("button", { name: "Actions", exact: true })
     .click();
   await page.getByRole("menuitem", { name: action, exact: true }).click();
   await dialog.waitFor();

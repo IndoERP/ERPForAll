@@ -75,7 +75,7 @@ test("many2one control searches records on input and selects via click", async (
 
   const changed = vi.fn();
   const field: Field = { name: "user_id", kind: "many2one", label: "User", readonly: false, required: false, relation: "res.users", relationField: null, selection: null };
-  const node = fieldControl({ field: field, value: false, rpc: rpc, context: { tz: "UTC" }, change: changed, run: job => { void job(); }, editor: relationEnvironment() });
+  const node = fieldControl({ viewContext: "form", field: field, value: false, rpc: rpc, context: { tz: "UTC" }, change: changed, run: job => { void job(); }, editor: relationEnvironment() });
   document.body.append(node);
 
   const input = node.querySelector<HTMLInputElement>("input.many2one-input")!;
@@ -98,6 +98,9 @@ test("many2one control searches records on input and selects via click", async (
   items[0]!.click();
   expect(changed).toHaveBeenCalledWith({ id: 10, display_name: "Alice" });
   expect(input.value).toBe("Alice");
+  const display = node.querySelector(".many2one-rest-value");
+  expect(display?.textContent).toBe("Alice");
+  expect(display?.getAttribute("aria-hidden")).toBe("true");
   expect(dropdown.style.display).toBe("none");
 
   // Clear button should now be visible and clickable
@@ -106,6 +109,7 @@ test("many2one control searches records on input and selects via click", async (
   clearBtn.click();
   expect(changed).toHaveBeenCalledWith(false);
   expect(input.value).toBe("");
+  expect(display?.textContent).toBe("");
 
   node.remove();
 });

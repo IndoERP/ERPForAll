@@ -23,6 +23,10 @@ test("plain shells use unique labels, declared size and body/footer slots", () =
   const second = dialogs.open({ body: "Other" });
   expect(second.dialog.getAttribute("aria-labelledby")).not.toBe(first.dialog.getAttribute("aria-labelledby"));
   expect(first.dialog.querySelector("h2")?.textContent).toBe("Details");
+  const close = first.dialog.querySelector<HTMLButtonElement>(".message-dialog-close")!;
+  expect(close.getAttribute("aria-label")).toBe("Close");
+  expect(close.title).toBe("Close");
+  expect(close.querySelector("svg[aria-hidden=true]")?.getAttribute("data-icon")).toBe("x");
   second.close();
   const minimal = dialogs.open({ body: "Body only", header: false });
   expect(minimal.dialog.querySelector("header")).toBeNull();
@@ -34,6 +38,21 @@ test("a scrollable dialog body is a keyboard tab stop", () => {
   const body = handle.dialog.querySelector<HTMLElement>(".message-dialog-body")!;
   expect(body.tabIndex).toBe(0);
   body.focus(); expect(document.activeElement).toBe(body);
+});
+
+test("closing a native child returns focus to the field that opened it inside its parent", () => {
+  const opener = button("Select address", () => {});
+  const parent = dialogs.open({ title: "Customer", body: opener });
+  opener.focus();
+  // Native showModal moves focus before the new trap is installed.
+  const child = document.createElement("dialog");
+  const inside = button("Address", () => {});
+  child.append(inside);
+  Object.defineProperty(child, "showModal", { value: () => { child.open = true; inside.focus(); } });
+  const handle = dialogs.attach(child);
+  handle.close();
+  expect(document.activeElement).toBe(opener);
+  parent.close();
 });
 
 test("only the top dialog is active, closing reactivates its parent, final close clears modal state", () => {

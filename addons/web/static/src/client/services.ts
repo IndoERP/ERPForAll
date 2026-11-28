@@ -1,11 +1,12 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { array, integer, object, text } from "./metadata.js";
-import { actionButton, button, choose, el, labelled } from "./dom.js";
+import { actionButton, button, choose, dialogCloseButton, el, labelled } from "./dom.js";
 import { createChoiceDropdown, type ChoiceDropdown } from "./choice-dropdown.js";
 import { icon, menuIcon } from "./icons.js";
 import { readSettingsItems, type SettingsViewOptions } from "./settings-items.js";
 import type { SettingsItem } from "../generated/human-ui.js";
 import { registerServiceController } from "./registry.js";
+import { t } from "./translate.js";
 import { ClientError, RpcClient } from "./transport.js";
 
 export interface ServiceController { busy(): boolean; dirty(): boolean; save(): Promise<void>; discard(): void; /** Release listeners and ignore late rendering; safe to call repeatedly. */ dispose?(): void }
@@ -366,23 +367,26 @@ export async function settingsView(
   sidebar.setAttribute("aria-label", "Settings apps");
   const sidebarList = el("nav", undefined, "settings-sidebar-list");
   sidebarList.setAttribute("role", "tablist");
-  sidebar.append(sidebarList);
+  const categoryPicker = el("label", undefined, "settings-category-picker");
+  const categorySelect = el("select");
+  categoryPicker.append(el("span", t("Settings category")), categorySelect);
+  sidebar.append(categoryPicker, sidebarList);
+  categorySelect.addEventListener("change", () => {
+    const group = appGroups.get(categorySelect.value);
+    // A change of scope may be cancelled. Keep the committed selection until the tab action succeeds.
+    categorySelect.value = searchInput.value.trim() ? "" : selectedApp ?? "";
+    group?.tab.click();
+  });
 
-  // Keep the active choices in view when the desktop rail becomes a horizontal phone strip.
-  const revealSelection = (strip: HTMLElement, selector: string): void => {
-    const choice = strip.querySelector<HTMLElement>(selector);
-    if (!choice || strip.clientWidth === 0 || strip.scrollWidth <= strip.clientWidth) return;
-    const frame = strip.getBoundingClientRect(), selected = choice.getBoundingClientRect();
-    if (selected.left < frame.left) strip.scrollLeft += selected.left - frame.left;
-    else if (selected.right > frame.right) strip.scrollLeft += selected.right - frame.right;
-  };
   const revealNavigation = (): void => {
-    revealSelection(sidebarList, '[aria-selected="true"]');
-    revealSelection(scopeGroup, '[aria-checked="true"]');
+    const choice = scopeGroup.querySelector<HTMLElement>('[aria-checked="true"]');
+    if (!choice || scopeGroup.clientWidth === 0 || scopeGroup.scrollWidth <= scopeGroup.clientWidth) return;
+    const frame = scopeGroup.getBoundingClientRect(), selected = choice.getBoundingClientRect();
+    if (selected.left < frame.left) scopeGroup.scrollLeft += selected.left - frame.left;
+    else if (selected.right > frame.right) scopeGroup.scrollLeft += selected.right - frame.right;
   };
   if (typeof ResizeObserver !== "undefined") {
     navigationObserver = new ResizeObserver(revealNavigation);
-    navigationObserver.observe(sidebarList);
     navigationObserver.observe(scopeGroup);
   }
 
@@ -418,10 +422,28 @@ export async function settingsView(
   const operation = async (job: () => Promise<void>): Promise<void> => {
     if (disposed) throw new ClientError("validation", "This settings view is closed.");
     if (pending) throw new ClientError("validation", "Wait for the settings operation to finish.");
+    const opener = document.activeElement;
     pending = true; content.setAttribute("aria-busy", "true"); disable();
-    try { await job(); } finally { pending = false; content.setAttribute("aria-busy", "false"); disable(); }
+    try { await job(); } finally {
+      pending = false; content.setAttribute("aria-busy", "false"); disable();
+      // A scope confirmation closes before its initiating control is enabled again.
+      if (!disposed && document.activeElement === document.body && opener instanceof HTMLElement &&
+          (sheet.contains(opener) || toolbar.contains(opener))) opener.focus({ preventScroll: true });
+    }
   };
 
+  const syncCategoryPicker = (searching: boolean): void => {
+    const categories = [...appGroups.values()].filter(group => group.tab.style.display !== "none")
+      .map(group => new Option(group.appTitle, group.appKey));
+    categoryPicker.hidden = categories.length === 0;
+    if (searching) {
+      const results = new Option(t("Search results"), "");
+      results.disabled = true;
+      categories.unshift(results);
+    }
+    categorySelect.replaceChildren(...categories);
+    categorySelect.value = searching ? "" : selectedApp ?? "";
+  };
   const performFilter = (queryText: string): void => {
     const query = queryText.trim().toLowerCase();
     let totalMatches = 0;
@@ -456,6 +478,7 @@ export async function settingsView(
       group.section.style.display = query ? (appMatches > 0 ? "" : "none") : (group.appKey === selectedApp ? "" : "none");
       group.tab.style.display = appMatches > 0 || !query ? "" : "none";
     }
+    syncCategoryPicker(Boolean(query));
     noResults.style.display = totalMatches === 0 && query ? "" : "none";
     if (totalMatches === 0 && query) noResultsText.textContent = `No settings match “${queryText.trim()}”. Check the spelling, try a shorter word, or clear the search to see every setting.`;
   };
@@ -832,9 +855,8 @@ export async function settingsView(
 
     revealNavigation();
     disable();
-    if (searchInput.value) {
-      performFilter(searchInput.value);
-    }
+    if (searchInput.value) performFilter(searchInput.value);
+    else syncCategoryPicker(false);
   };
 
   const describe = async (immutableScope: Record<string, unknown>) => {
@@ -1135,6 +1157,8 @@ export async function addonsView(
 
   const disable = (): void => {
     for (const control of sheet.querySelectorAll("button")) control.disabled = pending || control.dataset["locked"] === "true";
+    sectionSelect.disabled = pending;
+    categorySelect.disabled = pending;
   };
 
   const operation = async (job: () => Promise<void>): Promise<void> => {
@@ -1164,7 +1188,7 @@ export async function addonsView(
     const head = el("header", undefined, "addon-info-head");
     const titles = el("div", undefined, "addon-info-titles");
     titles.append(heading, el("code", row.name, "addon-technical-name"));
-    const headClose = button("×", () => dialog.close(), "message-dialog-close"); headClose.setAttribute("aria-label", "Close");
+    const headClose = dialogCloseButton(() => dialog.close());
     head.append(tileIcon(row), titles, el("span", row.badge.label, `addon-badge addon-badge-${row.badge.token}`), headClose);
     const facts = el("dl", undefined, "addon-info-facts");
     const fact = (label: string, value: string | Node): void => {
@@ -1475,7 +1499,7 @@ export async function addonsView(
     const actions = el("div", undefined, "addon-actions");
     const info = button("Module info", () => showInfo(row, info), "addon-info-btn");
     const badge = el("span", row.badge.label, `addon-badge addon-badge-${row.badge.token}`);
-    actions.append(info, badge);
+    actions.append(info);
     if (row.state === "uninstalled" && row.installable) {
       actions.append(button("Install", () => run(() => executeInstall(row)), "primary addon-install"));
     } else if (row.state === "installed") {
@@ -1483,7 +1507,7 @@ export async function addonsView(
       const uninstall = button("Uninstall", () => run(() => startUninstall(row, uninstall)), "danger addon-uninstall");
       actions.append(upgrade, uninstall);
     }
-    tile.append(tileIcon(row), meta, summary, facts, actions);
+    tile.append(tileIcon(row), meta, badge, summary, facts, actions);
     return tile;
   };
 
@@ -1491,6 +1515,17 @@ export async function addonsView(
   const layout = el("div", undefined, "addons-layout");
   const panel = el("nav", undefined, "addons-panel");
   panel.setAttribute("aria-label", "Addon categories");
+  const sections = [["official", "Official Apps"], [INDUSTRIES.toLowerCase(), INDUSTRIES]] as const;
+  const compactFilters = el("div", undefined, "addons-category-pickers");
+  const sectionSelect = el("select"), categorySelect = el("select");
+  for (const [value, label] of sections) sectionSelect.add(new Option(label, value));
+  const selectSection = (section: AddonSection): void => { view.section = section; view.category = []; paint(); };
+  sectionSelect.addEventListener("change", () => selectSection(sectionSelect.value as AddonSection));
+  categorySelect.addEventListener("change", () => {
+    view.category = categorySelect.value ? categorySelect.value.split("/") : [];
+    paint();
+  });
+  compactFilters.append(labelled(t("Catalog"), sectionSelect), labelled(t("Category"), categorySelect));
   const main = el("div", undefined, "addons-main");
   const toolbar = el("div", undefined, "addons-toolbar");
   const searchBox = el("label", undefined, "addons-search-box");
@@ -1514,9 +1549,10 @@ export async function addonsView(
   count.setAttribute("aria-live", "polite");
   const groupBy = labelled("Group by", groupSelect);
   groupBy.classList.add("addons-groupby-field");
-  const refresh = button("Refresh catalog", () => run(() => operation(render)), "addons-refresh");
-  refresh.prepend(icon("refresh-cw"));
-  toolbar.append(searchBox, filterBar, groupBy, count, refresh);
+  const refresh = button("", () => run(() => operation(render)), "addons-refresh");
+  refresh.title = t("Refresh catalog"); refresh.setAttribute("aria-label", refresh.title);
+  refresh.append(icon("refresh-cw"), el("span", refresh.title));
+  toolbar.append(searchBox, refresh, filterBar, groupBy, count);
   const results = el("div", undefined, "addons-results");
   // Per-addon demo failures come back in the reply and are shown.
   const demoZone = el("section", undefined, "addons-demo-zone");
@@ -1540,7 +1576,7 @@ export async function addonsView(
   })), "danger addons-demo-load");
   demoZone.append(el("h2", "Demo data", "addons-panel-title"), el("p", "Load the demo data of every installed addon. This cannot be undone.", "muted"), demoButton);
   main.append(toolbar, results, demoZone);
-  layout.append(panel, main);
+  layout.append(panel, compactFilters, main);
 
   const panelItem = (label: string, amount: number, selected: boolean, depth: number, select: () => void): HTMLElement => {
     const item = button(label, select, "addons-panel-item");
@@ -1559,21 +1595,26 @@ export async function addonsView(
 
     const apps = el("section", undefined, "addons-panel-section");
     apps.append(el("h2", "Apps", "addons-panel-title"));
-    for (const [key, label] of [["official", "Official Apps"], [INDUSTRIES.toLowerCase(), INDUSTRIES]] as const) {
+    for (const [key, label] of sections) {
       const section = key as AddonSection;
-      apps.append(panelItem(label, searched.filter(row => row.section === section).length, view.section === section, 0, () => { view.section = section; view.category = []; paint(); }));
+      apps.append(panelItem(label, searched.filter(row => row.section === section).length, view.section === section, 0, () => selectSection(section)));
     }
     const categories = el("section", undefined, "addons-panel-section");
     categories.append(el("h2", "Categories", "addons-panel-title"));
     categories.append(panelItem("All", sectionRows.length, view.category.length === 0, 0, () => { view.category = []; paint(); }));
     const nodes = new Map<string, string[]>();
     for (const row of rows.filter(item => item.section === view.section)) for (let depth = 1; depth <= row.path.length; depth++) nodes.set(row.path.slice(0, depth).join("/"), row.path.slice(0, depth));
+    const categoryOptions = [new Option(t("All"), "")];
     for (const path of [...nodes.values()].sort((a, b) => a.join("/").localeCompare(b.join("/")))) {
+      categoryOptions.push(new Option(path.join(" / "), path.join("/")));
       const parent = path.slice(0, -1);
       if (parent.length > 0 && !parent.every((part, index) => view.category[index] === part)) continue;
       const selected = path.join("/") === view.category.join("/");
       categories.append(panelItem(path.at(-1)!, sectionRows.filter(row => inCategory(row, path)).length, selected, path.length - 1, () => { view.category = [...path]; paint(); }));
     }
+    sectionSelect.value = view.section;
+    categorySelect.replaceChildren(...categoryOptions);
+    categorySelect.value = view.category.join("/");
     panel.replaceChildren(apps, categories);
 
     for (const toggle of filterButtons) {
