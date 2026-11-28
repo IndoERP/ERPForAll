@@ -204,10 +204,10 @@ export class RecordForm {
       if (control instanceof HTMLButtonElement) continue;
       if (this.committing) { if (!this.nativeDisabled.has(control)) this.nativeDisabled.set(control, control.disabled); control.disabled = true; }
       else if (this.nativeDisabled.has(control)) {
-        // The commit owns this temporary native lock. Release it before the pending
-        // form action validates: disabled native controls are omitted from validation.
-        control.disabled = this.nativeDisabled.get(control)! || this.env.state.writeUncertain;
-        this.nativeDisabled.delete(control);
+        // An outer operation can outlive this commit. Keep the original policy
+        // until that owner releases it, including across its asynchronous save.
+        control.disabled = this.nativeDisabled.get(control)! || disabled;
+        if (!disabled) this.nativeDisabled.delete(control);
       }
     }
     for (const handle of this.retained.values()) handle.draft?.setDisabled(disabled);

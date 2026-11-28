@@ -5828,6 +5828,9 @@ export class HumanApp {
       try {
         if (surface!.needsCommit()) await surface!.commit();
         if (this.lifetime.signal.aborted || binding !== this.generation) return false;
+        // An action can hold the form through a draft commit. Validation must see
+        // enabled inputs and be able to focus the first missing field.
+        surface!.setDisabled(false);
         if (!surface!.valid()) { recordEvent({ type: "saveFailed" }); return false; }
         surface!.setDisabled(true);
         // A refusal that names fields is shown on those fields; only an error that names none reaches the error dialog.

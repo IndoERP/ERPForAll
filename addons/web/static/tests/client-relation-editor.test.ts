@@ -42,8 +42,13 @@ test("invalid required field does not save, cancel returns no selection", async 
   const rpc = new RpcClient(async url => { const method = String(url).split("/").at(-1); if (method === "web_save") writes(); return json(method === "get_views" ? description() : method === "default_get" ? { name: "" } : { value: {} }); }, () => {});
   const result = editRelation({ dialogs, rpc, model, context: {}, report: error => errors.push(error) });
   await vi.waitFor(() => expect(document.querySelector("dialog input[name='name']")).not.toBeNull());
-  control("Save").click(); expect(writes).not.toHaveBeenCalled(); expect(document.querySelector("[role='alert']")?.textContent).toContain("needs a value");
-  control("Cancel").click(); await expect(result).resolves.toBeUndefined();
+  const input = document.querySelector<HTMLInputElement>("dialog input[name='name']")!;
+  input.focus();
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, bubbles: true, cancelable: true }));
+  expect(writes).not.toHaveBeenCalled(); expect(document.querySelector("[role='alert']")?.textContent).toContain("needs a value");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "x", altKey: true, bubbles: true, cancelable: true }));
+  expect(document.querySelector("dialog")).toBeNull();
+  await expect(result).resolves.toBeUndefined();
 });
 
 test("existing relation reads then saves its identity; uncertain save cannot be repeated or dismissed", async () => {
@@ -60,6 +65,27 @@ test("existing relation reads then saves its identity; uncertain save cannot be 
   expect(control("Save").disabled).toBe(true); control("Save").click(); control("Cancel").click();
   expect(writes).toBe(1); expect(document.querySelector("dialog")).not.toBeNull();
   dialogs.dispose(); await expect(result).resolves.toBeUndefined();
+});
+
+test("Save shortcut stops applying once only the saved record's readback remains", async () => {
+  const methods: string[] = [];
+  const rpc = new RpcClient(async url => {
+    const method = String(url).split("/").at(-1)!; methods.push(method);
+    if (method === "web_read") return json([]);
+    return json(method === "get_views" ? description() : method === "default_get" ? { name: "Partner" }
+      : method === "onchange" ? { value: {} } : [{ id: 17, name: "Partner" }]);
+  }, () => {});
+  const result = editRelation({ dialogs, rpc, model, context: {}, report: error => errors.push(error) });
+  await vi.waitFor(() => expect(control("Save").disabled).toBe(false));
+  control("Save").click();
+  await vi.waitFor(() => expect(control("Read saved record")).toBeDefined());
+  const retry = control("Read saved record");
+  expect(retry.hasAttribute("data-hotkey")).toBe(false);
+  const key = new KeyboardEvent("keydown", { key: "s", altKey: true, bubbles: true, cancelable: true });
+  retry.dispatchEvent(key);
+  expect(key.defaultPrevented).toBe(false);
+  expect(methods.filter(method => method === "web_save" || method === "web_read")).toEqual(["web_save", "web_read"]);
+  control("Cancel").click(); await expect(result).resolves.toBeUndefined();
 });
 
 test("scope abortion cancels metadata reads and late completion cannot mount a record form", async () => {

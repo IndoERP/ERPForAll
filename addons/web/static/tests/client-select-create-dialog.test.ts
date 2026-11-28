@@ -161,6 +161,8 @@ test("the picker opens on its single search box, counts the records and moves th
   key(grace, "ArrowDown"); expect(document.activeElement).toBe(grace);
   key(grace, "ArrowUp"); expect(document.activeElement).toBe(ada);
   key(ada, "ArrowUp"); expect(document.activeElement).toBe(search);
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "x", altKey: true, bubbles: true, cancelable: true }));
+  expect(handle.dialog.isConnected).toBe(false);
 });
 
 test("a full page of 80 names says the list is cut; an empty search clears the count", async () => {

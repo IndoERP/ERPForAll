@@ -127,7 +127,9 @@ describe("prompt dialog", () => {
   test("Cancel answers nothing", async () => {
     const answer = askButtonPrompt({ title: "Run", prompt: runDate, service: dialogs });
     expect(control().type).toBe("date");
-    footerButton("Cancel").click();
+    const key = new KeyboardEvent("keydown", { key: "x", altKey: true, bubbles: true, cancelable: true });
+    control().dispatchEvent(key);
+    expect(key.defaultPrevented).toBe(true);
     await expect(answer).resolves.toBeUndefined();
   });
 

@@ -85,7 +85,8 @@ export function askButtonPrompt(options: ButtonPromptOptions): Promise<PromptAns
       }
     };
     const confirm = button(options.title, accept, "primary"); confirm.dataset["defaultAction"] = "";
-    footer.append(button("Cancel", () => finish(undefined)), confirm);
+    const cancel = button("Cancel", () => finish(undefined)); cancel.dataset["hotkey"] = "x";
+    footer.append(cancel, confirm);
     control.addEventListener("input", () => { error.hidden = true; error.textContent = ""; control.removeAttribute("aria-invalid"); control.removeAttribute("aria-describedby"); });
     // Enter in a one-line control answers; a text answer may span lines (Ctrl+Enter answers from the dialog).
     if (!(control instanceof HTMLTextAreaElement)) (control as HTMLElement).addEventListener("keydown", (event: KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); accept(); } });

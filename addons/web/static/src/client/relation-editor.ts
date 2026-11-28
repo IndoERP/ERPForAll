@@ -82,10 +82,15 @@ export function editRelation(options: RelationEditorOptions): Promise<RelationCh
       report(error);
     }).finally(() => {
       pending = false;
-      if (!dead) { if (savePerformed) save.textContent = "Read saved record"; render(); }
+      if (!dead) {
+        if (savePerformed) { save.textContent = "Read saved record"; delete save.dataset["hotkey"]; }
+        render();
+      }
     });
   }, "primary");
-  const cancel = button("Cancel", () => { if (!pending && !uncertain) handle.close(); }); footer.append(save, cancel);
+  save.dataset["hotkey"] = "s";
+  const cancel = button("Cancel", () => { if (!pending && !uncertain) handle.close(); }); cancel.dataset["hotkey"] = "x";
+  footer.append(save, cancel);
   form.addEventListener("submit", event => { event.preventDefault(); save.click(); });
   handle = options.dialogs.open({ title: options.id === undefined ? "Create related record" : "Edit related record", body, footer, size: "lg",
     dismiss: () => !pending && !uncertain,

@@ -102,7 +102,8 @@ export function selectCreateDialog(options: SelectCreateDialogOptions): DialogHa
       if (!dead) handle.close();
     }).catch(showError).finally(() => { pending = false; if (!dead) disable(); });
   }, "primary"));
-  footer.append(button("Cancel", () => { if (!pending) handle.close(); }));
+  const cancel = button("Cancel", () => { if (!pending) handle.close(); }); cancel.dataset["hotkey"] = "x";
+  footer.append(cancel);
   const externalAbort = (): void => handle.dispose();
   const resize = (): void => { if (!dead && !pending) render(); };
   handle = options.dialogs.open({ title: options.title ?? "Choose a record", body, footer, size: "lg", dismiss: () => !pending,
