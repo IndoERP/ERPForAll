@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- The Project app: Overview, Projects, Tasks and My Tasks for project users, Configuration (Stages, Tags) for
+     project managers. The app opens on the Overview. Sub-menu icons are set after the tree, as in the other
+     business apps. -->
+<erp>
+  <menuitem id="menu_project_root" name="Project" groups="project.group_project_user" sequence="55" web_icon="lucide:folder-kanban">
+    <menuitem id="menu_project_overview" name="Overview" action="project_overview_action" sequence="0"/>
+    <menuitem id="menu_project_projects" name="Projects" action="project_project_action" sequence="10"/>
+    <menuitem id="menu_project_tasks" name="Tasks" action="project_task_action" sequence="20"/>
+    <menuitem id="menu_project_my_tasks" name="My Tasks" action="project_task_action_my" sequence="30"/>
+    <menuitem id="menu_project_config" name="Configuration" groups="project.group_project_manager" sequence="100">
+      <menuitem id="menu_project_stages" name="Stages" action="project_task_type_action" sequence="10"/>
+      <menuitem id="menu_project_tags" name="Tags" action="project_tags_action" sequence="20"/>
+    </menuitem>
+  </menuitem>
+
+  <record id="menu_project_overview" model="ir.ui.menu"><field name="web_icon">lucide:panels-top-left</field></record>
+  <record id="menu_project_projects" model="ir.ui.menu"><field name="web_icon">lucide:folder-open</field></record>
+  <record id="menu_project_tasks" model="ir.ui.menu"><field name="web_icon">lucide:kanban</field></record>
+  <record id="menu_project_my_tasks" model="ir.ui.menu"><field name="web_icon">lucide:user-check</field></record>
+  <record id="menu_project_config" model="ir.ui.menu"><field name="web_icon">lucide:sliders-horizontal</field></record>
+  <record id="menu_project_stages" model="ir.ui.menu"><field name="web_icon">lucide:layers</field></record>
+  <record id="menu_project_tags" model="ir.ui.menu"><field name="web_icon">lucide:tags</field></record>
+</erp>

@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Demo projects and tasks with invented names. The two projects work for customers of the base demo data
+     (Griya Interior Persada and Toko Maju Bersama) instead of partners of their own: a child contact created here,
+     once accounting is installed, would need a current company for the commercial fields it copies from its
+     parent, and data files load without one. Each project receives its own copy of the default stages when it is
+     created, so a task names its stage by project and stage name. Tasks sit in every stage, with priorities,
+     statuses and deadlines. The two subtasks give no project and take their parent's; the contact page subtask
+     gives no stage either and starts in the project's first unfolded stage.
+     No task is assigned: ERPForAll demo data ships no users of its own. -->
+<erp noupdate="1">
+  <record id="tag_demo_design" model="project.tags">
+    <field name="name">Design</field>
+    <field name="color">4</field>
+  </record>
+  <record id="tag_demo_operations" model="project.tags">
+    <field name="name">Operations</field>
+    <field name="color">2</field>
+  </record>
+  <record id="tag_demo_customer_review" model="project.tags">
+    <field name="name">Customer Review</field>
+    <field name="color">9</field>
+  </record>
+
+  <record id="project_demo_website" model="project.project">
+    <field name="name">Website Redesign</field>
+    <field name="partner_id" ref="base.partner_demo_griya_persada"/>
+    <field name="date_start">2026-11-02</field>
+    <field name="date">2027-01-29</field>
+    <field name="color">4</field>
+    <field name="sequence">10</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_design'), ref('tag_demo_customer_review')])]"/>
+    <field name="description" type="html"><p>A new public website for the interior studio: fresh page layouts, a lighter blog and a contact form.</p></field>
+  </record>
+  <record id="project_demo_warehouse" model="project.project">
+    <field name="name">Warehouse Move</field>
+    <field name="partner_id" ref="base.partner_demo_toko_maju"/>
+    <field name="date_start">2026-12-01</field>
+    <field name="date">2027-02-26</field>
+    <field name="color">2</field>
+    <field name="sequence">20</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_operations')])]"/>
+    <field name="description" type="html"><p>Move the store's stock to the new warehouse without stopping deliveries.</p></field>
+  </record>
+
+  <record id="task_demo_brief" model="project.task">
+    <field name="name">Collect the content brief</field>
+    <field name="project_id" ref="project_demo_website"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_website')), ('name', '=', 'Done')]"/>
+    <field name="partner_id" ref="base.partner_demo_griya_persada_wayan"/>
+    <field name="state">done</field>
+    <field name="date_deadline">2026-11-13</field>
+    <field name="sequence">10</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_customer_review')])]"/>
+  </record>
+  <record id="task_demo_wireframes" model="project.task">
+    <field name="name">Draw the page wireframes</field>
+    <field name="project_id" ref="project_demo_website"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_website')), ('name', '=', 'In Progress')]"/>
+    <field name="partner_id" ref="base.partner_demo_griya_persada"/>
+    <field name="priority">1</field>
+    <field name="date_deadline">2026-12-04</field>
+    <field name="sequence">20</field>
+    <field name="color">4</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_design')])]"/>
+    <field name="description" type="html"><p>One wireframe per page type. The customer reviews them together.</p></field>
+  </record>
+  <record id="task_demo_wireframes_home" model="project.task">
+    <field name="name">Home page wireframe</field>
+    <field name="parent_id" ref="task_demo_wireframes"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_website')), ('name', '=', 'In Progress')]"/>
+    <field name="state">approved</field>
+    <field name="date_deadline">2026-11-27</field>
+    <field name="sequence">21</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_design')])]"/>
+  </record>
+  <record id="task_demo_wireframes_contact" model="project.task">
+    <field name="name">Contact page wireframe</field>
+    <field name="parent_id" ref="task_demo_wireframes"/>
+    <field name="date_deadline">2026-12-02</field>
+    <field name="sequence">22</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_design')])]"/>
+  </record>
+  <record id="task_demo_hosting" model="project.task">
+    <field name="name">Choose the hosting plan</field>
+    <field name="project_id" ref="project_demo_website"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_website')), ('name', '=', 'New')]"/>
+    <field name="partner_id" ref="base.partner_demo_griya_persada"/>
+    <field name="state">changes_requested</field>
+    <field name="date_deadline">2026-12-11</field>
+    <field name="sequence">30</field>
+    <field name="description" type="html"><p>Waiting for the customer's budget for the yearly plan.</p></field>
+  </record>
+  <record id="task_demo_old_blog" model="project.task">
+    <field name="name">Migrate the old blog</field>
+    <field name="project_id" ref="project_demo_website"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_website')), ('name', '=', 'Cancelled')]"/>
+    <field name="state">cancelled</field>
+    <field name="sequence">40</field>
+    <field name="description" type="html"><p>Dropped: the customer starts the blog again from scratch.</p></field>
+  </record>
+
+  <record id="task_demo_stock_count" model="project.task">
+    <field name="name">Count the stock before the move</field>
+    <field name="project_id" ref="project_demo_warehouse"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_warehouse')), ('name', '=', 'New')]"/>
+    <field name="partner_id" ref="base.partner_demo_toko_maju"/>
+    <field name="priority">1</field>
+    <field name="date_deadline">2026-12-18</field>
+    <field name="sequence">10</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_operations')])]"/>
+  </record>
+  <record id="task_demo_trucks" model="project.task">
+    <field name="name">Book the trucks</field>
+    <field name="project_id" ref="project_demo_warehouse"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_warehouse')), ('name', '=', 'In Progress')]"/>
+    <field name="partner_id" ref="base.partner_demo_toko_maju"/>
+    <field name="date_deadline">2027-01-08</field>
+    <field name="sequence">20</field>
+    <field name="tag_ids" eval="[Command.set([ref('tag_demo_operations')])]"/>
+  </record>
+  <record id="task_demo_labels" model="project.task">
+    <field name="name">Print the new shelf labels</field>
+    <field name="project_id" ref="project_demo_warehouse"/>
+    <field name="stage_id" search="[('project_id', '=', ref('project_demo_warehouse')), ('name', '=', 'New')]"/>
+    <field name="date_deadline">2027-01-15</field>
+    <field name="sequence">30</field>
+  </record>
+</erp>

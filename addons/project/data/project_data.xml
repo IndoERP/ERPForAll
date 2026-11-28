@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- The template stages, in board order. They belong to no project: every new project gets its own copies
+     of them, so a change here applies to projects created afterwards. Done and Cancelled close the work, so
+     they are folded. noupdate keeps the changes an administrator makes. -->
+<erp noupdate="1">
+  <record id="task_type_new" model="project.task.type">
+    <field name="name">New</field>
+    <field name="sequence">10</field>
+  </record>
+  <record id="task_type_in_progress" model="project.task.type">
+    <field name="name">In Progress</field>
+    <field name="sequence">20</field>
+  </record>
+  <record id="task_type_done" model="project.task.type">
+    <field name="name">Done</field>
+    <field name="sequence">30</field>
+    <field name="fold" eval="True"/>
+  </record>
+  <record id="task_type_cancelled" model="project.task.type">
+    <field name="name">Cancelled</field>
+    <field name="sequence">40</field>
+    <field name="fold" eval="True"/>
+  </record>
+</erp>
