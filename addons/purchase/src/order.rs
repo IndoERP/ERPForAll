@@ -68,8 +68,9 @@ pub(crate) fn strip_default_context(env: &Env) -> Env {
     env.with_context_replaced(ctx)
 }
 
-/// Fields computed from the lines; never written by a client.
-const AMOUNT_FIELDS: [&str; 6] = [
+/// Derived amounts and pricing fields that a client may not supply.
+const AMOUNT_FIELDS: [&str; 7] = [
+    "currency_rate",
     "amount_untaxed",
     "amount_tax",
     "amount_total",
@@ -134,6 +135,10 @@ pub struct PurchaseOrder {
         string = "Currency"
     )]
     pub currency_id: Option<RecId>,
+    /// Units of order currency per unit of company currency on the UTC order day.
+    #[field(float, digits = (28, 12), compute = "_compute_currency_rate", store = true,
+        readonly = true, copy = false, string = "Currency Rate")]
+    pub currency_rate: Decimal,
     /// RFQ, RFQ sent, to approve, purchase order or cancelled; only the operations change it.
     #[field(
         selection,
@@ -319,6 +324,65 @@ pub struct PurchaseOrder {
 
 #[methods(PurchaseOrder, addon = "purchase")]
 impl PurchaseOrder {
+    /// Snapshot on changes to the order's pricing inputs, independently of later rate-table edits.
+    #[compute(depends = ["currency_id", "company_id", "date_order"])]
+    async fn _compute_currency_rate(
+        this: &RecordSet<PurchaseOrder>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, PurchaseOrder>,
+    ) -> Result<()> {
+        use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RateBook};
+        use erp_sdk::money::{Increment, RateDateRule};
+        let companies = this.mapped(tx, PurchaseOrder::COMPANY_ID).await?;
+        let references = this.mapped(tx, PurchaseOrder::COMPANY_CURRENCY_ID).await?;
+        let currencies = this.mapped(tx, PurchaseOrder::CURRENCY_ID).await?;
+        let dates = this.mapped(tx, PurchaseOrder::DATE_ORDER).await?;
+        let precision = Increment::from_places(12)?;
+        let mut rates = BTreeMap::new();
+        for (index, (((company, reference), currency), date)) in companies
+            .into_iter()
+            .zip(references)
+            .zip(currencies)
+            .zip(dates)
+            .enumerate()
+        {
+            let rate = match (company, reference, currency, date) {
+                (_, Some(reference), Some(currency), _) if currency == reference => Decimal::ONE,
+                (Some(company), Some(reference), Some(currency), Some(date)) => {
+                    let key = (company, reference, currency, date.date());
+                    if let Some(&rate) = rates.get(&key) {
+                        rate
+                    } else {
+                        let book = RateBook::load(
+                            this.env(),
+                            tx,
+                            company,
+                            date.date(),
+                            RateDateRule::StrictlyBefore,
+                            &[reference, currency],
+                        )
+                        .await?;
+                        let rate = book
+                            .snapshot(reference, currency)?
+                            .factor()?
+                            .quantize(&precision, CURRENCY_ROUNDING_MODE)?;
+                        if rate <= Decimal::ZERO {
+                            return Err(Error::validation(
+                                "Purchase order exchange rate is below the supported precision.",
+                            ));
+                        }
+                        rates.insert(key, rate);
+                        rate
+                    }
+                }
+                // Unsaved forms may still lack one of the required pricing inputs.
+                _ => Decimal::ZERO,
+            };
+            out.set(index, PurchaseOrder::CURRENCY_RATE, rate)?;
+        }
+        Ok(())
+    }
+
     /// Live `onchange` for `purchase.order`: recomputes in-memory line subtotals, order totals
     /// (`amount_untaxed`, `amount_tax`, `amount_total`, `amount_total_cc`) and earliest
     /// `date_planned` before Save.

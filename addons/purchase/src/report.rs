@@ -2,7 +2,7 @@
 //! Purchase Report provider (`purchase.purchase_report`): vendor -> purchase orders, read through
 //! the ORM as the caller (record rules and field groups apply), one company and one period,
 //! confirmed orders only (requests for quotation and cancelled orders are left out), amounts in
-//! the company currency only, orders paged per vendor. An expected arrival before the caller's
+//! the company currency at each order's stored rate, orders paged per vendor. An expected arrival before the caller's
 //! today with quantities still to receive carries the danger tone.
 //!
 //! Period: `date_order` is a datetime; the period's days are compared as dates, which the domain
@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, CurrencyRounding, RoundingTable};
 use erp_addon_reporting::{
     definition::ReportDef,
     line::{
@@ -19,12 +20,13 @@ use erp_addon_reporting::{
     options::Options,
     provider::{ProviderSpec, ReportCx, ReportProvider},
 };
+use erp_sdk::money::{ExactRatio, Increment};
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::{Value as Json, json};
 use erp_sdk::{BoxFuture, Load, SearchOptions};
 
 pub(crate) struct PurchaseReport;
-const SPEC: ProviderSpec = ProviderSpec::new("purchase.purchase_report", 2);
+const SPEC: ProviderSpec = ProviderSpec::new("purchase.purchase_report", 3);
 const ORDER: &str = "purchase.order";
 /// The states the report leaves out: requests for quotation and cancelled orders (the same
 /// condition as "Purchases by Product").
@@ -199,20 +201,46 @@ struct Sums {
 }
 
 impl Sums {
-    fn add(&mut self, other: Sums) {
-        self.ordered += other.ordered;
-        self.received += other.received;
-        self.billed += other.billed;
-        self.untaxed += other.untaxed;
-        self.total += other.total;
+    fn add(&mut self, other: Sums) -> Result<()> {
+        let add = |a: Decimal, b| {
+            a.checked_add(b)
+                .ok_or_else(|| invalid("A Purchase Report total is out of range."))
+        };
+        self.ordered = add(self.ordered, other.ordered)?;
+        self.received = add(self.received, other.received)?;
+        self.billed = add(self.billed, other.billed)?;
+        self.untaxed = add(self.untaxed, other.untaxed)?;
+        self.total = add(self.total, other.total)?;
+        Ok(())
     }
+}
+
+/// Round each purchase order before adding its amounts to its vendor and report totals.
+fn converted_amounts(
+    untaxed: Decimal,
+    total: Decimal,
+    rate: Decimal,
+    increment: &Increment,
+    id: i64,
+) -> Result<Sums> {
+    if rate <= Decimal::ZERO {
+        return Err(invalid(format!(
+            "Purchase order #{id} has a missing or non-positive stored currency rate."
+        )));
+    }
+    let convert =
+        |amount| ExactRatio::quotient(amount, rate)?.quantize(increment, CURRENCY_ROUNDING_MODE);
+    Ok(Sums {
+        untaxed: convert(untaxed)?,
+        total: convert(total)?,
+        ..Sums::default()
+    })
 }
 
 struct Layout {
     cols: Vec<Col>,
     scope: Scope,
-    currency: i64,
-    scale: u32,
+    currency: CurrencyRounding,
 }
 
 impl Layout {
@@ -238,37 +266,36 @@ impl Layout {
             Value::Int(id) if id > 0 => id,
             _ => return Err(invalid("The Purchase Report company has no currency.")),
         };
-        let rows = env
-            .records("res.currency")?
-            .browse([currency])?
-            .read_rows(cx.tx(), &["decimal_places"], Load::Raw)
-            .await?;
-        let row = rows
-            .iter()
-            .next()
-            .map(Value::Row)
-            .ok_or_else(|| invalid("The Purchase Report company currency is not visible."))?;
-        let scale = u32::try_from(int_field(&row, "decimal_places")?)
-            .map_err(|_| invalid("The Purchase Report currency precision is invalid."))?;
-        // only the total has a company-currency amount (amount_total_cc), the untaxed amount has
-        // none: never add amounts of two currencies
-        let foreign = cond(orders_json(&scope))? & cond(json!([["currency_id", "!=", currency]]))?;
-        if env
-            .records(ORDER)?
-            .search_count(cx.tx(), &foreign, Some(1))
+        let id = RecId::from_real(currency)
+            .ok_or_else(|| invalid("The Purchase Report company currency is invalid."))?;
+        let currency = RoundingTable::load(&env, cx.tx(), &[id])
             .await?
-            > 0
-        {
-            return Err(invalid(
-                "The Purchase Report has orders in another currency than the company's in this period; it does not add amounts of different currencies. Narrow the period or use the purchase analysis.",
-            ));
-        }
+            .get(id)?
+            .clone();
         Ok(Self {
             cols,
             scope,
             currency,
-            scale,
         })
+    }
+
+    fn amounts(&self, row: &Value) -> Result<Sums> {
+        let untaxed = dec_field(row, "amount_untaxed")?;
+        let total = dec_field(row, "amount_total")?;
+        if int_field(row, "currency_id")? == self.currency.id() {
+            return Ok(Sums {
+                untaxed,
+                total,
+                ..Sums::default()
+            });
+        }
+        converted_amounts(
+            untaxed,
+            total,
+            dec_field(row, "currency_rate")?,
+            self.currency.increment(),
+            int_field(row, "id")?,
+        )
     }
 
     fn cells(
@@ -279,7 +306,8 @@ impl Layout {
         drillable: bool,
     ) -> Vec<ReportCell> {
         let money = |v: Option<Decimal>| {
-            ReportCell::monetary(v, self.scale, Some(self.currency)).with_drillable(drillable)
+            ReportCell::monetary(v, self.currency.decimal_places(), Some(self.currency.id()))
+                .with_drillable(drillable)
         };
         self.cols
             .iter()
@@ -376,14 +404,17 @@ async fn top_lines(
     let layout = Layout::load(cx, report, options).await?;
     let env = cx.env().clone();
     let limit = cx.bounds().max_screen_lines;
-    let groups = env
-        .records(ORDER)?
+    let orders = env.records(ORDER)?;
+    let domain = cond(orders_json(&layout.scope))?;
+    let groups = orders
         ._read_group(
             cx.tx(),
-            ReadGroup::new(cond(orders_json(&layout.scope))?)
-                .groupby(["partner_id"])
-                .aggregates(["amount_untaxed:sum", "amount_total:sum"])
-                .limit(limit as u64 + 1),
+            ReadGroup::new(
+                domain.clone() & cond(json!([["currency_id", "=", layout.currency.id()]]))?,
+            )
+            .groupby(["partner_id"])
+            .aggregates(["amount_untaxed:sum", "amount_total:sum"])
+            .limit(limit as u64 + 1),
         )
         .await?;
     if groups.len() > limit {
@@ -391,14 +422,63 @@ async fn top_lines(
             "The Purchase Report has more vendors than reporting.max_screen_lines allows; narrow the period.",
         ));
     }
-    if groups.is_empty() {
-        return Ok(Expansion::new(Vec::new()));
-    }
     let mut by_partner: BTreeMap<Option<i64>, Sums> = BTreeMap::new();
     for row in groups.rows() {
         let sums = by_partner.entry(group_id(row.first())).or_default();
         sums.untaxed = num(row.get(1))?;
         sums.total = num(row.get(2))?;
+    }
+    // Domestic orders aggregate in SQL. Foreign orders need rounding before aggregation.
+    let foreign = domain
+        & cond(json!([
+            "|",
+            ["currency_id", "!=", layout.currency.id()],
+            ["currency_id", "=", false]
+        ]))?;
+    let mut after = None;
+    let paging = SearchOptions::new().order("id asc").limit(512);
+    loop {
+        let page = orders
+            .search_after(cx.tx(), &foreign, &paging, after.as_ref())
+            .await?;
+        let rows = page
+            .records
+            .read_rows(
+                cx.tx(),
+                &[
+                    "id",
+                    "partner_id",
+                    "currency_id",
+                    "currency_rate",
+                    "amount_untaxed",
+                    "amount_total",
+                ],
+                Load::Raw,
+            )
+            .await?;
+        for row in rows.iter().map(Value::Row) {
+            let vendor = match get(&row, "partner_id")? {
+                Value::Int(id) => Some(id),
+                Value::False => None,
+                _ => return Err(Error::internal("Invalid vendor in the Purchase Report.")),
+            };
+            by_partner
+                .entry(vendor)
+                .or_default()
+                .add(layout.amounts(&row)?)?;
+            if by_partner.len() > limit {
+                return Err(invalid(
+                    "The Purchase Report has more vendors than reporting.max_screen_lines allows; narrow the period.",
+                ));
+            }
+        }
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    if by_partner.is_empty() {
+        return Ok(Expansion::new(Vec::new()));
     }
     let qty_groups = env
         .records("purchase.order.line")?
@@ -451,7 +531,7 @@ async fn top_lines(
     let mut grand = Sums::default();
     let mut lines = Vec::with_capacity(ordered.len() + 1);
     for (pid, name, sums) in ordered {
-        grand.add(sums);
+        grand.add(sums)?;
         let mut line = Line::new(
             root.child(partner_segment(pid)),
             name,
@@ -517,6 +597,8 @@ async fn expand_partner(
                 "name",
                 "date_order",
                 "date_planned",
+                "currency_id",
+                "currency_rate",
                 "amount_untaxed",
                 "amount_total",
             ],
@@ -551,8 +633,7 @@ async fn expand_partner(
             .ok_or_else(|| Error::internal(format!("Purchase order {oid} has no order date.")))?;
         let planned = local_date(&row, "date_planned", &tz)?;
         let mut sums = quantities.get(&oid).copied().unwrap_or_default();
-        sums.untaxed = dec_field(&row, "amount_untaxed")?;
-        sums.total = dec_field(&row, "amount_total")?;
+        sums.add(layout.amounts(&row)?)?;
         let overdue = planned.is_some_and(|d| d < today) && sums.received < sums.ordered;
         let mut line = Line::new(
             id.child(Segment::group("order_id", ORDER, &oid.to_string())),
@@ -720,4 +801,37 @@ async fn confirmed_orders_by_product(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod currency_tests {
+    use super::*;
+
+    #[test]
+    fn vendor_total_adds_individually_rounded_orders_at_their_own_rates() -> Result<()> {
+        let cents = Increment::from_places(2)?;
+        let mut vendor = Sums {
+            untaxed: Decimal::from(10),
+            total: Decimal::from(11),
+            ..Sums::default()
+        };
+        for (rate, expected) in [(80, 13), (88, 11)] {
+            let fx = converted_amounts(
+                Decimal::new(-10, 2),
+                Decimal::new(3, 2),
+                Decimal::new(rate, 2),
+                &cents,
+                9,
+            )?;
+            assert_eq!(fx.untaxed, Decimal::new(-expected, 2));
+            vendor.add(fx)?;
+        }
+        assert_eq!(vendor.untaxed, Decimal::new(976, 2));
+        assert_eq!(vendor.total, Decimal::new(1107, 2));
+        for rate in [Decimal::ZERO, Decimal::NEGATIVE_ONE] {
+            let error = converted_amounts(Decimal::ZERO, Decimal::ONE, rate, &cents, 91).err();
+            assert!(error.is_some_and(|e| e.to_string().contains("order #91")));
+        }
+        Ok(())
+    }
 }

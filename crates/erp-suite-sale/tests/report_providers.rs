@@ -86,7 +86,7 @@ fn run(body: impl std::future::Future<Output = ()> + Send + 'static) {
 }
 
 async fn installed() -> (TestDb, Orm) {
-    let db = TemplateDb::clone_or_init("erp-suite-sale:report-providers:v1", |pool| async move {
+    let db = TemplateDb::clone_or_init("erp-suite-sale:report-providers:v2", |pool| async move {
         let system = system_for_pool(pool);
         let initialized = Box::pin(system.initialize(InitOptions::new()))
             .await
@@ -221,6 +221,7 @@ struct Fixture {
     po_late: i64,
     /// Confirmed, expected 2099.
     po_future: i64,
+    po_draft: i64,
     sales: i64,
     purchases: i64,
     purchases_by_product: i64,
@@ -353,7 +354,8 @@ async fn setup() -> Fixture {
         purchase_order(&mut tx, company, vendor, bolt, "7", "2026-03-20 08:00:00").await;
     call(&mut tx, "purchase.order", po_cancel, "button_cancel").await;
     // a request for quotation stays a draft
-    purchase_order(&mut tx, company, vendor, bolt, "11", "2026-03-20 08:00:00").await;
+    let po_draft =
+        purchase_order(&mut tx, company, vendor, bolt, "11", "2026-03-20 08:00:00").await;
 
     let sales = xmlid(&mut tx, "sale", "report_sales_ledger").await;
     let purchases = xmlid(&mut tx, "purchase", "report_purchase_ledger").await;
@@ -377,6 +379,7 @@ async fn setup() -> Fixture {
         bolt,
         po_late,
         po_future,
+        po_draft,
         sales,
         purchases,
         purchases_by_product,
@@ -580,12 +583,12 @@ fn margin_columns_follow_their_group() {
     });
 }
 
-/// Sales converts each order at its recorded rate; Purchase retains its company-currency restriction.
+/// Both providers reconcile mixed-currency detail rows to partner and grand totals.
 #[test]
-fn sales_converts_foreign_orders_while_purchase_rejects_them() {
+fn sales_and_purchase_convert_foreign_orders_at_their_recorded_rates() {
     run(async {
         let f = setup().await;
-        let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
+        let mut tx = f.installed.begin(SUPERUSER_ID).await.unwrap();
         let foreign = tx
             .query(
                 "SELECT c.id::int8 FROM res_currency c, res_company k \
@@ -601,12 +604,47 @@ fn sales_converts_foreign_orders_while_purchase_rejects_them() {
         )
         .await
         .unwrap();
-        tx.execute(
-            "UPDATE purchase_order SET currency_id=$1 WHERE id=$2",
-            &[&foreign, &f.po_late],
+        let dated_rate = create(
+            &mut tx,
+            f.company,
+            "res.currency.rate",
+            RawVals::new()
+                .set_cell(
+                    "name",
+                    Cell::Date(erp_fields::Date::from_ymd(2026, 3, 9).unwrap()),
+                )
+                .set_cell("company_id", Cell::Id(f.company))
+                .set_cell("currency_id", Cell::Id(foreign))
+                .set_cell("rate", Cell::Decimal(dec("0.80"))),
+        )
+        .await;
+        let env = tx.env().with_company(f.company).unwrap();
+        let rfq = env
+            .records("purchase.order")
+            .unwrap()
+            .browse([f.po_draft])
+            .unwrap();
+        rfq.write(
+            &mut tx,
+            RawVals::new().set_cell("currency_id", Cell::Id(foreign)),
         )
         .await
         .unwrap();
+        call(&mut tx, "purchase.order", f.po_draft, "button_confirm").await;
+        assert_eq!(
+            rfq.cell(&mut tx, "currency_rate").await.unwrap(),
+            Cell::Decimal(dec("0.80"))
+        );
+        env.records("res.currency.rate")
+            .unwrap()
+            .browse([dated_rate])
+            .unwrap()
+            .write(
+                &mut tx,
+                RawVals::new().set_cell("rate", Cell::Decimal(dec("0.50"))),
+            )
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         drop(tx);
 
@@ -637,10 +675,26 @@ fn sales_converts_foreign_orders_while_purchase_rejects_them() {
         drop(tx);
         let (mut tx, env) = as_user(&f, f.buyer).await;
         let opts = options(&f, &env, &mut tx, f.purchases).await;
-        refused(
-            runtime::report_lines(&env, &mut tx, &opts).await,
-            "The Purchase Report has orders in another currency than the company's",
+        let top = lines(&runtime::report_lines(&env, &mut tx, &opts).await.unwrap());
+        let vendor = ends_with(&top, &partner_suffix(f.vendor)).unwrap();
+        let detail = lines(
+            &runtime::report_expand(&env, &mut tx, &opts, vendor["id"].as_str().unwrap(), 0)
+                .await
+                .unwrap(),
         );
+        let fx = ends_with(&detail, &order_suffix("purchase.order", f.po_draft)).unwrap();
+        for (col, field) in [("untaxed", "amount_untaxed"), ("total", "amount_total")] {
+            let index = column(&opts, col);
+            let converted = (orm_sum(&mut tx, "purchase.order", &[f.po_draft], field).await
+                / dec("0.80"))
+            .round_dp(2);
+            let domestic =
+                orm_sum(&mut tx, "purchase.order", &[f.po_late, f.po_future], field).await;
+            assert_eq!(amount(&fx, index), converted);
+            assert!(converted > Decimal::ZERO);
+            assert_eq!(amount(&vendor, index), domestic + converted);
+            assert_eq!(amount(top.last().unwrap(), index), domestic + converted);
+        }
         tx.rollback().await.unwrap();
         f.db.cleanup().await.unwrap();
     });
