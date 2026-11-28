@@ -2676,6 +2676,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "erp-suite-project"
+version = "0.1.0"
+dependencies = [
+ "erp-addon-account",
+ "erp-addon-account-mail",
+ "erp-addon-account-reporting",
+ "erp-addon-analytic",
+ "erp-addon-approvals",
+ "erp-addon-barcodes",
+ "erp-addon-barcodes_gs1_nomenclature",
+ "erp-addon-base",
+ "erp-addon-hr",
+ "erp-addon-mail",
+ "erp-addon-product",
+ "erp-addon-product-mail",
+ "erp-addon-project",
+ "erp-addon-purchase",
+ "erp-addon-purchase-mail",
+ "erp-addon-purchase_stock",
+ "erp-addon-reporting",
+ "erp-addon-sale",
+ "erp-addon-sale_stock",
+ "erp-addon-sales_team",
+ "erp-addon-stock",
+ "erp-addon-stock-mail",
+ "erp-addon-stock_account",
+ "erp-addon-uom",
+ "erp-addon-valuation",
+ "erp-addon-web",
+ "erp-data",
+ "erp-fields",
+ "erp-modules",
+ "erp-orm",
+ "erp-sdk",
+ "erp-security",
+ "erp-testkit",
+ "erp-views",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "erp-suite-sale"
 version = "0.1.0"
 dependencies = [

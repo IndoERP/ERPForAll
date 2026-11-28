@@ -1,0 +1,51 @@
+[package]
+name = "erp-suite-project"
+description = "L13 domain integration test suite for the project addon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+erp-addon-account = { workspace = true }
+erp-addon-account-mail = { workspace = true }
+erp-addon-account-reporting = { workspace = true }
+erp-addon-analytic = { workspace = true }
+erp-addon-approvals = { workspace = true }
+erp-addon-barcodes = { workspace = true }
+erp-addon-barcodes_gs1_nomenclature = { workspace = true }
+erp-addon-base = { workspace = true }
+erp-addon-hr = { workspace = true }
+erp-addon-mail = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-product-mail = { workspace = true }
+erp-addon-project = { workspace = true }
+erp-addon-purchase = { workspace = true }
+erp-addon-purchase-mail = { workspace = true }
+erp-addon-purchase_stock = { workspace = true }
+erp-addon-reporting = { workspace = true }
+erp-addon-sale = { workspace = true }
+erp-addon-sale_stock = { workspace = true }
+erp-addon-sales_team = { workspace = true }
+erp-addon-stock = { workspace = true }
+erp-addon-stock-mail = { workspace = true }
+erp-addon-stock_account = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-valuation = { workspace = true }
+erp-addon-web = { workspace = true, features = ["test-support"] }
+erp-data = { workspace = true }
+erp-fields = { workspace = true }
+erp-modules = { workspace = true }
+erp-orm = { workspace = true }
+erp-sdk = { workspace = true }
+erp-security = { workspace = true, features = ["test-support"] }
+erp-testkit = { workspace = true }
+erp-views = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+tokio-postgres = { workspace = true }
+
+[lints]
+workspace = true
