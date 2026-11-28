@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_crm_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "crm"
+  ],
+  "docs": [
+    {
+      "page_id": "user/crm-leads-and-pipeline",
+      "title": "CRM Leads, Pipeline, Opportunities, Forecasting, and Quotations",
+      "module": "crm",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "The **CRM** application (crm and sale_crm) manages your pre-sales funnel from first inbound enquiry to won quotation: capturing leads from **CRM Overview**, qualifying and scoring opportunities across configurable pipeline stages, tracking sales quotas and conversion reports, and generating **Sales Quotations** directly from an opportunity."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "* **Salesperson (sales_team.group_sale_salesman)**: Opens **CRM Overview**, submits leads, manages assigned leads and opportunities across pipeline stages, links **Business Accounts** and **Contacts**, and creates quotations from deals. * **Sales Manager (sales_team.group_sale_manager)**: Configures **Pipelines**, **Stages**, **Sales Teams**, **Assignment and Scoring Rules**, and **Sales Quotas** under **CRM → Configuration**, and reviews team-wide forecast and conversion reports."
+        },
+        {
+          "anchor": "crm-overview-and-submit-lead",
+          "text": "Clicking **CRM** in the sidebar opens **CRM Overview** (CRM → Overview), giving every salesperson an operational landing dashboard: 1. Review live summary cards for **Open leads**, **Open opportunities**, and **Follow-ups due**, alongside **Pipeline by stage** counts per sales pipeline and **My follow-ups**. 2. Click **+ Submit Lead** directly in the **CRM Overview** header to open the **Submit Lead** modal wizard without leaving the dashboard: * Enter **Enquiry or lead name**, optional **Business Name**, **Contact Name**, **Email**, and **Phone**. * Verify **Company**, choose **Source**, **Region**, and **Next Step**, then click **Submit Lead**. 3. ERPForAll creates the lead immediately, evaluates active **Assignment and Scoring Rules** to calculate its **Lead Score** and assign the right **Sales Team**, and updates the dashboard counters. ![CRM Overview brings together open lead and opportunity counters, pipeline stage summaries, personal follow-ups, and one-click lead submission.](/en/next/assets/docs/assets/user-manual/sales/crm-overview.webp)"
+        },
+        {
+          "anchor": "pipeline-and-opportunities",
+          "text": "1. Open **CRM → Leads** to triage incoming enquiries by **Lead Score**, **Source**, **Sales Team**, and **Next Activity**. Convert a qualified enquiry into an opportunity so it enters the sales funnel. 2. Open **CRM → Pipeline** (or **CRM → All Opportunities**) to manage active deals across **Kanban**, **List**, **Pivot**, and **Graph** views: * Track **Expected Revenue**, **Probability**, **Stage** (for example, *Prospecting*, *Qualification*, *Proposal*, *Negotiation*), **Expected Close**, and **Salesperson**. * Link each deal to a **Business Account** (**CRM → Business Accounts**) and individual **Contacts** (**CRM → Contacts**) so every quotation and invoice shares clean master data. * Use **Chatter** and **Activities** on any lead or opportunity to log call notes, schedule follow-ups, and attach proposals (supporting streaming HTTP uploads up to 128 MiB). ![The CRM Pipeline tracks open deals, customers, stages, expected revenue, closing dates, and deal state across list and kanban views.](/en/next/assets/docs/assets/user-manual/sales/crm-pipeline.webp)"
+        },
+        {
+          "anchor": "quotations-from-opportunities",
+          "text": "When sale_crm is installed, salespeople convert active opportunities directly into commercial quotes: 1. Open an opportunity in **CRM → Pipeline** (or **All Opportunities**) and click **New Quotation**. 2. ERPForAll opens a pre-filled **Sales Quotation** linked to the opportunity's customer, sales team, and salesperson. 3. Add product lines, apply pricelists or quotation templates, and confirm the order when won (see [Sales Quotations, Order Fulfillment, Invoicing, and Returns](/en/next/user/work-with-customers.md)). 4. Return to the opportunity at any time to monitor linked quotations via its smart button and mark the deal **Won** or record a structured loss reason when **Lost**."
+        },
+        {
+          "anchor": "rules-and-reporting",
+          "text": "* **Assignment and Scoring Rules** (**CRM → Configuration → Assignment and Scoring Rules**): Define ordered rules matching **Lead Source** and **Region** to assign leads automatically to a **Sales Team** and award **Score Points**. * **Pipelines, Stages & Quotas** (**CRM → Configuration**): Customize **Pipelines**, **Stages**, **Sales Teams**, and periodic **Sales Quotas**. * **CRM Reporting** (**CRM → Reporting**): Monitor commercial execution through **Sales Forecast**, **Quota Attainment**, **Pipeline Analysis**, **Sales Conversion**, **Lost Opportunities**, **Time in Stage**, and **Forecast Changes**. ![Assignment and Scoring Rules automatically route incoming leads to sales teams and compute lead scores by source and region.](/en/next/assets/docs/assets/user-manual/sales/crm-lead-rules.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Lead Not Assigned Automatically**: Open **CRM → Configuration → Assignment and Scoring Rules**, confirm the rule is **Active**, and check its **Sequence**, **Match Lead Source**, and **Match Region** values. * **CRM Menu Missing**: Verify the crm (and sale_crm) addons are installed and that your user account holds at least the **Salesperson** role under **Settings → Users & Companies → Users**."
+        }
+      ]
+    }
+  ]
+}

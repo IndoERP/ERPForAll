@@ -18,7 +18,7 @@
         },
         {
           "anchor": "top",
-          "text": "The native **Approvals** application lets organizations enforce multi-step governance over sensitive write and destructive ERP operations—such as confirming high-value orders, posting entries, or approving automated agent actions—while giving every internal user a clear **Requests** inbox to review, track, and audit decisions. > **Installation note**: **Approvals** ships as a native addon (approvals). Administrators can install it from the module manager or via CLI (--install approvals). Once installed, the **Approvals** app appears in the App Switcher with **Requests** (for internal users) and **Workflows** (for administrators)."
+          "text": "The native **Approvals** application lets organizations enforce multi-step governance over sensitive write and destructive ERP operations—such as confirming high-value orders, posting entries, or approving automated agent actions—while giving every internal user a clear **Requests** inbox to review, track, and audit decisions. > **Installation note**: **Approvals** ships as a native addon (approvals). Administrators can install it from the module manager or via CLI (--install approvals). Once installed, clicking **Approvals** in the sidebar opens directly on **Approvals Overview**, alongside **Requests** (for internal users) and **Workflows** (for administrators)."
         },
         {
           "anchor": "roles-and-access",

@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_crm_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "crm"
+  ],
+  "docs": [
+    {
+      "page_id": "user/crm-leads-and-pipeline",
+      "title": "CRM: Prospek (Leads), Pipeline, Peluang, Prakiraan, dan Penawaran",
+      "module": "crm",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Aplikasi **CRM** (crm dan sale_crm) mengelola corong pra-penjualan dari pertanyaan masuk pertama hingga penawaran dimenangkan: mencatat prospek dari **CRM Overview**, mengkualifikasi serta memberi skor peluang lintas tahap pipeline yang dapat disesuaikan, memantau kuota dan laporan konversi, serta membuat **Penawaran Penjualan (Sales Quotations)** langsung dari peluang."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "* **Salesperson (sales_team.group_sale_salesman)**: Membuka **CRM Overview**, mengirim prospek baru, mengelola prospek dan peluang pada tahap pipeline, menautkan **Business Accounts** dan **Contacts**, serta membuat penawaran dari peluang. * **Sales Manager (sales_team.group_sale_manager)**: Mengatur **Pipelines**, **Stages**, **Sales Teams**, **Assignment and Scoring Rules**, dan **Sales Quotas** di **CRM → Configuration**, serta meninjau laporan prakiraan dan konversi tim."
+        },
+        {
+          "anchor": "crm-overview-and-submit-lead",
+          "text": "Mengklik **CRM** di bilah samping langsung membuka **CRM Overview** (CRM → Overview) sebagai dasbor operasional bagi setiap tenaga penjual: 1. Tinjau kartu ringkasan langsung **Open leads**, **Open opportunities**, dan **Follow-ups due**, berdampingan dengan ringkasan **Pipeline by stage** per pipeline dan daftar **My follow-ups**. 2. Klik **+ Submit Lead** langsung di header **CRM Overview** untuk membuka dialog wizard **Submit Lead** tanpa meninggalkan dasbor: * Isi **Enquiry or lead name**, serta opsional **Business Name**, **Contact Name**, **Email**, dan **Phone**. * Pastikan **Company**, pilih **Source**, **Region**, dan **Next Step**, lalu klik **Submit Lead**. 3. ERPForAll langsung mencatat prospek tersebut, menjalankan **Assignment and Scoring Rules** aktif untuk menghitung **Lead Score** serta menetapkan **Sales Team**, lalu memperbarui angka dasbor. ![CRM Overview menyatukan penghitung prospek dan peluang terbuka, ringkasan tahap pipeline, tindak lanjut pribadi, serta tombol Submit Lead satu klik.](/id/next/assets/docs/assets/user-manual/sales/crm-overview.webp)"
+        },
+        {
+          "anchor": "pipeline-and-opportunities",
+          "text": "1. Buka **CRM → Leads** untuk menyaring pertanyaan masuk berdasarkan **Lead Score**, **Source**, **Sales Team**, dan **Next Activity**. Ubah prospek terkualifikasi menjadi peluang agar masuk ke pipeline penjualan. 2. Buka **CRM → Pipeline** (atau **CRM → All Opportunities**) untuk mengelola kesepakatan aktif melalui tampilan **Kanban**, **List**, **Pivot**, dan **Graph**: * Pantau **Expected Revenue**, **Probability**, **Stage** (misalnya *Prospecting*, *Qualification*, *Proposal*, *Negotiation*), **Expected Close**, dan **Salesperson**. * Tautkan setiap kesepakatan ke **Business Account** (**CRM → Business Accounts**) dan **Contacts** (**CRM → Contacts**) agar penawaran dan faktur berbagi data master yang rapi. * Gunakan **Chatter** dan **Activities** pada prospek atau peluang untuk mencatat hasil panggilan, menjadwalkan tindak lanjut, serta melampirkan proposal (mendukung unggah HTTP streaming hingga 128 MiB). ![CRM Pipeline melacak peluang terbuka, pelanggan, tahap, perkiraan pendapatan, tanggal penutupan, dan status kesepakatan pada tampilan daftar maupun kanban.](/id/next/assets/docs/assets/user-manual/sales/crm-pipeline.webp)"
+        },
+        {
+          "anchor": "quotations-from-opportunities",
+          "text": "Saat sale_crm terpasang, tenaga penjual dapat mengubah peluang aktif langsung menjadi penawaran komersial: 1. Buka peluang di **CRM → Pipeline** (atau **All Opportunities**) lalu klik **New Quotation**. 2. ERPForAll membuka draf **Sales Quotation** yang otomatis terisi pelanggan, tim penjualan, dan tenaga penjual dari peluang terkait. 3. Tambahkan baris produk, terapkan daftar harga atau template penawaran, lalu konfirmasi pesanan saat disepakati (lihat [Penawaran Penjualan, Pengiriman, Penagihan Faktur, dan Retur](/id/next/user/work-with-customers.md)). 4. Kembali ke peluang kapan saja untuk memantau penawaran tertaut melalui tombol pintarnya, lalu tandai **Won** saat menang atau catat alasan kekalahan terstruktur saat **Lost**."
+        },
+        {
+          "anchor": "rules-and-reporting",
+          "text": "* **Assignment and Scoring Rules** (**CRM → Configuration → Assignment and Scoring Rules**): Tetapkan aturan berurutan berdasarkan **Lead Source** dan **Region** untuk menugaskan prospek secara otomatis ke **Sales Team** dan menambahkan **Score Points**. * **Pipelines, Stages & Quotas** (**CRM → Configuration**): Sesuaikan **Pipelines**, **Stages**, **Sales Teams**, dan **Sales Quotas** berkala. * **CRM Reporting** (**CRM → Reporting**): Pantau kinerja komersial melalui **Sales Forecast**, **Quota Attainment**, **Pipeline Analysis**, **Sales Conversion**, **Lost Opportunities**, **Time in Stage**, dan **Forecast Changes**. ![Assignment and Scoring Rules merutekan prospek masuk ke tim penjualan secara otomatis sekaligus menghitung skor prospek berdasarkan sumber dan wilayah.](/id/next/assets/docs/assets/user-manual/sales/crm-lead-rules.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Prospek Tidak Tertugas Otomatis**: Buka **CRM → Configuration → Assignment and Scoring Rules**, pastikan aturan berstatus **Active**, serta periksa **Sequence**, **Match Lead Source**, dan **Match Region**. * **Menu CRM Tidak Muncul**: Pastikan addon crm (dan sale_crm) sudah terpasang serta akun pengguna memiliki minimal peran **Salesperson** di **Settings → Users & Companies → Users**."
+        }
+      ]
+    }
+  ]
+}

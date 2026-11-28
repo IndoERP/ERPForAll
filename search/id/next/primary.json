@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 28,
+  "doc_count": 29,
   "docs": [
     {
       "id": "user/accounting-bank-reconciliation",
@@ -458,7 +458,7 @@
         {
           "id": "ai-workspace-safe-drafts",
           "depth": 2,
-          "text": "Menggunakan Ruang Kerja Asisten AI"
+          "text": "Menggunakan AI Assistant, Canvas Studio, Saved Insights, dan Implementation Projects"
         },
         {
           "id": "failure-recovery",
@@ -467,6 +467,49 @@
         }
       ],
       "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/crm-leads-and-pipeline",
+      "title": "CRM: Prospek (Leads), Pipeline, Peluang, Prakiraan, dan Penawaran",
+      "description": "Mencatat dan memberi skor prospek dari CRM Overview, mengelola peluang lintas tahap pipeline, mengatur aturan penugasan & skor, memantau prakiraan dan kuota, serta membuat Penawaran Penjualan langsung dari peluang.",
+      "audience": "functional",
+      "module": "crm",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran"
+        },
+        {
+          "id": "crm-overview-and-submit-lead",
+          "depth": 2,
+          "text": "Memulai dari CRM Overview dan Mengirim Prospek"
+        },
+        {
+          "id": "pipeline-and-opportunities",
+          "depth": 2,
+          "text": "Mengkualifikasi Prospek dan Mengelola Pipeline"
+        },
+        {
+          "id": "quotations-from-opportunities",
+          "depth": 2,
+          "text": "Membuat Penawaran Penjualan dari Peluang"
+        },
+        {
+          "id": "rules-and-reporting",
+          "depth": 2,
+          "text": "Aturan Penugasan, Kuota, dan Pelaporan CRM"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Alur Kerja CRM"
+        }
+      ],
+      "shard_id": "shard_functional_crm_1"
     },
     {
       "id": "user/data-import-and-export",

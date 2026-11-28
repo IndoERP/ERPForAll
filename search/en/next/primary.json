@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 134,
+  "doc_count": 135,
   "docs": [
     {
       "id": "index",
@@ -6779,7 +6779,7 @@
         {
           "id": "ai-workspace-safe-drafts",
           "depth": 2,
-          "text": "Using the AI Assistant Workspace"
+          "text": "Using the AI Assistant, Canvas Studio, Saved Insights, and Implementation Projects"
         },
         {
           "id": "failure-recovery",
@@ -6788,6 +6788,49 @@
         }
       ],
       "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/crm-leads-and-pipeline",
+      "title": "CRM Leads, Pipeline, Opportunities, Forecasting, and Quotations",
+      "description": "Capture and score inbound leads from CRM Overview, manage opportunities across pipeline stages, configure assignment and scoring rules, track forecasts and quotas, and convert deals into Sales Quotations.",
+      "audience": "functional",
+      "module": "crm",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and Roles"
+        },
+        {
+          "id": "crm-overview-and-submit-lead",
+          "depth": 2,
+          "text": "Starting from CRM Overview and Submitting Leads"
+        },
+        {
+          "id": "pipeline-and-opportunities",
+          "depth": 2,
+          "text": "Qualifying Leads and Managing the Pipeline"
+        },
+        {
+          "id": "quotations-from-opportunities",
+          "depth": 2,
+          "text": "Creating Sales Quotations from Opportunities"
+        },
+        {
+          "id": "rules-and-reporting",
+          "depth": 2,
+          "text": "Assignment Rules, Quotas, and CRM Reporting"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting CRM Workflows"
+        }
+      ],
+      "shard_id": "shard_functional_crm_1"
     },
     {
       "id": "user/data-import-and-export",

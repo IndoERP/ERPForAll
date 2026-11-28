@@ -18,7 +18,7 @@
         },
         {
           "anchor": "top",
-          "text": "Aplikasi native **Approvals** memungkinkan organisasi menerapkan tata kelola persetujuan bertingkat atas operasi tulis maupun operasi destruktif yang sensitif—seperti konfirmasi pesanan bernilai besar, posting jurnal, atau aksi agen otomatis—sekaligus memberi setiap pengguna internal kotak masuk **Requests** yang jelas untuk meninjau, memantau, dan mengaudit setiap keputusan. > **Catatan pemasangan**: **Approvals** hadir sebagai addon native (approvals). Administrator dapat memasangnya melalui pengelola modul atau lewat CLI (--install approvals). Setelah terpasang, aplikasi **Approvals** muncul pada App Switcher dengan menu **Requests** (untuk pengguna internal) dan **Workflows** (untuk administrator)."
+          "text": "Aplikasi native **Approvals** memungkinkan organisasi menerapkan tata kelola persetujuan bertingkat atas operasi tulis maupun operasi destruktif yang sensitif—seperti konfirmasi pesanan bernilai besar, posting jurnal, atau aksi agen otomatis—sekaligus memberi setiap pengguna internal kotak masuk **Requests** yang jelas untuk meninjau, memantau, dan mengaudit setiap keputusan. > **Catatan pemasangan**: **Approvals** hadir sebagai addon native (approvals). Administrator dapat memasangnya melalui pengelola modul atau lewat CLI (--install approvals). Setelah terpasang, mengklik **Approvals** di bilah samping langsung membuka **Approvals Overview**, bersama menu **Requests** (untuk pengguna internal) dan **Workflows** (untuk administrator)."
         },
         {
           "anchor": "roles-and-access",

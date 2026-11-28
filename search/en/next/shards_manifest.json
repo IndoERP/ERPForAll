@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "total_shards": 25,
+  "total_shards": 26,
   "shards": [
     {
       "shard_id": "shard_developer_account_1",
@@ -46,7 +46,7 @@
         "core"
       ],
       "doc_count": 70,
-      "byte_size": 1252059
+      "byte_size": 1252175
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -154,7 +154,7 @@
         "approvals"
       ],
       "doc_count": 1,
-      "byte_size": 6157
+      "byte_size": 6192
     },
     {
       "shard_id": "shard_functional_base_1",
@@ -163,7 +163,16 @@
         "base"
       ],
       "doc_count": 2,
-      "byte_size": 19062
+      "byte_size": 20579
+    },
+    {
+      "shard_id": "shard_functional_crm_1",
+      "audience": "functional",
+      "modules": [
+        "crm"
+      ],
+      "doc_count": 1,
+      "byte_size": 5583
     },
     {
       "shard_id": "shard_functional_hr_1",
@@ -181,7 +190,7 @@
         "product"
       ],
       "doc_count": 1,
-      "byte_size": 6459
+      "byte_size": 6569
     },
     {
       "shard_id": "shard_functional_purchase_1",
@@ -190,7 +199,7 @@
         "purchase"
       ],
       "doc_count": 3,
-      "byte_size": 19752
+      "byte_size": 20009
     },
     {
       "shard_id": "shard_functional_quality_control_1",
@@ -208,7 +217,7 @@
         "sale"
       ],
       "doc_count": 3,
-      "byte_size": 18044
+      "byte_size": 18491
     },
     {
       "shard_id": "shard_functional_stock_1",
@@ -348,6 +357,7 @@
     "user/approvals-workflows-and-inbox": "shard_functional_approvals_1",
     "user/configure-your-workspace": "shard_functional_base_1",
     "user/operations-guide": "shard_functional_base_1",
+    "user/crm-leads-and-pipeline": "shard_functional_crm_1",
     "user/hr-contracts-skills-and-analytics": "shard_functional_hr_1",
     "user/hr-employees-and-org-chart": "shard_functional_hr_1",
     "user/master-data-contacts-products": "shard_functional_product_1",
