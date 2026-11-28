@@ -282,3 +282,69 @@ test("An upload refusal shows the server's plain-text request limit", async () =
   await expect(client.postImport("preview", new File([], "notes.csv"), { model: "test.note" }, "test-csrf"))
     .rejects.toMatchObject({ kind: "validation", status: 413, message });
 });
+
+test("postAttachmentUpload streams FormData with CSRF, validates shape, handles 413, and supports AbortSignal", async () => {
+  const written = vi.fn();
+  const fetcher = vi.fn(async (_path: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+    upload_id: "01950000-0000-7000-8000-000000000001",
+    size: 4096,
+    mimetype: "image/jpeg",
+    checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+  }), { headers: { "Content-Type": "application/json" } }));
+  const client = new RpcClient(fetcher, () => {}, undefined, written);
+  const file = new File([new Uint8Array(4096)], "photo.jpg", { type: "image/jpeg" });
+  const result = await client.postAttachmentUpload(file, "csrf-1");
+  expect(result).toEqual({
+    upload_id: "01950000-0000-7000-8000-000000000001",
+    size: 4096,
+    mimetype: "image/jpeg",
+    checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+  });
+  const [path, init] = fetcher.mock.calls[0]!;
+  expect(path).toBe("/erp/attachments/upload");
+  expect(init?.credentials).toBe("same-origin");
+  expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-1");
+  const uploaded = (init?.body as FormData).get("file") as File;
+  expect(uploaded.name).toBe("photo.jpg");
+  expect(uploaded.size).toBe(4096);
+  expect(written).not.toHaveBeenCalled();
+
+  // Rejects malformed or extra-key upload payloads and empty CSRF.
+  await expect(client.postAttachmentUpload(file, "")).rejects.toMatchObject({ kind: "validation" });
+  for (const badPayload of [
+    null,
+    [],
+    { upload_id: "", size: 1, mimetype: "image/jpeg", checksum: "abc" },
+    { upload_id: "u1", size: -1, mimetype: "image/jpeg", checksum: "abc" },
+    { upload_id: "u1", size: 1, mimetype: "", checksum: "abc" },
+    { upload_id: "u1", size: 1, mimetype: "image/jpeg", checksum: "" },
+    { upload_id: "u1", size: 1, mimetype: "image/jpeg", checksum: "abc", extra: true },
+  ]) {
+    const badClient = new RpcClient(async () => new Response(JSON.stringify(badPayload), { headers: { "Content-Type": "application/json" } }), () => {});
+    await expect(badClient.postAttachmentUpload(file, "csrf-1")).rejects.toMatchObject({ kind: "server" });
+  }
+
+  // Handles reverse-proxy HTML 413 and empty text/plain 413 cleanly.
+  for (const res of [
+    new Response("<html>413 Request Entity Too Large</html>", { status: 413, headers: { "Content-Type": "text/html" } }),
+    new Response("", { status: 413, headers: { "Content-Type": "TEXT/PLAIN; charset=utf-8" } }),
+  ]) {
+    const capped = new RpcClient(async () => res, () => {});
+    await expect(capped.postAttachmentUpload(file, "csrf-1")).rejects.toMatchObject({
+      kind: "validation",
+      status: 413,
+      message: "The uploaded file exceeds the server's request size limit.",
+    });
+  }
+
+  // Passes AbortSignal through to fetch and propagates cancellation.
+  const controller = new AbortController();
+  let seenSignal: AbortSignal | null | undefined;
+  const abortable = new RpcClient(async (_p, init) => {
+    seenSignal = init?.signal;
+    throw new DOMException("Aborted", "AbortError");
+  }, () => {});
+  controller.abort();
+  await expect(abortable.postAttachmentUpload(file, "csrf-1", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  expect(seenSignal).toBe(controller.signal);
+});

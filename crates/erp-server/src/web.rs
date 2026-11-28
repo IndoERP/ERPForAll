@@ -288,6 +288,7 @@ mod pivot_export;
 mod report;
 mod reporting_export;
 mod session_api_key;
+mod upload;
 pub use assistant::{HistoryEntry, HistoryRole, WebAssistant};
 pub use content::{
     ContentHandoff, ContentHandoffRequest, ContentLookup, ContentOpenFailure, ContentOpener,
@@ -300,6 +301,9 @@ use page_brand::PageBrand;
 pub use pivot_export::{PivotExportPermit, PivotWorkbook, WebPivotExport};
 pub use report::{PrintedReport, ReportFormat, WebReport};
 pub use reporting_export::{ReportingFile, WebReportingExport};
+pub use upload::{
+    StagedUploadSummary, UploadAdmission, UploadReader, UploadSpec, WebAttachmentUpload,
+};
 
 /// Native composition supplies current nonsecret upload policy without coupling HTTP to an addon.
 pub trait WebAttachmentPolicy: Send + Sync {
@@ -436,7 +440,9 @@ pub struct WebApp {
     services: RwLock<Services>,
     lifecycle: Option<Arc<dyn WebLifecycle>>,
     attachment_content: Option<Arc<dyn WebAttachmentContent>>,
+    attachment_upload: Option<Arc<dyn WebAttachmentUpload>>,
     downloads: content::Downloads,
+    uploads: upload::Uploads,
     attachment_policy: Option<Arc<dyn WebAttachmentPolicy>>,
     data_exchange: Option<Arc<dyn WebDataExchange>>,
     active_pivot_exports: Arc<std::sync::atomic::AtomicUsize>,
@@ -495,6 +501,7 @@ impl WebApp {
                 config.startup_limits(),
             ))),
             downloads: content::Downloads::new(config.startup_limits()),
+            uploads: upload::Uploads::new(config.startup_limits()),
             config,
             services: RwLock::new(Services {
                 auth,
@@ -503,6 +510,7 @@ impl WebApp {
             }),
             lifecycle: None,
             attachment_content: None,
+            attachment_upload: None,
             attachment_policy: None,
             data_exchange: None,
             active_pivot_exports: Arc::default(),
@@ -820,6 +828,7 @@ impl WebApp {
                 | routes::ASSISTANT_STATUS
                 | routes::ASSISTANT_TURN
                 | routes::SESSION_API_KEY
+                | routes::ATTACHMENT_UPLOAD
                 | routes::MCP
         )
             && impex::Action::from_path(&classified_path).is_none()
@@ -839,24 +848,36 @@ impl WebApp {
             Ok(permit) => permit,
             Err(_) => return finish_response(busy(), navigation, || self.error_page_brand()),
         };
-        let permit = match tokio::time::timeout(
-            Duration::from_secs(5),
-            Arc::clone(&self.requests).acquire_owned(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) | Err(_) => {
-                return finish_response(busy(), navigation, || self.error_page_brand());
+        // Streaming uploads use their own node/per-user gate and stream deadline instead of
+        // holding one of the 16 interactive RPC permits across slow client transfers.
+        let upload_route = classified_path.as_ref() == routes::ATTACHMENT_UPLOAD;
+        let permit = if upload_route {
+            None
+        } else {
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                Arc::clone(&self.requests).acquire_owned(),
+            )
+            .await
+            {
+                Ok(Ok(permit)) => Some(permit),
+                Ok(Err(_)) | Err(_) => {
+                    return finish_response(busy(), navigation, || self.error_page_brand());
+                }
             }
         };
         drop(queued);
         // A cancelled lifecycle future may have sent COMMIT without receiving acknowledgement.
         // Keep the operation classification outside the future so its timeout cannot invite replay.
         let deadline_operation = LifecycleOperation::from_path(&classified_path);
+        let route_deadline = if upload_route {
+            self.uploads.deadline()
+        } else {
+            Duration::from_secs(120)
+        };
         // The deadline includes refresh and the single safe retry, not just dispatch.
         let response = match tokio::time::timeout(
-            Duration::from_secs(120),
+            route_deadline,
             self.dispatch_and_refresh(peer, request, navigation),
         )
         .await
@@ -1110,6 +1131,9 @@ impl WebApp {
         }
         if let Some(rest) = path.strip_prefix(content::CONTENT_PREFIX) {
             return self.attachment_content(&parts, rest, client, &auth).await;
+        }
+        if path == routes::ATTACHMENT_UPLOAD {
+            return self.attachment_upload(&parts, body, &auth).await;
         }
         if path == routes::MCP {
             let rpc = services.rpc.as_deref().ok_or_else(|| {

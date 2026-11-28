@@ -7,6 +7,7 @@ export interface AttachmentPolicy {
 }
 const policies = new WeakMap<RpcClient, AttachmentPolicy>();
 const requestCaps = new WeakMap<RpcClient, number>();
+const uploadCsrf = new WeakMap<RpcClient, string>();
 
 /** Strict DTO decoding; bounds mirror and the base attachment runtime. */
 export function attachmentPolicy(value: unknown): AttachmentPolicy {
@@ -20,12 +21,25 @@ export function attachmentPolicy(value: unknown): AttachmentPolicy {
 function invalid(): ClientError { return new ClientError("server", "The server returned an invalid attachment size policy. Reload the application."); }
 
 /** Bootstrap may explicitly have no provider; selecting a file must still fetch an authoritative policy. */
-export function initializeAttachmentPolicy(rpc: RpcClient, value: unknown, requestCap?: unknown): void {
+export function initializeAttachmentPolicy(rpc: RpcClient, value: unknown, requestCap?: unknown, csrf?: unknown): void {
   if (value !== null && value !== undefined) policies.set(rpc, attachmentPolicy(value));
   if (requestCap !== null && requestCap !== undefined) {
     if (typeof requestCap !== "number" || !Number.isSafeInteger(requestCap) || requestCap < 65536 || requestCap > 134217728) throw invalid();
     requestCaps.set(rpc, requestCap);
   }
+  if (csrf !== null && csrf !== undefined) {
+    if (typeof csrf !== "string" || csrf === "") {
+      throw new ClientError("server", "The server returned an invalid upload token. Reload the application.");
+    }
+    uploadCsrf.set(rpc, csrf);
+  }
+}
+
+/** The session CSRF token for streaming `/erp/attachments/upload`, when initialized from the shell bootstrap. */
+export function attachmentUploadCsrf(rpc: RpcClient): string | undefined { return uploadCsrf.get(rpc); }
+
+function effectiveUploadLimit(rpc: RpcClient, policy: AttachmentPolicy): number {
+  return uploadCsrf.has(rpc) ? policy.max_file_bytes : policy.inline_max_bytes;
 }
 
 /** A standalone editor may have no node transport hint; it must not invent one. */
@@ -48,7 +62,7 @@ export function attachmentRequestCap(rpc: RpcClient): number | undefined { retur
 /** The limit in user words, from the boot snapshot; selecting a file still checks the current limit before upload. */
 export function attachmentLimitHint(rpc: RpcClient): string | undefined {
   const policy = policies.get(rpc);
-  return policy === undefined ? undefined : `Each file can be up to ${humanBytes(policy.inline_max_bytes)}.`;
+  return policy === undefined ? undefined : `Each file can be up to ${humanBytes(effectiveUploadLimit(rpc, policy))}.`;
 }
 
 /** Refresh even when an older policy would reject: an administrator may have raised the limit. */
@@ -56,5 +70,6 @@ export async function checkAttachmentFile(rpc: RpcClient, file: File): Promise<v
   const policy = attachmentPolicy(await rpc.call("ir.attachment", "erp_upload_limits", {}));
   policies.set(rpc, policy);
   if (!Number.isSafeInteger(file.size) || file.size < 0) throw new ClientError("validation", "The browser reported an unusable size for this file.");
-  if (file.size > policy.inline_max_bytes) throw new ClientError("validation", `"${file.name}" exceeds the current browser upload limit of ${humanBytes(policy.inline_max_bytes)}.`);
+  const limit = effectiveUploadLimit(rpc, policy);
+  if (file.size > limit) throw new ClientError("validation", `"${file.name}" exceeds the current browser upload limit of ${humanBytes(limit)}.`);
 }

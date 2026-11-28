@@ -10,7 +10,8 @@ use erp_addon_base::attachments::content::{
 use erp_sdk::blob::ByteRange;
 use erp_server::web::{
     ContentHandoff, ContentHandoffRequest, ContentLookup, ContentOpenFailure, ContentOpener,
-    ContentRange, ContentReader, FoundContent, WebAttachmentContent,
+    ContentRange, ContentReader, FoundContent, StagedUploadSummary, UploadAdmission, UploadReader,
+    UploadSpec, WebAttachmentContent, WebAttachmentUpload,
 };
 
 /// The base addon's content read behind the server's content route.
@@ -28,6 +29,68 @@ impl erp_server::web::WebAttachmentPolicy for BaseAttachmentContent {
                 policy.inline_max_bytes(),
             )
             .map_err(erp_fields::Error::programming)
+        })
+    }
+}
+
+impl WebAttachmentUpload for BaseAttachmentContent {
+    fn admit<'a>(
+        &'a self,
+        tx: &'a mut erp_orm::Transaction,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<UploadAdmission>> {
+        Box::pin(async move {
+            let env = tx.env();
+            env.records("ir.attachment")?
+                .check_access(tx, erp_orm::Operation::Create)
+                .await?;
+            let policy = erp_addon_base::attachments::upload_policy(tx).await?;
+            Ok(UploadAdmission {
+                max_file_bytes: policy.max_file_bytes(),
+            })
+        })
+    }
+
+    fn stage<'a>(
+        &'a self,
+        orm: &'a erp_orm::Orm,
+        env: &'a erp_orm::Env,
+        body: UploadReader<'a>,
+        spec: UploadSpec,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<StagedUploadSummary>> {
+        Box::pin(async move {
+            let mut request = erp_addon_base::attachments::StageRequest::named(spec.name)
+                .with_file_limit(spec.file_limit);
+            if let Some(mimetype) = spec.declared_mimetype {
+                request = request.declared(mimetype);
+            }
+            let staged = erp_addon_base::attachments::Uploader::new(orm)
+                .stage(env, body, request)
+                .await?;
+            Ok(StagedUploadSummary {
+                upload_id: staged.id.as_str().to_owned(),
+                size: staged.size,
+                checksum: staged.checksum,
+                mimetype: staged.mimetype,
+            })
+        })
+    }
+
+    fn discard<'a>(
+        &'a self,
+        orm: &'a erp_orm::Orm,
+        env: &'a erp_orm::Env,
+        upload_id: &'a str,
+    ) -> erp_orm::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Ok(id) = erp_addon_base::attachments::UploadId::parse(upload_id) {
+                erp_addon_base::attachments::Uploader::new(orm)
+                    .discard(
+                        env,
+                        &id,
+                        "HTTP upload rejected after staging; fenced cleanup pending.",
+                    )
+                    .await;
+            }
         })
     }
 }

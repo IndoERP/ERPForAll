@@ -23,7 +23,7 @@ import { icon } from "./icons.js";
 import { Followers } from "./chatter-followers.js";
 import { el } from "./dom.js";
 import { ClientError, type RpcClient } from "./transport.js";
-import { attachmentLimitHint, checkAttachmentFile, checkAttachmentRequest } from "./attachment-policy.js";
+import { attachmentLimitHint, attachmentUploadCsrf, checkAttachmentFile, checkAttachmentRequest } from "./attachment-policy.js";
 import { attachmentViewerFile, type ViewerFile } from "./document-viewer.js";
 
 import { watchChatterThread } from "./chatter-realtime.js";
@@ -194,8 +194,9 @@ interface UploadedFile {
 }
 
 /**
- * Send one file to the server as base64: `thread_upload` keeps it for the composer until the post
- * names it, `thread_attach` attaches it to the record itself (the attachments panel).
+ * Send one file to the server: streams through `/erp/attachments/upload` and links the staged
+ * `upload_id` when a session CSRF token is configured, or falls back to bounded inline base64
+ * in standalone test harnesses without an HTTP upload token.
  */
 async function uploadFile(
   rpc: RpcClient,
@@ -203,17 +204,30 @@ async function uploadFile(
   method: "thread_upload" | "thread_attach",
   file: File,
   active: () => boolean,
-  context?: Record<string, unknown>
+  context?: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<UploadedFile> {
   await checkAttachmentFile(rpc, file);
   if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
-  const args = {
-    ids: [ref.id], name: file.name, ...(context ? { context } : {}),
-    ...(file.type === "" ? {} : { mimetype: file.type }),
-    data: await readFileAsBase64(file),
-  };
-  if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
-  checkAttachmentRequest(rpc, args);
+  const csrf = attachmentUploadCsrf(rpc);
+  let args: Record<string, unknown>;
+  if (csrf !== undefined) {
+    const staged = await rpc.postAttachmentUpload(file, csrf, signal);
+    if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
+    args = {
+      ids: [ref.id], name: file.name, ...(context ? { context } : {}),
+      ...(file.type === "" ? {} : { mimetype: file.type }),
+      upload_id: staged.upload_id,
+    };
+  } else {
+    args = {
+      ids: [ref.id], name: file.name, ...(context ? { context } : {}),
+      ...(file.type === "" ? {} : { mimetype: file.type }),
+      data: await readFileAsBase64(file),
+    };
+    if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
+    checkAttachmentRequest(rpc, args);
+  }
   const answer = (await rpc.call(
     ref.model,
     method,
@@ -260,6 +274,7 @@ export class Chatter {
   #locate?: (id: number) => Promise<void>;
   private statusArea?: HTMLElement;
   private disposed = false;
+  readonly #uploads = new AbortController();
   private stopRealtime?: () => void;
   private stopWatch?: () => void;
 
@@ -464,15 +479,17 @@ export class Chatter {
       const failures: unknown[] = [];
       try {
         for (const file of files) {
-          await uploadFile(options.rpc, ref, "thread_attach", file, () => !this.disposed);
+          await uploadFile(options.rpc, ref, "thread_attach", file, () => !this.disposed, options.context, this.#uploads.signal);
           attached++;
         }
       } catch (err) {
         failures.push(err);
       }
+      if (this.disposed) return;
       if (attached > 0) {
         try { await pager.loadLatest(ref); } catch (err) { failures.push(err); }
       }
+      if (this.disposed) return;
       if (failures.length) {
         showInline(failures[0]);
       } else {
@@ -660,7 +677,7 @@ export class Chatter {
           ...(options.timeZone ? { timeZone: options.timeZone } : {}),
           uploadLimitHint: () => attachmentLimitHint(options.rpc),
           uploadAttachment: async (file: File): Promise<AttachmentUploadResult> => {
-            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file, () => !this.disposed, options.context);
+            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file, () => !this.disposed, options.context, this.#uploads.signal);
             return {
               id: uploaded.id,
               name: uploaded.name,
@@ -672,7 +689,19 @@ export class Chatter {
         document: doc,
       };
 
-      this.composer = new Composer({ ...baseOptions, platform: "other", sendOnEnter: Boolean(chat) });
+      this.composer = new Composer({
+        ...baseOptions,
+        reportError: (err) => {
+          // Composer already renders its own visible alert in `.erp-mail-composer-error`; avoid
+          // duplicating the same message in the chatter status area below it.
+          const msg = err instanceof Error ? err.message : String(err);
+          const shown = this.composer?.element.querySelector(".erp-mail-composer-error");
+          if (shown && !shown.hasAttribute("hidden") && shown.textContent === msg) return;
+          showInline(err);
+        },
+        platform: "other",
+        sendOnEnter: Boolean(chat),
+      });
       this.thread = new Thread({ ...baseOptions, order: chat ? "asc" : "desc" });
       skeleton.remove();
       if (chat) {
@@ -949,6 +978,7 @@ export class Chatter {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.#uploads.abort();
     this.stopRealtime?.();
     this.stopWatch?.();
     this.followers?.dispose();

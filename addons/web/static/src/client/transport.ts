@@ -106,6 +106,31 @@ export class RpcClient {
     const options = action === "import" ? { write: true } : {};
     return this.runPost(path, options, () => this.send(path, body, options, undefined, csrf), document.model);
   }
+  /** Stream one attachment file to `/erp/attachments/upload` and return its staged upload descriptor. */
+  async postAttachmentUpload(file: File, csrf: string, signal?: AbortSignal): Promise<{ upload_id: string; size: number; mimetype: string; checksum: string }> {
+    if (csrf === "") throw new ClientError("validation", "A session upload token is required.");
+    const path = "/erp/attachments/upload";
+    const body = new FormData();
+    body.set("file", file, file.name);
+    // Staging creates only an unlinked temporary upload; the business record write happens in the
+    // subsequent `thread_upload`/`thread_attach` RPC. Keeping `write` unset lets `signal` abort
+    // in-flight transfers and avoids false `ambiguous` recovery state or metadata cache wipes.
+    const options: CallOptions = signal ? { signal } : {};
+    const raw = await this.runPost(path, options, () => this.send(path, body, options, undefined, csrf));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ClientError("server", "The server returned an invalid upload response.", 200, { endpoint: path, status: 200 });
+    }
+    const data = raw as Record<string, unknown>;
+    const upload_id = data["upload_id"], size = data["size"], mimetype = data["mimetype"], checksum = data["checksum"];
+    if (Object.keys(data).length !== 4
+        || typeof upload_id !== "string" || upload_id === ""
+        || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0
+        || typeof mimetype !== "string" || mimetype === ""
+        || typeof checksum !== "string" || checksum === "") {
+      throw new ClientError("server", "The server returned an invalid upload response.", 200, { endpoint: path, status: 200 });
+    }
+    return { upload_id, size, mimetype, checksum };
+  }
   private async runPost(path: string, options: CallOptions, send: () => Promise<unknown>, model?: string): Promise<unknown> {
     const finish = options.background ? undefined : this.activity?.();
     try {
@@ -220,9 +245,16 @@ export class RpcClient {
     if (response.status === 429) {
       throw new ClientError("server", "The server is busy. Wait a moment, then try again.", 429, diagnostic(429));
     }
-    if (csrf !== undefined && !response.ok && response.status < 500 && response.headers.get("Content-Type")?.startsWith("text/plain")) {
-      const message = (await response.text().catch(() => "")).slice(0, 2000);
-      throw new ClientError(response.status === 403 ? "permission" : "validation", message || "The import request was refused.", response.status, diagnostic(response.status));
+    const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
+    if (csrf !== undefined && !response.ok && response.status < 500 && contentType.startsWith("text/plain")) {
+      const message = (await response.text().catch(() => "")).trim().slice(0, 2000);
+      const fallback = response.status === 413
+        ? "The uploaded file exceeds the server's request size limit."
+        : "The request was refused.";
+      throw new ClientError(response.status === 403 ? "permission" : "validation", message || fallback, response.status, diagnostic(response.status));
+    }
+    if (response.status === 413 && !contentType.includes("json")) {
+      throw new ClientError("validation", "The uploaded file exceeds the server's request size limit.", 413, diagnostic(413));
     }
     const ambiguousWrite = options.write && response.status >= 500;
     const ambiguousMessage = "The server returned an error after the request was sent. The change may have been saved. Check the record before trying again.";

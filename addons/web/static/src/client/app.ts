@@ -428,7 +428,12 @@ export class HumanApp {
       this.messages.network.observe(event, options);
     }, id => waitForApproval(this.messages.dialogs, this.rpc, id, this.lifetime.signal, this.approvalsMenu() !== undefined));
     this.listenForMenuIntent();
-    initializeAttachmentPolicy(this.rpc, bootstrap["attachment_limits"], bootstrap["rpc_body_bytes"]);
+    initializeAttachmentPolicy(
+      this.rpc,
+      bootstrap["attachment_limits"],
+      bootstrap["rpc_body_bytes"],
+      text(object(bootstrap["csrf"])["logout"], "session token"),
+    );
 
     const retry = bootstrap["thread_reconnect_ms"];
     if (retry !== undefined && retry !== null) {
