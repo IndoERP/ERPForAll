@@ -4087,7 +4087,18 @@ test("a sidebar menu pointing to a target=new window action opens its wizard dia
   const wizardDescription = {
     ...description,
     model: "test.wizard",
-    views: description.views.filter(view => view.type === "form"),
+    fields: { "test.wizard": description.fields["test.note"] },
+    views: [{
+      identity: { kind: "stored", id: 1 },
+      type: "form",
+      schema_major: 1,
+      renderer: "web.form",
+      root: 0,
+      nodes: [
+        { kind: "form", record_mode: "record", children: [1] },
+        { kind: "field", force_save: false, field: { model: "test.wizard", name: "name" }, widget: "char", options: {}, modifiers: { readonly: null, required: null, invisible: null }, label: "Name" }
+      ]
+    }],
   };
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};

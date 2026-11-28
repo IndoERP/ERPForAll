@@ -2391,6 +2391,7 @@ export class HumanApp {
     const inFlight = new Promise<void>(resolve => { settle = resolve; });
     this.navigationInFlight = inFlight;
     try {
+      stage: {
       const requestedRoute = route;
       let persistedClient: ClientResult | undefined;
       let persistedWindow: Record<string, unknown> | undefined;
@@ -2489,7 +2490,7 @@ export class HumanApp {
             throw new ClientError("unsupported", "Unsupported or mismatched window action.");
           }
           pendingDialog = normalized;
-          return;
+          break stage;
         }
         if (action["target"] !== "current") {
           throw new ClientError("unsupported", "Unsupported or mismatched window action.");
@@ -2667,6 +2668,7 @@ export class HumanApp {
       this.content.focus({ preventScroll: true });
       documentScroller().scrollTop = 0;
       nextRestore?.();
+      }
     } catch (error) {
       if (!(error instanceof RefusedAction)) throw error;
       if (generation !== this.generation || this.expired) return;
