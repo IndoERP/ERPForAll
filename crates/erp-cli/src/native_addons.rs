@@ -17,6 +17,8 @@ pub static DESCRIPTORS: &[&AddonDescriptor] = &[
     &erp_addon_product_mail::ADDON,
     &erp_addon_web::ADDON,
     &erp_addon_approvals::ADDON,
+    &erp_addon_crm::ADDON,
+    &erp_addon_sale_crm::ADDON,
     &erp_addon_web_map::ADDON,
     &erp_addon_acceptance_notes::ADDON,
     &erp_addon_theme_office_blue::ADDON,

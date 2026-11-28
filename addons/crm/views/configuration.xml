@@ -1,0 +1,325 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="config_pipeline_list" model="ir.ui.view">
+    <field name="name">crm.pipeline.list</field>
+    <field name="model">crm.pipeline</field>
+    <field name="arch" type="xml">
+      <list string="Pipelines">
+        <field name="name"/>
+        <field name="company_id"/>
+        <field name="sequence"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="config_pipeline_form" model="ir.ui.view">
+    <field name="name">crm.pipeline.form</field>
+    <field name="model">crm.pipeline</field>
+    <field name="arch" type="xml">
+      <form string="Pipelines">
+        <sheet>
+          <div class="oe_title">
+            <h1>
+              <field name="name"/>
+            </h1>
+          </div>
+          <group>
+            <group string="Pipeline">
+              <field name="company_id"/>
+              <field name="sequence"/>
+              <field name="active"/>
+            </group>
+          </group>
+          <notebook>
+            <page name="stages" string="Stages">
+              <field name="stage_ids"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="config_pipeline_window" model="ir.actions.act_window">
+    <field name="name">Pipelines</field>
+    <field name="res_model">crm.pipeline</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="config_pipeline_list"/>
+  </record>
+  <record id="stage_list" model="ir.ui.view">
+    <field name="name">crm.stage.list</field>
+    <field name="model">crm.stage</field>
+    <field name="arch" type="xml">
+      <list string="Pipeline Stages">
+        <field name="sequence"/>
+        <field name="name"/>
+        <field name="pipeline_id"/>
+        <field name="probability"/>
+        <field name="forecast_category"/>
+      </list>
+    </field>
+  </record>
+  <record id="stage_form" model="ir.ui.view">
+    <field name="name">crm.stage.form</field>
+    <field name="model">crm.stage</field>
+    <field name="arch" type="xml">
+      <form string="Pipeline Stages">
+        <sheet>
+          <div class="oe_title">
+            <h1>
+              <field name="name"/>
+            </h1>
+          </div>
+          <group>
+            <group string="Stage">
+              <field name="pipeline_id"/>
+              <field name="sequence"/>
+              <field name="probability"/>
+              <field name="forecast_category"/>
+            </group>
+            <group string="Conditions to enter">
+              <field name="require_partner"/>
+              <field name="require_value"/>
+              <field name="require_close_date"/>
+              <field name="require_next_step"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="stage_window" model="ir.actions.act_window">
+    <field name="name">Pipeline Stages</field>
+    <field name="res_model">crm.stage</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="stage_list"/>
+  </record>
+  <record id="rule_list" model="ir.ui.view">
+    <field name="name">crm.rule.list</field>
+    <field name="model">crm.rule</field>
+    <field name="arch" type="xml">
+      <list string="Lead Rules">
+        <field name="sequence"/>
+        <field name="name"/>
+        <field name="source"/>
+        <field name="region"/>
+        <field name="team_id"/>
+        <field name="points"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="rule_form" model="ir.ui.view">
+    <field name="name">crm.rule.form</field>
+    <field name="model">crm.rule</field>
+    <field name="arch" type="xml">
+      <form string="Lead Rules">
+        <sheet>
+          <div class="oe_title">
+            <h1>
+              <field name="name"/>
+            </h1>
+          </div>
+          <group>
+            <group string="Match">
+              <field name="company_id"/>
+              <field name="source"/>
+              <field name="region"/>
+              <field name="active"/>
+            </group>
+            <group string="Assignment and score">
+              <field name="sequence"/>
+              <field name="team_id"/>
+              <field name="points"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="rule_window" model="ir.actions.act_window">
+    <field name="name">Lead Rules</field>
+    <field name="res_model">crm.rule</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="rule_list"/>
+  </record>
+  <record id="quota_list" model="ir.ui.view">
+    <field name="name">crm.quota.list</field>
+    <field name="model">crm.quota</field>
+    <field name="arch" type="xml">
+      <list string="Sales Quotas">
+        <field name="month"/>
+        <field name="team_id"/>
+        <field name="name"/>
+        <field name="amount"/>
+        <field name="achieved_amount"/>
+        <field name="remaining_amount"/>
+        <field name="currency_id"/>
+      </list>
+    </field>
+  </record>
+  <record id="quota_form" model="ir.ui.view">
+    <field name="name">crm.quota.form</field>
+    <field name="model">crm.quota</field>
+    <field name="arch" type="xml">
+      <form string="Sales Quotas">
+        <header><button name="action_view_credited_deals" type="object" string="View Credited Opportunities"/></header>
+        <sheet>
+          <group>
+            <group string="Target period">
+              <field name="company_id"/>
+              <field name="team_id"/>
+              <field name="salesperson_member_id" domain="[('crm_team_id','=',team_id),('active','=',True)]" options="{'no_create': True}" invisible="not team_id"/>
+              <field name="name" readonly="1" invisible="salesperson_member_id or not name"/>
+              <field name="month"/>
+            </group>
+            <group string="Revenue target">
+              <field name="amount"/>
+              <field name="achieved_amount" readonly="1"/>
+              <field name="remaining_amount" readonly="1"/>
+              <field name="currency_id"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="quota_window" model="ir.actions.act_window">
+    <field name="name">Sales Quotas</field>
+    <field name="res_model">crm.quota</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="quota_list"/>
+  </record>
+  <record id="contact_role_list" model="ir.ui.view">
+    <field name="name">crm.lead.contact.list</field>
+    <field name="model">crm.lead.contact</field>
+    <field name="arch" type="xml">
+      <list string="Contact Roles">
+        <field name="partner_id"/>
+        <field name="role"/>
+      </list>
+    </field>
+  </record>
+  <record id="contact_role_form" model="ir.ui.view">
+    <field name="name">crm.lead.contact.form</field>
+    <field name="model">crm.lead.contact</field>
+    <field name="arch" type="xml">
+      <form string="Contact Roles">
+        <sheet>
+          <group>
+            <group string="Contact">
+              <field name="lead_id"/>
+              <field name="partner_id"/>
+              <field name="role"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="stage_history_list" model="ir.ui.view">
+    <field name="name">crm.stage.history.list</field>
+    <field name="model">crm.stage.history</field>
+    <field name="arch" type="xml">
+      <list string="Time in Stage" create="0" edit="0" delete="0">
+        <field name="lead_id"/>
+        <field name="stage_id"/>
+        <field name="entered_at"/>
+        <field name="exited_at"/>
+        <field name="elapsed_days"/>
+        <field name="outcome" widget="badge"/>
+      </list>
+    </field>
+  </record>
+  <record id="stage_history_form" model="ir.ui.view">
+    <field name="name">crm.stage.history.form</field>
+    <field name="model">crm.stage.history</field>
+    <field name="arch" type="xml">
+      <form string="Time in Stage" create="0" edit="0" delete="0">
+        <sheet>
+          <group>
+            <group string="Stage visit">
+              <field name="lead_id"/>
+              <field name="stage_id"/>
+              <field name="entered_at"/>
+              <field name="exited_at"/>
+              <field name="elapsed_days"/>
+              <field name="outcome"/>
+              <field name="closing_reason"/>
+            </group>
+          </group>
+          <notebook>
+            <page name="closed_deal" string="Won Deal" invisible="outcome != 'won'">
+              <group>
+                <group string="Value at close"><field name="closing_amount"/><field name="closing_currency_id"/><field name="closing_rate"/></group>
+                <group string="Ownership at close"><field name="closing_user_id"/><field name="closing_team_id"/></group>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="stage_history_window" model="ir.actions.act_window">
+    <field name="name">Time in Stage</field>
+    <field name="res_model">crm.stage.history</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="stage_history_list"/>
+  </record>
+  <record id="deal_change_list" model="ir.ui.view">
+    <field name="name">crm.deal.change.list</field>
+    <field name="model">crm.deal.change</field>
+    <field name="arch" type="xml">
+      <list string="Forecast Changes" create="0" edit="0" delete="0">
+        <field name="lead_id"/>
+        <field name="create_date"/>
+        <field name="previous_amount"/>
+        <field name="new_amount"/>
+        <field name="currency_id"/>
+        <field name="previous_close"/>
+        <field name="new_close"/>
+        <field name="changed_by"/>
+      </list>
+    </field>
+  </record>
+  <record id="deal_change_form" model="ir.ui.view">
+    <field name="name">crm.deal.change.form</field>
+    <field name="model">crm.deal.change</field>
+    <field name="arch" type="xml">
+      <form string="Forecast Changes" create="0" edit="0" delete="0">
+        <sheet>
+          <group>
+            <group string="Opportunity">
+              <field name="lead_id"/>
+              <field name="create_date"/>
+              <field name="changed_by"/>
+            </group>
+            <group string="Change">
+              <field name="previous_amount"/>
+              <field name="new_amount"/>
+              <field name="currency_id"/>
+              <field name="previous_close"/>
+              <field name="new_close"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="deal_change_window" model="ir.actions.act_window">
+    <field name="name">Forecast Changes</field>
+    <field name="res_model">crm.deal.change</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="deal_change_list"/>
+  </record>
+  <record id="team_crm_pipelines" model="ir.ui.view">
+    <field name="name">crm.team.form.pipelines</field>
+    <field name="inherit_id" ref="sales_team.crm_team_view_form"/>
+    <field name="model">crm.team</field>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='invoiced_target']" position="after">
+        <field name="crm_pipeline_id"/>
+        <field name="crm_pipeline_ids" widget="many2many_tags"/>
+      </xpath>
+    </field>
+  </record>
+</erp>

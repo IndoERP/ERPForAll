@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="forecast_report" model="reporting.report">
+    <field name="name">Sales Forecast</field>
+    <field name="date_mode">range</field>
+    <field name="date_default">this_month</field>
+    <field name="comparison" eval="True"/>
+    <field name="multi_company" eval="False"/>
+    <field name="unfold_all" eval="True"/>
+    <field name="hide_zero">optional</field>
+  </record>
+  <record id="forecast_report_col_deals" model="reporting.report.column">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">10</field>
+    <field name="name">Deals</field>
+    <field name="label">deals</field>
+    <field name="kind">integer</field>
+  </record>
+  <record id="forecast_report_col_amount" model="reporting.report.column">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">20</field>
+    <field name="name">Amount</field>
+    <field name="label">amount</field>
+    <field name="kind">monetary</field>
+  </record>
+  <record id="forecast_report_col_weighted" model="reporting.report.column">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">30</field>
+    <field name="name">Weighted</field>
+    <field name="label">weighted</field>
+    <field name="kind">monetary</field>
+  </record>
+  <record id="forecast_report_pipeline" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">10</field>
+    <field name="name">Pipeline</field>
+    <field name="code">PIPELINE</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_pipeline_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_pipeline"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","pipeline"]]</field>
+  </record>
+  <record id="forecast_report_pipeline_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_pipeline"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","pipeline"]]</field>
+    <field name="field">expected_revenue</field>
+  </record>
+  <record id="forecast_report_pipeline_weighted" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_pipeline"/>
+    <field name="label">weighted</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","pipeline"]]</field>
+    <field name="field">weighted_revenue</field>
+  </record>
+  <record id="forecast_report_best_case" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">20</field>
+    <field name="name">Best Case</field>
+    <field name="code">BEST_CASE</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_best_case_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_best_case"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","best_case"]]</field>
+  </record>
+  <record id="forecast_report_best_case_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_best_case"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","best_case"]]</field>
+    <field name="field">expected_revenue</field>
+  </record>
+  <record id="forecast_report_best_case_weighted" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_best_case"/>
+    <field name="label">weighted</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","best_case"]]</field>
+    <field name="field">weighted_revenue</field>
+  </record>
+  <record id="forecast_report_commit" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">30</field>
+    <field name="name">Commit</field>
+    <field name="code">COMMIT</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_commit_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_commit"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","commit"]]</field>
+  </record>
+  <record id="forecast_report_commit_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_commit"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","commit"]]</field>
+    <field name="field">expected_revenue</field>
+  </record>
+  <record id="forecast_report_commit_weighted" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_commit"/>
+    <field name="label">weighted</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","commit"]]</field>
+    <field name="field">weighted_revenue</field>
+  </record>
+  <record id="forecast_report_omitted" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">40</field>
+    <field name="name">Omitted</field>
+    <field name="code">OMITTED</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_omitted_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_omitted"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","omitted"]]</field>
+  </record>
+  <record id="forecast_report_omitted_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_omitted"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","omitted"]]</field>
+    <field name="field">expected_revenue</field>
+  </record>
+  <record id="forecast_report_omitted_weighted" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_omitted"/>
+    <field name="label">weighted</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","=","omitted"]]</field>
+    <field name="field">weighted_revenue</field>
+  </record>
+  <record id="forecast_report_open" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">50</field>
+    <field name="name">Open Forecast</field>
+    <field name="code">OPEN</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_open_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_open"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","!=","omitted"]]</field>
+  </record>
+  <record id="forecast_report_open_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_open"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","!=","omitted"]]</field>
+    <field name="field">expected_revenue</field>
+  </record>
+  <record id="forecast_report_open_weighted" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_open"/>
+    <field name="label">weighted</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">date_deadline</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","open"],["forecast_category","!=","omitted"]]</field>
+    <field name="field">weighted_revenue</field>
+  </record>
+  <record id="forecast_report_won" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">60</field>
+    <field name="name">Closed Won</field>
+    <field name="code">WON</field>
+    <field name="groupby">won_team_id,won_user_id</field>
+  </record>
+  <record id="forecast_report_won_deals" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_won"/>
+    <field name="label">deals</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">closed_date</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","won"]]</field>
+  </record>
+  <record id="forecast_report_won_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_won"/>
+    <field name="label">amount</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">closed_date</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","won"]]</field>
+    <field name="field">won_amount</field>
+  </record>
+  <record id="forecast_report_target" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">70</field>
+    <field name="name">Sales Target</field>
+    <field name="code">TARGET</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_report_target_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_target"/>
+    <field name="label">amount</field>
+    <field name="model">crm.quota</field>
+    <field name="date_field">month</field>
+    <field name="domain">[]</field>
+    <field name="field">amount</field>
+  </record>
+  <record id="forecast_report_gap" model="reporting.report.line">
+    <field name="report_id" ref="forecast_report"/>
+    <field name="sequence">80</field>
+    <field name="name">Remaining to Target</field>
+    <field name="code">GAP</field>
+  </record>
+  <record id="forecast_report_gap_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_report_gap"/>
+    <field name="label">amount</field>
+    <field name="engine">formula</field>
+    <field name="formula">TARGET.amount - WON.amount</field>
+    <field name="zero_division">empty</field>
+  </record>
+  <record id="forecast_report_window" model="ir.actions.client">
+    <field name="name">Sales Forecast</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('forecast_report')}"/>
+  </record>
+  <record id="conversion_report" model="reporting.report">
+    <field name="name">Sales Conversion</field>
+    <field name="date_mode">range</field>
+    <field name="date_default">this_month</field>
+    <field name="comparison" eval="True"/>
+    <field name="multi_company" eval="False"/>
+    <field name="unfold_all" eval="True"/>
+    <field name="hide_zero">optional</field>
+  </record>
+  <record id="conversion_report_col_records" model="reporting.report.column">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">10</field>
+    <field name="name">Records</field>
+    <field name="label">records</field>
+    <field name="kind">integer</field>
+  </record>
+  <record id="conversion_report_col_rate" model="reporting.report.column">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">20</field>
+    <field name="name">Conversion %</field>
+    <field name="label">rate</field>
+    <field name="kind">percent</field>
+  </record>
+  <record id="conversion_report_leads" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">10</field>
+    <field name="name">Leads received</field>
+    <field name="code">LEADS</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="conversion_report_leads_records" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_leads"/>
+    <field name="label">records</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">create_date</field>
+    <field name="domain">[["originated_as_lead","=",true]]</field>
+  </record>
+  <record id="conversion_report_qualified" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">20</field>
+    <field name="name">Qualified from those leads</field>
+    <field name="code">QUALIFIED</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="conversion_report_qualified_records" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_qualified"/>
+    <field name="label">records</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">create_date</field>
+    <field name="domain">[["originated_as_lead","=",true],["kind","=","opportunity"]]</field>
+  </record>
+  <record id="conversion_report_decided" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">30</field>
+    <field name="name">Opportunities closed</field>
+    <field name="code">DECIDED</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="conversion_report_decided_records" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_decided"/>
+    <field name="label">records</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">closed_date</field>
+    <field name="domain">[["kind","=","opportunity"],["state","in",["won","lost"]]]</field>
+  </record>
+  <record id="conversion_report_wins" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">40</field>
+    <field name="name">Opportunities won</field>
+    <field name="code">WINS</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="conversion_report_wins_records" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_wins"/>
+    <field name="label">records</field>
+    <field name="model">crm.lead</field>
+    <field name="date_field">closed_date</field>
+    <field name="domain">[["kind","=","opportunity"],["state","=","won"]]</field>
+  </record>
+  <record id="conversion_report_conversion" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">50</field>
+    <field name="name">Lead-to-Opportunity Rate</field>
+    <field name="code">CONVERSION</field>
+  </record>
+  <record id="conversion_report_conversion_rate" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_conversion"/>
+    <field name="label">rate</field>
+    <field name="engine">formula</field>
+    <field name="formula">QUALIFIED.records * 100 / LEADS.records</field>
+    <field name="zero_division">empty</field>
+  </record>
+  <record id="conversion_report_winrate" model="reporting.report.line">
+    <field name="report_id" ref="conversion_report"/>
+    <field name="sequence">60</field>
+    <field name="name">Win Rate on Closed Deals</field>
+    <field name="code">WINRATE</field>
+  </record>
+  <record id="conversion_report_winrate_rate" model="reporting.report.expression">
+    <field name="line_id" ref="conversion_report_winrate"/>
+    <field name="label">rate</field>
+    <field name="engine">formula</field>
+    <field name="formula">WINS.records * 100 / DECIDED.records</field>
+    <field name="zero_division">empty</field>
+  </record>
+  <record id="conversion_report_window" model="ir.actions.client">
+    <field name="name">Sales Conversion</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('conversion_report')}"/>
+  </record>
+</erp>

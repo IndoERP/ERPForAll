@@ -1,0 +1,25 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_crm_pipeline_group_sale_salesman,crm pipeline,model_crm_pipeline,sales_team.group_sale_salesman,r,
+access_crm_pipeline_group_sale_manager,crm pipeline,model_crm_pipeline,sales_team.group_sale_manager,crud,
+access_crm_stage_group_sale_salesman,crm stage,model_crm_stage,sales_team.group_sale_salesman,r,
+access_crm_stage_group_sale_manager,crm stage,model_crm_stage,sales_team.group_sale_manager,crud,
+access_crm_lead_create,crm lead,model_crm_lead,sales_team.group_sale_salesman,c,
+access_crm_lead_group_sale_salesman,crm lead,model_crm_lead,sales_team.group_sale_salesman,ru,"['|', ('user_id', '=', user.id), '&', ('user_id', '=', False), '|', ('team_id', '=', False), '|', ('team_id.user_id', '=', user.id), ('team_id.crm_team_member_ids', 'any', [('user_id', '=', user.id), ('active', '=', True)])]"
+access_crm_lead_group_sale_salesman_all_leads,crm lead,model_crm_lead,sales_team.group_sale_salesman_all_leads,ru,
+access_crm_lead_group_sale_manager,crm lead,model_crm_lead,sales_team.group_sale_manager,cru,
+access_crm_lead_contact_create,crm lead contact,model_crm_lead_contact,sales_team.group_sale_salesman,c,
+access_crm_lead_contact_group_sale_salesman,crm lead contact,model_crm_lead_contact,sales_team.group_sale_salesman,ru,"[('lead_id', 'access', 'read')]"
+access_crm_lead_contact_group_sale_salesman_all_leads,crm lead contact,model_crm_lead_contact,sales_team.group_sale_salesman_all_leads,ru,
+access_crm_lead_contact_group_sale_manager,crm lead contact,model_crm_lead_contact,sales_team.group_sale_manager,crud,
+access_crm_stage_history_group_sale_salesman,crm stage history,model_crm_stage_history,sales_team.group_sale_salesman,r,"[('lead_id', 'access', 'read')]"
+access_crm_stage_history_group_sale_salesman_all_leads,crm stage history,model_crm_stage_history,sales_team.group_sale_salesman_all_leads,r,
+access_res_partner_group_sale_salesman,res partner,base.model_res_partner,sales_team.group_sale_salesman,c,
+access_crm_qualify_wizard_group_sale_salesman,crm qualify wizard,model_crm_qualify_wizard,sales_team.group_sale_salesman,crud,"[('create_uid', '=', user.id)]"
+access_crm_submit_wizard_group_sale_salesman,crm intake,model_crm_submit_wizard,sales_team.group_sale_salesman,crud,"[('create_uid', '=', user.id)]"
+access_rule_sales,Read lead rules,model_crm_rule,sales_team.group_sale_salesman,r,
+access_rule_manager,Configure lead rules,model_crm_rule,sales_team.group_sale_manager,crud,
+access_quota_sales,Own sales quotas,model_crm_quota,sales_team.group_sale_salesman,r,"[('user_id', '=', user.id)]"
+access_quota_all,Read sales quotas,model_crm_quota,sales_team.group_sale_salesman_all_leads,r,
+access_quota_manager,Manage sales quotas,model_crm_quota,sales_team.group_sale_manager,crud,
+access_change_sales,Own opportunity forecast history,model_crm_deal_change,sales_team.group_sale_salesman,r,"[('lead_id', 'access', 'read')]"
+access_change_all,Read opportunity forecast history,model_crm_deal_change,sales_team.group_sale_salesman_all_leads,r,

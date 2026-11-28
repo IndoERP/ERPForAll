@@ -1586,6 +1586,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "erp-addon-crm"
+version = "0.1.0"
+dependencies = [
+ "erp-addon-base",
+ "erp-addon-mail",
+ "erp-addon-reporting",
+ "erp-addon-sales_team",
+ "erp-addon-web",
+ "erp-sdk",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "erp-addon-delivery"
 version = "0.1.0"
 dependencies = [
@@ -1733,6 +1746,13 @@ dependencies = [
  "erp-testkit",
  "tokio",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "erp-addon-sale_crm"
+version = "0.1.0"
+dependencies = [
+ "erp-sdk",
 ]
 
 [[package]]
@@ -2134,6 +2154,7 @@ dependencies = [
  "erp-addon-barcodes",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
+ "erp-addon-crm",
  "erp-addon-delivery",
  "erp-addon-hr",
  "erp-addon-mail",
@@ -2147,6 +2168,7 @@ dependencies = [
  "erp-addon-quality_control",
  "erp-addon-reporting",
  "erp-addon-sale",
+ "erp-addon-sale_crm",
  "erp-addon-sale_stock",
  "erp-addon-sales_team",
  "erp-addon-sample_library_wasm",
@@ -2648,6 +2670,7 @@ dependencies = [
  "erp-addon-barcodes",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
+ "erp-addon-crm",
  "erp-addon-mail",
  "erp-addon-product",
  "erp-addon-product-mail",
@@ -2656,6 +2679,7 @@ dependencies = [
  "erp-addon-purchase_stock",
  "erp-addon-reporting",
  "erp-addon-sale",
+ "erp-addon-sale_crm",
  "erp-addon-sale_stock",
  "erp-addon-sales_team",
  "erp-addon-stock",

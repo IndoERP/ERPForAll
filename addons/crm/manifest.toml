@@ -1,0 +1,19 @@
+name = "CRM"
+summary = "Qualify leads, manage opportunities and forecast sales"
+category = "Sales/CRM"
+icon = "lucide:target"
+author = "ERPForAll"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base", "web", "contacts", "mail", "reporting", "sales_team"]
+application = true
+exact_only = true
+data = [
+    "security/ir.access.csv",
+    "data/pipeline.xml",
+    "views/qualification.xml",
+    "views/leads.xml",
+    "views/configuration.xml",
+    "data/reports.xml",
+    "views/menus.xml",
+]

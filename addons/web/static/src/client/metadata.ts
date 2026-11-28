@@ -114,7 +114,7 @@ export interface ActivityNode {
   avatarField: Field | null;
 }
 /** Kanban root: the arch flags; its children are one `kanban_card` and at most one `kanban_progressbar`. */
-export interface KanbanNode { kind: "kanban"; children: Node[]; quickCreate: boolean; recordsDraggable: boolean; groupsDraggable: boolean; archivable: boolean; canOpen: boolean; /** The field the board opens grouped by, when the caller may read it. */ defaultGroupBy: Field | null }
+export interface KanbanNode { kind: "kanban"; children: Node[]; quickCreate: boolean; recordsDraggable: boolean; groupsDraggable: boolean; archivable: boolean; canOpen: boolean; /** The field the board opens grouped by, when the caller may read it. */ defaultGroupBy: Field | null; groupScope?: Field }
 /** The card: field nodes and the `main`, `aside` and `footer` regions. */
 export interface KanbanCardNode { kind: "kanban_card"; children: Node[]; restricted?: RestrictedCard }
 export interface KanbanSectionNode { kind: "kanban_section"; region: "main" | "aside" | "footer"; children: Node[] }
@@ -360,7 +360,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "graph") closed(node, ["kind", "children", "mode", "stacked", "cumulated", "disable_linking", ...(Object.hasOwn(node, "order") ? ["order"] : [])], "view node");
       else if (kind === "graph_field") closed(node, ["kind", "field", "label", "role", ...(Object.hasOwn(node, "interval") ? ["interval"] : [])], "view node");
       else if (kind === "search") closed(node, ["kind", "children", ...(Object.hasOwn(node, "search_panel") ? ["search_panel"] : [])], "view node");
-      else if (kind === "kanban") closed(node, ["kind", "children", "quick_create", "records_draggable", "groups_draggable", "archivable", "can_open", ...["page_limit", "default_group_by", "create", "edit", "delete"].filter(key => Object.hasOwn(node, key))], "view node");
+      else if (kind === "kanban") closed(node, ["kind", "children", "quick_create", "records_draggable", "groups_draggable", "archivable", "can_open", ...["page_limit", "default_group_by", "group_scope", "create", "edit", "delete"].filter(key => Object.hasOwn(node, key))], "view node");
       else if (kind === "kanban_card") closed(node, ["kind", "children", ...(Object.hasOwn(node, "restricted") ? ["restricted"] : [])], "view node");
       else if (kind === "kanban_section") closed(node, ["kind", "region", "children"], "view node");
       else if (kind === "kanban_progressbar") closed(node, ["kind", "field", "colors", ...["sum_field", "help"].filter(key => Object.hasOwn(node, key))], "view node");
@@ -635,8 +635,13 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (kind === "kanban") {
         if (children.filter(child => child.kind === "kanban_card").length !== 1 || children.filter(child => child.kind === "kanban_progressbar").length > 1) throw new ClientError("server", "A kanban view has exactly one card and at most one progress bar.");
         const flag = (key: string): boolean => boolean(node[key], `kanban ${key}`);
+        const groupScope = Object.hasOwn(node, "group_scope") ? rootField(node["group_scope"]) : undefined;
+        const defaultGroupBy = Object.hasOwn(node, "default_group_by") ? rootField(node["default_group_by"]) : null;
+        if (groupScope && (groupScope.kind !== "many2one" || defaultGroupBy?.kind !== "many2one" || groupScope.name === defaultGroupBy.name)) {
+          throw new ClientError("server", "A scoped kanban requires distinct many2one scope and column fields.");
+        }
         return { kind, children, quickCreate: flag("quick_create"), recordsDraggable: flag("records_draggable"), groupsDraggable: flag("groups_draggable"), archivable: flag("archivable"), canOpen: flag("can_open"),
-          defaultGroupBy: Object.hasOwn(node, "default_group_by") ? rootField(node["default_group_by"]) : null };
+          defaultGroupBy, ...(groupScope ? { groupScope } : {}) };
       }
       if (kind === "kanban_card") {
         const regions = children.flatMap(child => child.kind === "kanban_section" ? [child.region] : []);

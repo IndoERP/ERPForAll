@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp noupdate="1">
+  <record id="activity_review_cancelled_booking" model="mail.activity.type">
+    <field name="name">Review cancelled booking</field>
+    <field name="summary">Review opportunity after cancellation</field>
+    <field name="res_model">crm.lead</field>
+    <field name="icon">calendar_today</field>
+  </record>
+</erp>

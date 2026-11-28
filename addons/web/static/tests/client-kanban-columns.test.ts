@@ -8,6 +8,8 @@ import { configureClientTemplates } from "../src/client/registry.js";
 import { describeViews, type View } from "../src/client/metadata.js";
 import { kanbanLayout } from "../src/client/kanban.js";
 import { decodeKanbanGroups, kanbanOpeningInfo, renderKanbanBoard, type KanbanColumnState } from "../src/client/kanban-columns.js";
+import { expandScopedColumns } from "../src/client/kanban-scope.js";
+
 import { decodeKanbanFold, encodeKanbanFold, validKanbanFold, withKanbanColumn } from "../src/client/kanban-fold.js";
 import { parseRoute, routeUrl } from "../src/client/route.js";
 import type { GroupableField } from "../src/client/search/types.js";
@@ -24,9 +26,10 @@ const modelFields = {
 const ref = (name: string) => ({ model: "t.note", name });
 const modifiers = { readonly: null, required: null, invisible: null };
 const field = (name: string, widget: string, label: string) => ({ kind: "field", force_save: false, field: ref(name), widget, options: {}, modifiers, label });
-type Root = { page_limit?: number; default_group_by?: unknown; can_open?: boolean; progress?: boolean; sum?: boolean; uncolored?: boolean; archive?: boolean; create?: boolean; edit?: boolean };
+type Root = { group_scope?: unknown; page_limit?: number; default_group_by?: unknown; can_open?: boolean; progress?: boolean; sum?: boolean; uncolored?: boolean; archive?: boolean; create?: boolean; edit?: boolean };
 const kanbanNodes = (root: Root = {}) => [
   { kind: "kanban", children: root.progress ? [1, 5] : [1], ...(root.create === undefined ? {} : {create: root.create}), ...(root.edit === undefined ? {} : {edit: root.edit}), quick_create: true, records_draggable: true, groups_draggable: true, archivable: true, can_open: root.can_open ?? true,
+    ...(root.group_scope ? { group_scope: root.group_scope } : {}),
     ...(root.page_limit ? { page_limit: root.page_limit } : {}), ...(root.default_group_by ? { default_group_by: root.default_group_by } : {}) },
   { kind: "kanban_card", children: [2, 3] },
   field("name", "char", "Name"),
@@ -35,7 +38,9 @@ const kanbanNodes = (root: Root = {}) => [
   ...(root.progress ? [{kind: "kanban_progressbar", field: ref("state"), colors: [{value: "draft", tone: "info"}, ...(root.uncolored ? [] : [{value: "done", tone: "success"}])], ...(root.sum ? {sum_field: ref("volume")} : {})}] : []),
 ];
 const kanbanDescription = (root?: Root) => ({
-  wire_major: 1, registry_version: "r1", description_version: "d1", model: "t.note", fields: { "t.note": { ...modelFields, ...(root?.archive ? { active: column("boolean","Active") } : {}) } }, notices: [],
+  wire_major: 1, registry_version: "r1", description_version: "d1", model: "t.note", fields: { "t.note": { ...modelFields, ...(root?.group_scope ? {
+    pipeline_id: column("many2one", "Pipeline", { relation: "t.pipeline" }), stage_id: column("many2one", "Stage", { relation: "t.stage" }),
+  } : {}), ...(root?.archive ? { active: column("boolean","Active") } : {}) } }, notices: [],
   views: [{ identity: { kind: "stored", id: 7 }, type: "kanban", schema_major: 1, renderer: "web.kanban", root: 0, nodes: kanbanNodes(root) }]
 });
 const view = (root?: Root): View => describeViews(kanbanDescription(root), "t.note", "r1").views.get("kanban")!;
@@ -268,12 +273,14 @@ const reply = (value: unknown, status = 200) => new Response(JSON.stringify(valu
 /** The domains this fixture understands: a `name ilike` term and a `state =` term (a column's own domain). */
 const keep = (domain: unknown[]) => all.filter(record => domain.every(term => !Array.isArray(term) || (term[0] === "name" ? record.name.toLowerCase().includes(String(term[2]).toLowerCase()) : term[0] === "state" ? record.state === term[2] : true)));
 
-async function startApp(path: string) {
+async function startApp(path: string, answer?: (model: string, method: string, body: Record<string, unknown>) => Response | undefined) {
   history.replaceState(null, "", path);
   const calls: { method: string; body: Record<string, unknown> }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
     const method = url.split("/").pop()!, body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     calls.push({ method, body });
+    const replacement = answer?.(url.split("/").at(-2)!, method, body);
+    if (replacement) return replacement;
     const description = { ...kanbanDescription(options.root), views: [listView, kanbanDescription(options.root).views[0]!, formView, searchView] };
     if (method === "erp_load_web_menus") return reply({ wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] });
     if (method === "erp_load_web_action" || method === "erp_load_web_action_views") {
@@ -616,4 +623,84 @@ test("column archiving checks the full visible selection, refuses unauthorized r
   [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(btn => btn.textContent === "Archive")!.click();
   await vi.waitFor(() => expect(titles(root)).toEqual(["Done 15"]));
   expect(of("has_access").at(-1)!.body).toMatchObject({ operation: "write", ids: fixtureNotes.filter(row => row.state === "draft").map(row => row.id) });
+});
+
+test("a scoped board retains the catalogue order and identity of its populated and empty columns", () => {
+  const grouped = decodeKanbanGroups({ groups: [group([2, "Proposal"], 1, [{id: 41}], "stage_id")], length: 1 }, ownerField, "stage_id", 40, 40);
+  const catalogue = [{ id: 9, display_name: "Proposal" }, { id: 2, display_name: "Proposal" }];
+  const expanded = expandScopedColumns("stage_id", catalogue, grouped.columns, [9]);
+  expect(expanded.map(item => [item.value, item.label, item.count, item.records])).toEqual([
+    [9, "Proposal", 0, undefined], [2, "Proposal", 1, [{id: 41}]]
+  ]);
+  expect(expandScopedColumns("stage_id", catalogue, [], []).map(item => item.domain)).toEqual([
+    [["stage_id", "=", 9]], [["stage_id", "=", 2]]
+  ]);
+});
+
+test("the native board opens an empty pipeline and switches scopes without carrying its column targets over", async () => {
+  options.root = { default_group_by: ref("stage_id"), group_scope: ref("pipeline_id") };
+  const pipelines = [{id: 5, display_name: "Direct"}, {id: 8, display_name: "Channel"}];
+  const stages = new Map([[5, [{id: 15, display_name: "Qualify"}, {id: 11, display_name: "Proposal"}]], [8, [{id: 28, display_name: "Proposal"}, {id: 25, display_name: "Negotiate"}]]]);
+  let currentStage = 28;
+  const { root, of } = await startApp("/erp/action-20?view_type=kanban", (model, method, body) => {
+    if (method === "default_get") return reply({ pipeline_id: 5 });
+    if (method === "fields_get") return reply({stage_id: {string: "Stage", type: "many2one", groupable: true, relation: "t.stage" }});
+    if (model === "t.pipeline" && method === "web_name_search") return reply(pipelines);
+    if (method === "web_search_read" && (model === "t.stage" || model === "t.pipeline")) {
+      const domain = body["domain"] as unknown[][];
+      const id = Number(domain[0]![2]);
+      const records = model === "t.stage" ? stages.get(id)! : pipelines.filter(item => item.id === id);
+      return reply({ records, length: records.length });
+    }
+    if (method === "web_read_group") {
+      const domain = body["domain"] as unknown[][];
+      const id = Number(domain[0]![2]), catalogue = stages.get(id)!;
+      expect(domain).toEqual([["pipeline_id", "=", id], ["stage_id", "in", catalogue.map(row => row.id)]]);
+      const stage = catalogue.find(item => item.id === currentStage);
+      const groups = stage ? [group([stage.id, stage.display_name], 1, [{id: 99, name: "Deal", state: "draft"}], "stage_id")] : [];
+      return reply({ groups, length: groups.length });
+    }
+    if (method === "write") { currentStage = Number((body["vals"] as Record<string, unknown>)["stage_id"]); return reply(true); }
+    return undefined;
+  });
+  await vi.waitFor(() => expect(titles(root)).toEqual(["Qualify 0", "Proposal 0"]));
+  expect(query().get("kanban_scope")).toBe("5");
+  root.querySelector<HTMLButtonElement>(".kanban-scope button")!.click();
+  await vi.waitFor(() => expect(document.querySelector("dialog [data-record-id='8']")).not.toBeNull());
+  document.querySelector<HTMLButtonElement>("dialog [data-record-id='8']")!.click();
+  await vi.waitFor(() => expect(titles(root)).toEqual(["Proposal 1", "Negotiate 0"]));
+  expect(query().get("kanban_scope")).toBe("8");
+  const move = root.querySelector<HTMLSelectElement>("select.kanban-move")!;
+  move.value = "25";
+  move.dispatchEvent(new Event("change", { bubbles: true }));
+  await vi.waitFor(() => expect(titles(root)).toEqual(["Proposal 0", "Negotiate 1"]));
+  expect(of("write").at(-1)?.body).toMatchObject({ids: [99], vals: {stage_id: 25}});
+  const newDeal = [...root.querySelectorAll<HTMLButtonElement>("[data-control-actions] button")].find(item => item.textContent?.includes("New"));
+  newDeal!.click();
+  await vi.waitFor(() => expect(of("default_get").at(-1)?.body).toMatchObject({ context: { default_pipeline_id: 8 } }));
+});
+
+test("a stale scope in a bookmark cannot widen the board to other pipelines", async () => {
+  options.root = { default_group_by: ref("stage_id"), group_scope: ref("pipeline_id") };
+  const { root, of } = await startApp("/erp/action-20?view_type=kanban&kanban_scope=999", (model, method) => {
+    if (model === "t.pipeline" && method === "web_search_read") return reply({records: [], length: 0});
+    if (method === "fields_get") return reply({stage_id: {string: "Stage", type: "many2one", groupable: true, relation: "t.stage" }});
+    return undefined;
+  });
+  await vi.waitFor(() => expect(root.querySelector(".kanban-scope button")?.textContent).toBe("Choose Pipeline"));
+  expect(of("web_read_group")).toHaveLength(0);
+  expect(of("default_get")).toHaveLength(0);
+  expect(root.textContent).toContain("Choose an available Pipeline");
+  expect(root.querySelector("[data-control-actions] button.primary")).toBeNull();
+});
+
+test("opening a new form from a bookmarked private pipeline rechecks access before supplying defaults", async () => {
+  options.root = { default_group_by: ref("stage_id"), group_scope: ref("pipeline_id") };
+  const methods: string[] = [];
+  await expect(startApp("/erp/action-20?view_type=form&kanban_scope=999", (model, method) => {
+    methods.push(method);
+    if (model === "t.pipeline" && method === "web_search_read") return reply({records: [], length: 0});
+    return undefined;
+  })).rejects.toThrow("Pipeline is no longer available");
+  expect(methods).not.toContain("default_get");
 });

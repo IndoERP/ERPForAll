@@ -269,3 +269,21 @@ fn kanban_admits_the_dashboard_card_widget_on_text_fields_only() {
         "{message}"
     );
 }
+
+#[test]
+fn scoped_kanban_requires_two_distinct_stored_relations() {
+    let arch = |group: &str, scope: &str| {
+        format!(
+            r#"<kanban default_group_by="{group}" group_scope="{scope}"><templates><t t-name="card"><field name="name"/></t></templates></kanban>"#
+        )
+    };
+    let lowered = fixture(&arch("parent_id", "partner_id"), "kanban").unwrap();
+    assert_eq!(lowered["nodes"][0]["group_scope"]["name"], "partner_id");
+    for (group, scope) in [
+        ("stage", "partner_id"),
+        ("parent_id", "parent_id"),
+        ("parent_id", "name"),
+    ] {
+        assert!(kanban_refused(&arch(group, scope)).contains("group_scope"));
+    }
+}

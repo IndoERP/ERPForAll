@@ -370,6 +370,7 @@ pub fn view_type_contributions() -> [erp_sdk::views::ViewTypeContribution; 1] {
 /// Trusted integration-test entry points. Never registered as RPCs or included by default.
 #[cfg(feature = "test-support")]
 pub mod metadata_test_support {
+    pub use crate::h18_lower::test_native_layout;
     pub use crate::metadata::{
         test_form_readonly, test_get_views, test_load_action, test_load_action_probed,
         test_load_action_views, test_load_client_action, test_load_menus, test_load_menus_probed,

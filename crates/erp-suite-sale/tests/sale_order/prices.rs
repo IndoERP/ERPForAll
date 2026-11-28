@@ -359,7 +359,12 @@ fn taxes_line_amounts_and_order_totals() {
     });
 }
 
-pub(super) async fn foreign_pricelist(tx: &mut Transaction, world: &World) -> (i64, i64, i64) {
+pub(super) async fn foreign_rates(
+    tx: &mut Transaction,
+    world: &World,
+    day: Date,
+    foreign_rate: &str,
+) -> (i64, i64) {
     let companies = tx.env().records("res.company").unwrap();
     let company = companies.browse([world.company]).unwrap();
     let home = many2one(tx, &company, "currency_id").await.unwrap();
@@ -374,18 +379,24 @@ pub(super) async fn foreign_pricelist(tx: &mut Transaction, world: &World) -> (i
         .write(tx, RawVals::new().set_cell("active", Cell::Bool(true)))
         .await
         .unwrap();
-    for (currency, rate) in [(home, "1"), (foreign, "0.9")] {
+    for (currency, rate) in [(home, "1"), (foreign, foreign_rate)] {
         create(
             tx,
             "res.currency.rate",
             RawVals::new()
-                .set_cell("name", Cell::Date(Date::from_ymd(2026, 1, 1).unwrap()))
+                .set_cell("name", Cell::Date(day))
                 .set_cell("rate", Cell::Decimal(dec(rate)))
                 .set_cell("currency_id", Cell::Id(currency))
                 .set_cell("company_id", Cell::Id(world.company)),
         )
         .await;
     }
+    (home, foreign)
+}
+
+pub(super) async fn foreign_pricelist(tx: &mut Transaction, world: &World) -> (i64, i64, i64) {
+    let (home, foreign) =
+        foreign_rates(tx, world, Date::from_ymd(2026, 1, 1).unwrap(), "0.9").await;
     let pricelist = create(
         tx,
         "product.pricelist",

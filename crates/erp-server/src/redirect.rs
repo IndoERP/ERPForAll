@@ -149,7 +149,7 @@ impl RedirectPolicy {
                 return Err(BoundaryError::Redirect);
             }
             let accepted = match key.as_str() {
-                "menu" | "id" | "active_id" => record_id(value),
+                "menu" | "id" | "active_id" | "kanban_scope" => record_id(value),
                 "model" => model_name(value),
                 "view_type" => self.views.contains(value),
                 "debug" => value == "1",
@@ -217,6 +217,7 @@ impl RedirectPolicy {
             "graph_stacked",
             "graph_cumulated",
             "kanban_fold",
+            "kanban_scope",
             "cids",
         ] {
             if let Some(value) = state.get(key) {

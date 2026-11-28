@@ -11,6 +11,8 @@ members = [
     "addons/product_mail",
     "addons/web",
     "addons/approvals",
+    "addons/crm",
+    "addons/sale_crm",
     "addons/web_map",
     "addons/theme_office_blue",
     "addons/acceptance_notes",
@@ -115,6 +117,8 @@ erp-addon-product-mail = { path = "addons/product_mail" }
 erp-addon-mail = { path = "addons/mail" }
 erp-addon-web = { path = "addons/web" }
 erp-addon-approvals = { path = "addons/approvals" }
+erp-addon-crm = { path = "addons/crm" }
+erp-addon-sale_crm = { path = "addons/sale_crm" }
 erp-addon-web-map = { path = "addons/web_map" }
 erp-addon-theme-office-blue = { path = "addons/theme_office_blue" }
 erp-addon-acceptance-notes = { package = "addon-acceptance_notes", path = "addons/acceptance_notes" }

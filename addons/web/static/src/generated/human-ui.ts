@@ -1309,7 +1309,11 @@ children: Array<number>,
 /**
  * Cards per page from the arch `limit`; absent keeps the client's list default.
  */
-page_limit?: WirePageLimit, default_group_by?: FieldRef, quick_create: boolean, records_draggable: boolean, groups_draggable: boolean, archivable: boolean, can_open: boolean,
+page_limit?: WirePageLimit, default_group_by?: FieldRef,
+/**
+ * Stored many2one shared by board records and their column comodel. Selects a catalogue of columns.
+ */
+group_scope?: FieldRef, quick_create: boolean, records_draggable: boolean, groups_draggable: boolean, archivable: boolean, can_open: boolean,
 /**
  * Whether new records can be created from this view.
  */

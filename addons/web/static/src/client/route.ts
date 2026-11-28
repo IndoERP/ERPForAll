@@ -39,6 +39,8 @@ export interface Route {
   graph_cumulated?: string;
   /** Kanban board state (M4.KANBAN-CLIENT-COLUMNS): the columns the user folded or opened, for one grouping (kanban-fold.ts). */
   kanban_fold?: string;
+  /** Selected scope of a declaratively scoped board. */
+  kanban_scope?: string;
 }
 // Refusals that mean "this state is too large for an address" (one value or the whole address past 2,048, an expanded
 // pivot header deeper or longer than its bound), as opposed to a malformed parameter. (1,024 expanded pivot headers
@@ -63,7 +65,7 @@ export function rpcId(value: string): number {
   if (!Number.isSafeInteger(id)) throw new ClientError("unsupported", "This record identifier exceeds the browser's safe integer range.");
   return id;
 }
-const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab", "search_panel", "pivot_rows", "pivot_cols", "pivot_measures", "pivot_open", "pivot_sort", "calendar_scale", "calendar_date", "graph_mode", "graph_measure", "graph_groupby", "graph_order", "graph_stacked", "graph_cumulated", "kanban_fold"] as const;
+const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab", "search_panel", "pivot_rows", "pivot_cols", "pivot_measures", "pivot_open", "pivot_sort", "calendar_scale", "calendar_date", "graph_mode", "graph_measure", "graph_groupby", "graph_order", "graph_stacked", "graph_cumulated", "kanban_fold", "kanban_scope"] as const;
 const routeKeys = new Set<string>(["action", ...queryKeys, "cids"]);
 const diagnosticKeys = new Set<string>([...routeKeys, "url", "path", "hash"]);
 const byteLength = (value: string): number => new TextEncoder().encode(value).length;
@@ -143,7 +145,7 @@ function validate(route: Route): void {
     transportString(value, key);
     switch (key) {
       case "debug": if (value !== "1") return fail(key); break;
-      case "menu": case "id": case "active_id": decimalId(value, key); break;
+      case "menu": case "id": case "active_id": case "kanban_scope": decimalId(value, key); break;
       case "model":
         if (value.length > 128 || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(value)) return fail(key);
         break;

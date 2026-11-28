@@ -323,7 +323,9 @@ fn relieve_root(node: &mut wire::ViewNode) -> bool {
             true
         }
         wire::ViewNode::Kanban {
-            default_group_by, ..
+            default_group_by,
+            group_scope: None,
+            ..
         } if default_group_by.is_some() => {
             *default_group_by = None;
             true
@@ -349,6 +351,14 @@ fn require_builtin_root_field(model: &str, kind: &str, field: &wire::FieldRef) -
     }
     Ok(())
 }
+fn stored_parent<'a>(model: &'a erp_sdk::ModelSpec, name: &str) -> Option<&'a str> {
+    let field = model.field(name)?;
+    match &field.ty {
+        FieldType::Many2one { comodel, .. } if field.store => Some(comodel),
+        _ => None,
+    }
+}
+
 fn validate_builtin_field_models(model: &str, node: &wire::ViewNode) -> Result<()> {
     match node {
         wire::ViewNode::Field { field, .. } => require_builtin_root_field(model, "field", field),
@@ -359,9 +369,13 @@ fn validate_builtin_field_models(model: &str, node: &wire::ViewNode) -> Result<(
             require_builtin_root_field(model, "pivot_field", field)
         }
         wire::ViewNode::Kanban {
-            default_group_by: Some(field),
+            default_group_by,
+            group_scope,
             ..
-        } => require_builtin_root_field(model, "kanban", field),
+        } => [default_group_by.as_ref(), group_scope.as_ref()]
+            .into_iter()
+            .flatten()
+            .try_for_each(|field| require_builtin_root_field(model, "kanban", field)),
         wire::ViewNode::KanbanProgressbar {
             field, sum_field, ..
         } => {
@@ -833,6 +847,31 @@ impl<'a> Request<'a> {
                 .payload_node_references(payload, index, budget)
                 .map_err(view_error)?;
             let mut allowed = true;
+            if let wire::ViewNode::Kanban {
+                group_scope: Some(scope),
+                default_group_by,
+                ..
+            } = node
+            {
+                let catalogue = default_group_by
+                    .as_ref()
+                    .filter(|group| group.name != scope.name)
+                    .and_then(|group| stored_parent(spec, &group.name))
+                    .ok_or_else(|| {
+                        failure("A scoped kanban requires a distinct many2one column field.")
+                    })?;
+                let shared_relation = stored_parent(spec, &scope.name);
+                let column_scope = env
+                    .registry()
+                    .model(catalogue)
+                    .and_then(|model| stored_parent(model, &scope.name));
+                if shared_relation.is_none() || shared_relation != column_scope {
+                    return Err(failure(
+                        "Kanban group_scope must reference the same relation on records and columns.",
+                    ));
+                }
+                allowed = path_allowed(env, tx, catalogue, &scope.name).await?;
+            }
             for field in refs.fields() {
                 let (scope, path) = reference(field, model)?;
                 if !path_allowed(env, tx, scope, path).await? {
@@ -1503,6 +1542,7 @@ mod tests {
             children: vec![1],
             page_limit: None,
             default_group_by: Some(field("stage")),
+            group_scope: None,
             quick_create: true,
             records_draggable: true,
             groups_draggable: true,
@@ -1512,6 +1552,16 @@ mod tests {
             edit: None,
             delete: None,
         };
+        if let wire::ViewNode::Kanban { group_scope, .. } = &mut root {
+            *group_scope = Some(field("pipeline_id"));
+        }
+        assert!(
+            !super::relieve_root(&mut root),
+            "a denied scoped board cannot become an unscoped board"
+        );
+        if let wire::ViewNode::Kanban { group_scope, .. } = &mut root {
+            *group_scope = None;
+        }
         assert!(super::relieve_root(&mut root));
         assert!(matches!(
             &root,

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="forecast_bookings" model="reporting.report.line">
+    <field name="report_id" ref="crm.forecast_report"/>
+    <field name="sequence">90</field>
+    <field name="name">Bookings (confirmed orders, untaxed)</field>
+    <field name="code">BOOKINGS</field>
+    <field name="groupby">team_id,user_id</field>
+  </record>
+  <record id="forecast_booking_amount" model="reporting.report.expression">
+    <field name="line_id" ref="forecast_bookings"/>
+    <field name="label">amount</field>
+    <field name="model">sale.order</field>
+    <field name="date_field">date_order</field>
+    <field name="domain">[["state","=","sale"],["opportunity_id","!=",false]]</field>
+    <field name="field">crm_booking_amount</field>
+  </record>
+</erp>

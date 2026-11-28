@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="qualify_lead_form" model="ir.ui.view">
+    <field name="name">crm.qualify.wizard.form</field>
+    <field name="model">crm.qualify.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Qualify Lead"><sheet><group>
+        <group>
+          <field name="lead_id" readonly="1"/>
+          <field name="candidate_ids" readonly="1" widget="many2many_tags"/>
+          <field name="choice" widget="radio"/>
+        </group>
+        <group>
+          <field name="partner_id" invisible="choice != 'existing'" required="choice == 'existing'"/>
+          <field name="company_name" invisible="choice != 'business'" required="choice == 'business'"/>
+          <field name="contact_name" invisible="choice == 'existing'" required="choice == 'person'"/>
+        </group>
+      </group></sheet><footer>
+        <button name="action_convert" type="object" string="Qualify" class="btn-primary"/>
+        <button string="Cancel" special="cancel"/>
+      </footer></form>
+    </field>
+  </record>
+  <record id="submit_lead_form" model="ir.ui.view">
+    <field name="name">crm.submit.wizard.form</field><field name="model">crm.submit.wizard</field>
+    <field name="arch" type="xml"><form string="Submit Lead"><sheet>
+      <div class="oe_title"><h1><field name="name" placeholder="Enquiry or lead name"/></h1></div>
+      <group>
+        <group string="Contact"><field name="company_name"/><field name="contact_name"/>
+          <field name="email" widget="email"/><field name="phone" widget="phone"/></group>
+        <group string="Assignment"><field name="company_id"/><field name="source"/><field name="region"/></group>
+      </group>
+      <group><field name="next_step"/></group>
+    </sheet><footer>
+      <button name="action_submit" type="object" string="Submit Lead" class="btn-primary"/>
+      <button string="Cancel" special="cancel"/>
+    </footer></form></field>
+  </record>
+  <record id="submit_lead_window" model="ir.actions.act_window">
+    <field name="name">Submit Lead</field><field name="res_model">crm.submit.wizard</field>
+    <field name="view_mode">form</field><field name="view_id" ref="submit_lead_form"/><field name="target">new</field>
+  </record>
+</erp>

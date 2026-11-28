@@ -5460,6 +5460,8 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
    carry a border. A folded column is one narrow control with the title turned sideways. */
 /* The board clips what leaves its scroll box, so focus rings get their room inside it: 6px at the sides (taken back by the
    margin, so the first column stays on the page's left edge), and rings drawn inside the controls that touch its top. */
+.kanban-scope { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.kanban-scope > span { color: var(--muted); }
 .kanban-board { display: flex; align-items: flex-start; gap: 12px; min-height: 160px; max-height: calc(100dvh - var(--app-bar-height) - var(--control-panel-height, 61px) - 40px); overflow: auto; margin-inline: -6px; padding: 0 6px 8px; }
 .kanban-column { display: flex; flex: 0 0 296px; flex-direction: column; min-width: 0; }
 .kanban-column-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 4px 8px; background: var(--canvas); }

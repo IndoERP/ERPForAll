@@ -1108,6 +1108,10 @@ pub enum ViewNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema-gen", ts(optional))]
         default_group_by: Option<FieldRef>,
+        /// Stored many2one shared by board records and their column comodel. Selects a catalogue of columns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        group_scope: Option<FieldRef>,
         quick_create: bool,
         records_draggable: bool,
         groups_draggable: bool,

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <menuitem id="menu_crm" name="CRM" groups="sales_team.group_sale_salesman" web_icon="lucide:target" sequence="28">
+    <menuitem id="menu_pipeline" name="Pipeline" action="pipeline_window" sequence="10"/>
+    <menuitem id="menu_leads" name="Leads" action="lead_window" sequence="20"/>
+    <menuitem id="menu_submit_lead" name="Submit Lead" action="submit_lead_window" sequence="25"/>
+    <menuitem id="menu_opportunities" name="All Opportunities" action="opportunity_window" sequence="30"/>
+    <menuitem id="menu_accounts" name="Business Accounts" action="account_window" sequence="40"/>
+    <menuitem id="menu_contacts" name="Contacts" action="contacts.action_contacts" sequence="45"/>
+    <menuitem id="menu_reporting" name="Reporting" sequence="60">
+      <menuitem id="menu_forecast" name="Sales Forecast" action="forecast_report_window" sequence="10"/>
+      <menuitem id="menu_attainment" name="Quota Attainment" action="quota_window" sequence="12"/>
+      <menuitem id="menu_pipeline_analysis" name="Pipeline Analysis" action="pipeline_analysis_window" sequence="15"/>
+      <menuitem id="menu_conversion" name="Sales Conversion" action="conversion_report_window" sequence="20"/>
+      <menuitem id="menu_loss_reasons" name="Lost Opportunities" action="loss_window" sequence="30"/>
+      <menuitem id="menu_stage_history" name="Time in Stage" action="stage_history_window" sequence="40"/>
+      <menuitem id="menu_changes" name="Forecast Changes" action="deal_change_window" sequence="50"/>
+    </menuitem>
+    <menuitem id="menu_config" name="Configuration" groups="sales_team.group_sale_manager" sequence="90">
+      <menuitem id="menu_pipeline_config" name="Pipelines" action="config_pipeline_window" sequence="10"/>
+      <menuitem id="menu_stages" name="Stages" action="stage_window" sequence="20"/>
+      <menuitem id="menu_teams" name="Sales Teams" action="sales_team.crm_team_action_config" sequence="30"/>
+      <menuitem id="menu_rules" name="Assignment and Scoring Rules" action="rule_window" sequence="40"/>
+      <menuitem id="menu_quotas" name="Sales Quotas" action="quota_window" sequence="50"/>
+    </menuitem>
+  </menuitem>
+</erp>

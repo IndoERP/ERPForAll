@@ -90,7 +90,7 @@ impl<'a> Node<'a> for CheckedNode<'a> {
         CheckedNode::is_unwrapped(&self)
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'a> Node<'a> for erp_sdk::views::NodeRef<'a> {
     fn source_child_count(self) -> usize {
         self.children().count()
@@ -1763,6 +1763,24 @@ fn lower_tree<'a, N: Node<'a>>(
             })
         })
     })
+}
+
+/// Exercise a combined addon view against the native renderer contract without opening a database.
+/// This validates the unfiltered layout only. It never produces metadata for a caller.
+#[cfg(feature = "test-support")]
+pub fn test_native_layout(
+    arch: &erp_sdk::views::Arch,
+    spec: &ModelSpec,
+    decl: &erp_sdk::views::ViewTypeDecl,
+) -> ViewResult<()> {
+    use erp_sdk::views::{DescriptionBuilder, DescriptionEncoder, ViewLimits};
+
+    let budget = DescriptionBudget::new();
+    let payload = DescriptionBuilder::new(decl.schema(), &budget)
+        .build(|out| lower_tree(arch.root(), spec, decl.key(), out))?;
+    DescriptionEncoder::new(&budget, &ViewLimits::default())
+        .encode(&payload)
+        .map(drop)
 }
 fn set_children<'a, N: Node<'a>>(
     object: &mut erp_sdk::views::DescriptionObjectBuilder<'_>,

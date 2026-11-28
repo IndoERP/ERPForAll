@@ -1,6 +1,23 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 use erp_server::redirect::{RedirectPolicy, SHELL_VIEW_TYPES};
 
+/// The saved board, its draft form, and its filtered list all retain the same scope id.
+#[test]
+fn kanban_scope_is_a_record_id_for_a_window_action() {
+    let policy = RedirectPolicy::new("https://erp.example.test", SHELL_VIEW_TYPES).unwrap();
+    for view in ["kanban", "form", "list"] {
+        let url = format!("/erp/action-28?view_type={view}&kanban_scope=17");
+        assert_eq!(policy.shell(&url).unwrap(), url);
+    }
+    for value in ["0", "-1", "01", "1,2", "99999999999999999999"] {
+        assert!(
+            policy
+                .shell(&format!("/erp/action-28?kanban_scope={value}"))
+                .is_err()
+        );
+    }
+}
+
 /// SPEC-VIEW-273 (partial: the kanban board's folded and opened columns in the page address are admitted on reload with their closed shape; the board itself is the client's)
 #[test]
 fn kanban_fold_state_is_admitted_with_its_closed_shape() {

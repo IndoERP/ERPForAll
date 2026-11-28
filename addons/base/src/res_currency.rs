@@ -53,6 +53,32 @@ pub struct ResCurrency {
 
 #[methods(ResCurrency, addon = "base")]
 impl ResCurrency {
+    /// Convert an amount and return the exact factor for a durable business record.
+    #[method(sealed)]
+    async fn _convert_with_factor(
+        this: &RecordSet<ResCurrency>,
+        tx: &mut Transaction,
+        target_currency: RecId,
+        company: RecId,
+        day: Date,
+        amount: Decimal,
+    ) -> Result<(Decimal, String)> {
+        let from = this.as_records().ensure_one()?.rec_ids()[0];
+        let result = crate::money::convert_with(
+            this.env(),
+            tx,
+            amount,
+            from,
+            target_currency,
+            company,
+            day,
+            erp_sdk::money::RateDateRule::OnOrBefore,
+            crate::money::CURRENCY_ROUNDING_MODE,
+        )
+        .await?;
+        Ok((result.amount(), result.snapshot().factor()?.to_string()))
+    }
+
     /// Internal, positional adapter for core monetary publication.
     /// Currency reads use the method environment. Core supplies narrow currency-lookup
     /// sudo; amount-write authorization remains with the mutation caller.

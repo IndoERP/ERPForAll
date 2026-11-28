@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp noupdate="1">
+  <record id="pipeline_direct" model="crm.pipeline"><field name="name">Direct Sales</field><field name="sequence">10</field></record>
+  <record id="stage_prospect" model="crm.stage">
+    <field name="name">Prospecting</field><field name="pipeline_id" ref="pipeline_direct"/><field name="sequence">10</field><field name="probability">10</field>
+  </record>
+  <record id="stage_qualify" model="crm.stage">
+    <field name="name">Qualification</field><field name="pipeline_id" ref="pipeline_direct"/><field name="sequence">20</field><field name="probability">30</field>
+  </record>
+  <record id="stage_proposal" model="crm.stage">
+    <field name="name">Proposal</field><field name="pipeline_id" ref="pipeline_direct"/><field name="sequence">30</field><field name="probability">60</field><field name="forecast_category">best_case</field><field name="require_partner" eval="True"/>
+  </record>
+  <record id="stage_negotiate" model="crm.stage">
+    <field name="name">Negotiation</field><field name="pipeline_id" ref="pipeline_direct"/><field name="sequence">40</field><field name="probability">85</field><field name="forecast_category">commit</field><field name="require_partner" eval="True"/><field name="require_close_date" eval="True"/>
+  </record>
+</erp>

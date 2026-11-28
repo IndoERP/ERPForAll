@@ -22,6 +22,8 @@ erp-addon-purchase = { workspace = true }
 erp-addon-purchase-mail = { workspace = true }
 erp-addon-purchase_stock = { workspace = true }
 erp-addon-reporting = { workspace = true }
+erp-addon-crm.workspace = true
+erp-addon-sale_crm.workspace = true
 erp-addon-sale = { workspace = true }
 erp-addon-sale_stock = { workspace = true }
 erp-addon-sales_team = { workspace = true }

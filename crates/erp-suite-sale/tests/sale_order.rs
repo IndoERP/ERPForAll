@@ -17,6 +17,15 @@ use erp_testkit::{TemplateDb, TestDb};
 #[path = "support/install_defaults.rs"]
 mod install_defaults;
 
+#[path = "sale_order/crm_forecast.rs"]
+mod crm_forecast;
+
+#[path = "sale_order/crm_lifecycle.rs"]
+mod crm_lifecycle;
+
+#[path = "sale_order/crm.rs"]
+mod crm;
+
 #[path = "sale_order/lines.rs"]
 mod lines;
 
@@ -126,6 +135,8 @@ fn system_for_pool(pool: erp_testkit::deadpool_postgres::Pool, stock: bool) -> M
                 &erp_addon_reporting::ADDON,
                 &erp_addon_sales_team::ADDON,
                 &erp_addon_sale::ADDON,
+                &erp_addon_crm::ADDON,
+                &erp_addon_sale_crm::ADDON,
             ])
     }
     .build()

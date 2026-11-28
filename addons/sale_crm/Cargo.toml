@@ -1,0 +1,15 @@
+[package]
+name = "erp-addon-sale_crm"
+description = "ERPForAll opportunity and quotation integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk.workspace = true
+
+[lints]
+workspace = true

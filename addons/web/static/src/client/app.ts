@@ -34,6 +34,8 @@ import { GRAPH_MAX_GROUPINGS, GRAPH_PARAMS, GraphModel, graphGrouping, graphPara
 import { mountGraph, type GraphTarget } from "./graph-view.js";
 import { decodeKanbanGroups, kanbanOpeningInfo, renderKanbanBoard, type KanbanBoard, type KanbanColumnState } from "./kanban-columns.js";
 import { decodeKanbanFold, encodeKanbanFold, withKanbanColumn, type KanbanColumnKey, type KanbanFoldState } from "./kanban-fold.js";
+import { expandScopedColumns, readBoardScope, readCatalogue } from "./kanban-scope.js";
+import { selectCreateDialog } from "./select-create-dialog.js";
 import { focusKanbanCard, kanbanLayout, kanbanRoot, renderKanbanCards } from "./kanban.js";
 import { hierarchyRoot, renderHierarchyTree, type HierarchyState } from "./hierarchy.js";
 import { readStoredMap } from "./map-view.js";
@@ -2449,7 +2451,7 @@ export class HumanApp {
         }
         // `search_default_<name>` keys only choose the search the view opens with; they never travel with its requests.
         const { context, defaults: searchDefaults } = splitSearchDefaults(entry?.context ?? { ...this.context, ...this.actionContext(action) });
-        const actionDomain: unknown[] = entry ? [] : this.actionDomain(action, context);
+        const actionDomain: unknown[] = entry ? [...entry.result.domain] : this.actionDomain(action, context);
         const model = text(action["model"], "action model");
         if (route.model && route.model !== model) throw new ClientError("validation", "URL model does not match the action.");
         const views = actionViews(action);
@@ -2458,6 +2460,15 @@ export class HumanApp {
         const view = description.views.get(viewType);
         if (!view) throw new ClientError("unsupported", "The requested view is unavailable.");
 
+        if (route.kanban_scope !== undefined && view.type !== "kanban") {
+          const board = description.views.get("kanban");
+          const scope = board && kanbanRoot(board).groupScope;
+          if (!scope) throw new ClientError("validation", "This action has no scoped kanban.");
+          const selected = await readBoardScope(this.rpc, model, scope, rpcId(route.kanban_scope), context);
+          if (!selected) throw new ClientError("validation", `This ${scope.label} is no longer available. Open the board to choose another.`);
+          actionDomain.push([scope.name, "=", selected.id]);
+          if (view.type === "form" && route.id === undefined) context[`default_${scope.name}`] = selected.id;
+        }
         const actionTitle = text(action["name"], "action name");
         const mountedPanel = await mountControlPanel(staging, { title: actionTitle, model }, error => this.reportError(error));
         const panel = mountedPanel.panel, controls = mountedPanel.actions;
@@ -2518,42 +2529,42 @@ export class HumanApp {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const list = await this.listView(staging, panel, actionTitle, description, view, route, generation, actionHelp, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, canCreate, searchDefaults});
+          const list = await this.listView(staging, panel, actionTitle, description, view, route, generation, actionHelp, views as [number | null, string][], {baseDomain: actionDomain, context, hasForm, canCreate, searchDefaults});
           nextDispose = list.dispose;
           nextSettle = list.settle;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "kanban") {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
-          if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const kanban = await this.kanbanView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
+          const kanban = await this.kanbanView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, hasForm, searchDefaults});
+          if (canCreate && kanban.canCreateInScope) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
           nextDispose = kanban.dispose;
           nextRestore = kanban.restore;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "pivot") {
-          const pivot = await this.pivotView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
+          const pivot = await this.pivotView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, searchDefaults});
           nextDispose = pivot.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "calendar") {
-          const calendar = await this.calendarView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
+          const calendar = await this.calendarView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, searchDefaults});
           nextDispose = calendar.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "graph") {
-          const graph = await this.graphView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
+          const graph = await this.graphView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, searchDefaults});
           nextDispose = graph.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "hierarchy") {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const hierarchy = await this.hierarchyView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
+          const hierarchy = await this.hierarchyView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, hasForm, searchDefaults});
           nextDispose = hierarchy.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "activity" || view.type === "map") {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const activity = await this.activityOrMapView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
+          const activity = await this.activityOrMapView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: actionDomain, context, hasForm, searchDefaults});
           nextDispose = activity.dispose;
           stagedDisposers.push(nextDispose);
         } else {
@@ -3175,11 +3186,19 @@ export class HumanApp {
    *  search groups or the arch names a default grouping, the board of columns (M4.KANBAN-CLIENT-COLUMNS: one grouped read, fold and
    *  unfold, load more per column, the folded columns in the address). Both keep the way back to the card that was opened.
    *  Progress bar, quick create, the column menu and drag and drop are M4.KANBAN-CLIENT-COLUMNS.PROGRESS, .QUICK-CREATE, .MENU and M4.KANBAN-CLIENT-DRAG. */
-  private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void; restore: () => void }> {
+  private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void; restore: () => void; canCreateInScope: boolean }> {
     const { context, baseDomain, hasForm } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The kanban view shows many records; the address cannot name one record.");
     const cardNavigation = this.pageNavigation(generation, route, () => actionTitle);
     const root = kanbanRoot(view), layout = kanbanLayout(view);
+    const scopeField = root.groupScope;
+    if (route.kanban_scope !== undefined && !scopeField) throw new ClientError("validation", "This action has no scoped kanban.");
+    const selected = scopeField ? await readBoardScope(this.rpc, description.model, scopeField, route.kanban_scope ? rpcId(route.kanban_scope) : undefined, context) : undefined;
+    if (selected && scopeField) {
+      route.kanban_scope = String(selected.id);
+      context[`default_${scopeField.name}`] = selected.id;
+    }
+    const scopedDomain = [...baseDomain, ...(scopeField ? [selected ? [scopeField.name, "=", selected.id] : ["id", "=", 0]] : [])];
     const resume = this.kanbanResume?.url === routeUrl(route) ? this.kanbanResume : undefined;
     this.kanbanResume = undefined;
     const pageSize = view.pageLimit ?? 40;
@@ -3202,7 +3221,7 @@ export class HumanApp {
         const found = object(row);
         return { id: integer(found["id"], "relation id"), display_name: text(found["display_name"], "relation name") };
       }),
-      userId: this.userId, companyId: this.companyId, initialDomain: baseDomain,
+      userId: this.userId, companyId: this.companyId, initialDomain: scopedDomain,
       // The Group By menu of the list; the board draws the first grouping (the reference's kanban does the same).
       groupBy: { load: () => this.groupByCatalogue(description.model, context), multiple: true, maxLevels: 32, persist: true, accept: params => {
         const proposed = { ...route };
@@ -3215,7 +3234,7 @@ export class HumanApp {
       } }
     });
     if (route.search_groupby || root.defaultGroupBy) await searchModel.loadGroupByCatalogue();
-    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
+    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, scopedDomain, context), scope.searchDefaults ?? new Map(), generation);
     searchModel.clearListState(); // a list's open groups and paging are not the board's
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? searchModel.getSearchableFields()[0];
@@ -3238,6 +3257,26 @@ export class HumanApp {
 
     const results = el("div", undefined, "kanban-view");
     const body = el("div", undefined, "kanban-results");
+    if (scopeField) {
+      const picker = button(selected?.display_name ?? `Choose ${scopeField.label}`, () => {
+        const dialog = selectCreateDialog({ dialogs: this.messages.dialogs, rpc: this.rpc, model: scopeField.relation!, domain: [], context,
+          title: `Choose ${scopeField.label}`, signal: this.lifetime.signal,
+          select: choice => {
+            if (choice.id === selected?.id || generation !== this.generation) return;
+            dialog.close();
+            this.run(async () => {
+              await this.navigate({ ...route, kanban_scope: String(choice.id), kanban_fold: undefined });
+              if (this.current.kanban_scope === String(choice.id)) this.content.querySelector<HTMLElement>(".kanban-scope button")?.focus();
+            });
+          },
+        });
+      }, "erp-button");
+      picker.setAttribute("aria-label", selected ? `${scopeField.label}: ${selected.display_name}. Change ${scopeField.label}` : `Choose ${scopeField.label}`);
+      picker.setAttribute("aria-haspopup", "dialog");
+      const toolbar = el("div", undefined, "kanban-scope");
+      toolbar.append(el("span", scopeField.label), picker);
+      results.append(toolbar);
+    }
     results.append(body);
     const currencies = new CurrencyDisplayCache();
     const readonlyFields = view.fields.map(field => ({ ...field, readonly: true }));
@@ -3370,10 +3409,22 @@ export class HumanApp {
         bound = settings;
         const step = Math.min(pageSize, settings.maxCards);
         const info = kanbanOpeningInfo(fold, step, new Map<KanbanColumnKey, number>([...loaded].map(([value, shown]): [KanbanColumnKey, number] => [value, Math.min(shown, settings.maxCards)])));
+        const scoped = selected && scopeField && group.spec === root.defaultGroupBy?.name
+          ? await readCatalogue(this.rpc, root.defaultGroupBy.relation!, [[scopeField.name, "=", selected.id]], context, settings.maxColumns)
+          : undefined;
+        if (!current()) return;
+        if (scoped && scoped.length > settings.maxColumns) {
+          unavailable(`This ${scopeField!.label} has ${scoped.length} columns. The board limit is ${settings.maxColumns}.`, "Too many columns");
+          return;
+        }
+        if (scoped) domain.push([group.field.name, "in", scoped.choices.map(choice => choice.id)]);
         answer = decodeKanbanGroups(await this.rpc.call(description.model, "web_read_group", {
           domain, groupby: [group.spec], aggregates: sum ? ["__count", `${sum.field}:sum`] : ["__count"], limit: settings.maxColumns, auto_unfold: true, ...(info ? { opening_info: info } : {}),
           unfold_read_specification: specification(view.fields), unfold_read_default_limit: step, context: { ...context, ...BIN_SIZE_CONTEXT }
         }), group.field, group.spec, settings.maxColumns, settings.maxCards, sum);
+        if (scoped) {
+          answer = { columns: expandScopedColumns(group.field.name, scoped.choices, answer.columns, fold?.folded ?? []), length: scoped.length };
+        }
       } catch (error) {
         if (!current()) return;
         unavailable("Unable to load these records. Adjust the search or reload the page.", "Results unavailable");
@@ -3514,6 +3565,10 @@ export class HumanApp {
 
     const load = async (): Promise<void> => {
       const mine = ++request, current = (): boolean => mine === request && generation === this.generation && !this.expired;
+      if (scopeField && !selected) {
+        unavailable(`Choose an available ${scopeField.label} to view this board.`, "No selection");
+        return;
+      }
       void sidebar?.refresh(searchModel.getDomain());
       const group = grouping();
       if (group) return loadBoard(group, current);
@@ -3594,6 +3649,7 @@ export class HumanApp {
     }
     this.wrapWithSearchPanel(staging, results, sidebar);
     return {
+      canCreateInScope: !scopeField || selected !== undefined,
       dispose: () => { request++; cards?.dispose(); board?.dispose(); sidebar?.dispose(); searchBar.dispose(); },
       // After the page is in the document and scrolled to its top: the way back from a card restores its scroll and focus.
       restore: () => {

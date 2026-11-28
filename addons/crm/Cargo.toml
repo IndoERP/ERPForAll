@@ -1,0 +1,21 @@
+[package]
+name = "erp-addon-crm"
+description = "Sales leads, opportunity pipelines and forecasting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+erp-addon-base.workspace = true
+erp-addon-web.workspace = true
+erp-addon-reporting.workspace = true
+erp-addon-mail.workspace = true
+erp-addon-sales_team.workspace = true
+toml.workspace = true

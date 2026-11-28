@@ -866,6 +866,12 @@ up to the configured limit. Folded columns keep their position in the page addre
 move selector and drag gesture use the same record write. A refused move leaves the card in its
 original column. Quick creation passes the column value through the model's usual defaults.
 
+For a pipeline with configurable stages, declare `<kanban default_group_by="stage_id" group_scope="pipeline_id">`.
+Both the record model and its stage model declare the same stored many2one scope field. The board opens
+the model's default pipeline, and its picker searches pipelines with the caller's permissions. It reads the
+selected pipeline's stages in the stage model's default order, including empty stages. The selection stays
+in the address as `kanban_scope` and supplies the pipeline default when creating a record.
+
 Calendar date inputs use the session timezone. Moving the start also moves the end.
 Changing only the end resizes an event. Open an event to see the actions its record rules allow.
 Each multi-day event occupies one bar per displayed week. A pivot can declare a named

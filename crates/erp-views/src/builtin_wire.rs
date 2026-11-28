@@ -1147,6 +1147,9 @@ impl Output {
                         wire::WirePageLimit::try_from(value).map_err(invalid)
                     })
                     .transpose()?,
+                group_scope: optional(object, "group_scope")
+                    .map(|value| self.field(value))
+                    .transpose()?,
                 default_group_by: optional(object, "default_group_by")
                     .map(|value| self.field(value))
                     .transpose()?,

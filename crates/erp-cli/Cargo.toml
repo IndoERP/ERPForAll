@@ -16,6 +16,8 @@ erp-addon-ai-base.workspace = true
 erp-addon-barcodes = { workspace = true }
 erp-addon-uom = { workspace = true }
 erp-addon-approvals.workspace = true
+erp-addon-crm.workspace = true
+erp-addon-sale_crm.workspace = true
 erp-addon-mail = { workspace = true }
 erp-addon-product = { workspace = true }
 erp-addon-product-mail = { workspace = true }

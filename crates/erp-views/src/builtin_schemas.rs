@@ -581,6 +581,7 @@ static KANBAN_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("children", &CHILDREN),
     SchemaProperty::optional("page_limit", &INT),
     SchemaProperty::optional("default_group_by", &FIELD_REF),
+    SchemaProperty::optional("group_scope", &FIELD_REF),
     SchemaProperty::required("quick_create", &BOOL),
     SchemaProperty::required("records_draggable", &BOOL),
     SchemaProperty::required("groups_draggable", &BOOL),

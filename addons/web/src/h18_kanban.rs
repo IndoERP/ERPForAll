@@ -18,6 +18,7 @@ pub(super) const ROOT_ATTRS: &[&str] = &[
     "string",
     "limit",
     "default_group_by",
+    "group_scope",
     "quick_create",
     "records_draggable",
     "groups_draggable",
@@ -95,7 +96,19 @@ pub(super) fn root<'a, N: Node<'a>>(node: N, spec: &ModelSpec) -> ViewResult<()>
         boolean(node, flag, true)?;
     }
     limit(node)?;
-    group_by(spec, node)?;
+    let grouping = group_by(spec, node)?;
+    if let Some(scope) = node.attr("group_scope") {
+        let relation = |field: &erp_sdk::FieldSpec| {
+            field.store && matches!(field.ty, FieldType::Many2one { .. })
+        };
+        if !grouping.is_some_and(|field| relation(field) && field.name != scope)
+            || !spec.field(scope).is_some_and(relation)
+        {
+            return Err(invalid(
+                "Kanban group_scope and default_group_by must name distinct stored many2one fields.",
+            ));
+        }
+    }
     if node.children().any(|child| child.tag() == "t") {
         return Err(invalid(
             "The kanban card template belongs inside <templates>.",
@@ -382,6 +395,9 @@ pub(super) fn build<'a, N: Node<'a>>(
                 object.set("default_group_by", |value| {
                     value.field_handle(spec.name, field.name)
                 })?;
+            }
+            if let Some(scope) = node.attr("group_scope") {
+                object.set("group_scope", |value| value.field_handle(spec.name, scope))?;
             }
             let quick = boolean(node, "quick_create", true)? && boolean(node, "create", true)?;
             object.set("quick_create", |value| value.boolean(quick))?;
