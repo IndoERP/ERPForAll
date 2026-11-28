@@ -122,17 +122,17 @@
   <record id="pipeline_window" model="ir.actions.act_window">
     <field name="name">Pipeline</field><field name="res_model">crm.lead</field><field name="view_mode">kanban,list,form,activity</field>
     <field name="view_id" ref="lead_board"/><field name="search_view_id" ref="lead_search"/>
-    <field name="domain">[('kind','=','opportunity'),('state','=','open')]</field><field name="context">{'default_kind':'opportunity','crm_personal_form':True}</field>
+    <field name="domain">[('kind','=','opportunity'),('state','=','open')]</field><field name="context">{'default_kind':'opportunity'}</field>
   </record>
   <record id="lead_window" model="ir.actions.act_window">
     <field name="name">Leads</field><field name="res_model">crm.lead</field><field name="view_mode">list,form,activity</field>
     <field name="view_id" ref="lead_queue_list"/><field name="search_view_id" ref="lead_search"/>
-    <field name="domain">[('kind','=','lead'),('state','=','open')]</field><field name="context">{'default_kind':'lead','crm_personal_form':True}</field>
+    <field name="domain">[('kind','=','lead'),('state','=','open')]</field><field name="context">{'default_kind':'lead'}</field>
   </record>
   <record id="opportunity_window" model="ir.actions.act_window">
     <field name="name">All Opportunities</field><field name="res_model">crm.lead</field><field name="view_mode">list,form,activity</field>
     <field name="view_id" ref="lead_list"/><field name="search_view_id" ref="lead_search"/>
-    <field name="domain">[('kind','=','opportunity')]</field><field name="context">{'default_kind':'opportunity','crm_personal_form':True}</field>
+    <field name="domain">[('kind','=','opportunity')]</field><field name="context">{'default_kind':'opportunity'}</field>
   </record>
   <record id="partner_opportunity_button" model="ir.ui.view">
     <field name="name">res.partner.form.opportunities</field><field name="model">res.partner</field><field name="inherit_id" ref="base.partner_form"/>
