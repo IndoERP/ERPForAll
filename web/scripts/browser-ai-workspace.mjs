@@ -61,6 +61,16 @@ const timeline = {canvas_type:"timeline",title:"Pilot milestones",description:"R
 const chart = {canvas_type:"chart",title:"Purchase orders by stage",description:"ERP · purchase.order",
   data:{source_model:"purchase.order",source_domain:[],series:[{label:"Request",value:16},{label:"Approved",value:12},{label:"Ordered",value:22}],
     columns:["state","id:count"],records:[{state:"Request","id:count":16},{state:"Approved","id:count":12},{state:"Ordered","id:count":22}]}};
+const salesQuestion = "Show monthly sales by currency";
+const sourceTable = "<table><tr><th>Reference</th></tr><tr><td>" + "2026110123456789".repeat(6) + "</td></tr></table>";
+const salesReply = [
+  "**Monthly Sales by Currency**", "",
+  "| Month | Currency | Confirmed Sales | Orders |", "| --- | --- | ---: | ---: |",
+  "| November 2026 | USD | 53,047.92 | 17 |", "| **Total** | **USD** | **53,047.92** | **17** |", "",
+  "1. Review sales", "   - Confirm the period", "",
+  "```html", sourceTable, "```", "",
+  '<p><em>End of report.</em><img src="/external-resource"><iframe src="/external-resource"></iframe></p>',
+].join("\n");
 let received = [], approvals = 0;
 const server = createServer(async (req,res) => {
   if (req.url === "/fixture.js") {
@@ -74,13 +84,21 @@ const server = createServer(async (req,res) => {
     let reply;
     if (req.url === "/erp/ai/assistant/turn") {
       received.push(value);
-      reply = value.message === "Prepare a rollout brief and timeline"
+      if (value.message === salesQuestion) reply = {session_id:18,text:salesReply};
+      else reply = value.message === "Prepare a rollout brief and timeline"
         ? {session_id:18,text:"The purchasing pilot has three milestones. Start with the supplier review.",canvases:[brief,chart,timeline],canvas:timeline}
         : {session_id:18,text:"Quotation approval requested.",operations:[pending]};
     } else if (req.url === "/erp/ai/assistant/resume" && value.approval_request_id === 24 && value.company_id === 7) {
       approvals++; reply = done;
+    } else if (req.url === "/rpc" && value.method === "search_sessions") {
+      reply = [{id:18, title:salesQuestion, state:"open", last_event_at:"2026-11-28T12:00:00Z", anchor:null}];
+    } else if (req.url === "/rpc" && value.method === "resume_session" && value.args.id === 18) {
+      reply = {id:18, last_seq:2, anchor:null};
     } else if (req.url === "/rpc" && value.method === "conversation_history" && value.args.id === 18) {
-      reply = {id:18,messages:[{role:"user",text:"Create quotation"},{role:"assistant",text:"Quotation approval requested.",operations:[approvals ? done : pending]}]};
+      if (received.at(-1)?.message === salesQuestion) reply = {id:18,messages:[
+        {role:"user",text:salesQuestion},{role:"assistant",text:salesReply}
+      ]};
+      else reply = {id:18,messages:[{role:"user",text:"Create quotation"},{role:"assistant",text:"Quotation approval requested.",operations:[approvals ? done : pending]}]};
     } else { res.writeHead(400).end(); return; }
     res.writeHead(200,{"Content-Type":"application/json"}).end(JSON.stringify(reply)); return;
   }
@@ -94,7 +112,10 @@ try {
   for (const theme of ["default","blue"]) for (const width of [390,1280]) {
     received = []; approvals = 0;
     const page = await browser.newPage({viewport:{width,height:850}});
-    const errors = [];
+    const errors = [], embeddedRequests = [];
+    page.on("request", request => {
+      if (new URL(request.url()).pathname === "/external-resource") embeddedRequests.push(request.url());
+    });
     page.on("pageerror", e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/${theme}`);
     const input = page.getByRole("textbox", {name:"Message to AI Assistant"});
@@ -149,8 +170,42 @@ try {
     await page.getByRole("button",{name:"AI Assistant",exact:true}).click();
     assert.equal(await input.count(),1);
     assert.equal(await page.locator("#ai-assistant-dock").count(),1);
+    await input.fill(salesQuestion);
+    await input.press("Enter");
+    async function checkSalesReply() {
+      const reply = page.getByRole("log").locator(".ai-reply-prose").filter({hasText:"Monthly Sales by Currency"});
+      const table = reply.getByRole("table").first();
+      await table.waitFor();
+      assert.deepEqual(await table.getByRole("columnheader").allTextContents(),["Month","Currency","Confirmed Sales","Orders"]);
+      assert.deepEqual(await table.getByRole("row").last().getByRole("cell").allTextContents(),["Total","USD","53,047.92","17"]);
+      assert.equal(await table.locator("strong").first().evaluate(el => getComputedStyle(el).display),"inline");
+      assert.equal(await reply.locator("ol ul li").innerText(),"Confirm the period");
+      assert.equal(await reply.getByText("Lihat sumber",{exact:true}).count(),1);
+      assert.equal(await reply.locator("img,iframe").count(),0);
+      if (width === 390) {
+        const wide = reply.locator(".ai-reply-table").last();
+        assert.ok(await wide.evaluate(el => el.scrollWidth > el.clientWidth));
+        assert.ok(await reply.evaluate(el => el.closest('[role="log"]').scrollWidth <= el.closest('[role="log"]').clientWidth + 1));
+      }
+    }
+    await checkSalesReply();
+    const summary = page.getByText("Lihat sumber",{exact:true});
+    await summary.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator("details[open] code").innerText(),sourceTable);
+    await page.keyboard.press("Enter");
+    await page.getByRole("button",{name:"Open Canvas Studio"}).click();
+    await checkSalesReply();
+    await page.reload();
+    await checkSalesReply();
+    assert.equal(await input.count(),1);
+    await page.getByRole("button",{name:"New chat",exact:true}).click();
+    await page.getByRole("button",{name:"History",exact:true}).click();
+    await page.getByRole("button",{name:"Resume " + salesQuestion,exact:true}).click();
+    await checkSalesReply();
+    assert.deepEqual(embeddedRequests,[]);
     assert.deepEqual(errors,[]);
-    console.log(`${theme} ${width}px: submit, reload, approval, open record, follow-up new chat, multi-output Canvas, focus mode and single-composer handoff passed`);
+    console.log(`${theme} ${width}px: submit, reload, approval, open record, follow-up new chat, multi-output Canvas, focus mode, formatted replies in dock/workspace/history and single-composer handoff passed`);
     await page.close();
   }
 } finally {

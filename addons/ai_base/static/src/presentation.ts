@@ -1,4 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { renderConversationText } from "./reply-formatting.js";
+
 type Cell = string | number | boolean | null;
 type DraftHost = {
   openDraft?(xmlId: string, defaults: Readonly<Record<string, string>>): Promise<void>;
@@ -10,7 +12,7 @@ const rfq = { action: "purchase.purchase_rfq", label: "request for quotation", f
 // The reply format is a versioned display grammar. The model supplies data, never markup or actions.
 const formats = [
   'When the user requests a table, chart, slides, draft or saved record, you may reply with one fenced erp-view JSON object.',
-  'Use version 1 and a title. Ordinary answers remain plain text. Use only supplied facts. Ask for missing data instead of inventing it.',
+  'Use version 1 and a title. Use Markdown for ordinary answers. Use only supplied facts. Ask for missing data instead of inventing it.',
   'Table: {"version":1,"type":"table","title":"…","columns":["…"],"rows":[["…"]]}.',
   'Bar chart: {"version":1,"type":"chart","title":"…","series":[{"label":"…","value":1}]}.',
   'Slides: {"version":1,"type":"slides","title":"…","slides":[{"heading":"…","points":["…"]}]}.',
@@ -117,7 +119,12 @@ function draft(view: Record<string, unknown>, env?: DraftHost): HTMLElement | un
 export function renderReply(container: HTMLElement, text: string, env?: DraftHost,
   lookup?: (model: string, reference: string) => (() => Promise<void>) | undefined, sourcedFigures = false): void {
   const match = /^\s*`{3}erp-view\s*\n([\s\S]*?)\n`{3}\s*$/.exec(text);
-  if (!match || text.length > 65536) { container.textContent = text; return; }
+  if (!match) {
+    if (sourcedFigures) renderConversationText(container, text);
+    else container.textContent = text;
+    return;
+  }
+  if (text.length > 65536) { container.textContent = text; return; }
   let view: unknown;
   try { view = JSON.parse(match[1]!); } catch { container.textContent = text; return; }
   if (!obj(view) || view["version"] !== 1 || !label(view["title"])) { container.textContent = text; return; }

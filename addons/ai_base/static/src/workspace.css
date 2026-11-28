@@ -14,7 +14,7 @@
 .ai-workspace-thread { min-height: 14rem; max-height: 60dvh; overflow: auto; padding: 16px; }
 .ai-workspace-thread > p, .ai-workspace-hint, .ai-workspace-records > p { color: var(--muted); }
 .ai-workspace-message { margin-bottom: 16px; overflow-wrap: anywhere; }
-.ai-workspace-message strong { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.ai-workspace-message > strong { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .ai-workspace-text, .ai-workspace-error { white-space: pre-wrap; line-height: 1.5; }
 .ai-workspace-error { color: var(--danger); }
 .ai-workspace-hint, .ai-workspace-records > p { margin: 12px 16px; font-size: 13px; line-height: 1.45; }

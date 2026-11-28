@@ -1,0 +1,12 @@
+{
+  "name": "@erpforall-addon/ai-base",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Client code of the ERPForAll AI Assistant",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "dompurify": "3.5.0",
+    "marked": "18.3.0"
+  }
+}

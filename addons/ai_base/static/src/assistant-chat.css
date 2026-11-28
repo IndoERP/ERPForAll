@@ -22,7 +22,7 @@
 .ai-chat-thread { overflow: auto; overscroll-behavior: contain; min-height: 0; max-height: min(44dvh, 380px); }
 .ai-chat-thread:not(:empty) { padding: 6px 14px; }
 .ai-chat-message { margin: 8px 0 14px; overflow-wrap: anywhere; }
-.ai-chat-message strong { font-size: 12px; color: var(--muted); }
+.ai-chat-message > strong { font-size: 12px; color: var(--muted); }
 .ai-chat-content { margin: 3px 0 0; white-space: pre-wrap; }
 .ai-chat-question { border-inline-start: 2px solid var(--line); padding-inline-start: 10px; }
 .ai-chat-error { color: var(--danger); }
