@@ -237,6 +237,10 @@ pub struct ModuleOpArgs {
     #[arg(required = true, value_parser = parse_module_name)]
     pub modules: Vec<ModuleName>,
 
+    /// Protected server configuration supplying the owner connection, addon paths and SQL roles.
+    #[arg(long, conflicts_with = "addons_path")]
+    pub config: Option<PathBuf>,
+
     /// Addon search paths (comma-separated or repeated)
     #[arg(
         long = "addons-path",
@@ -1177,6 +1181,7 @@ impl ModuleOpArgs {
         Self {
             database,
             modules,
+            config: None,
             addons_path: vec![PathBuf::from("./addons")],
             dry_run: false,
             restore_generated_restrictions: false,

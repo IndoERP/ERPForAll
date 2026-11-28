@@ -2,8 +2,8 @@
 //! [`erp_modules::ModuleSystem`] on the database named by `-d`, as the superuser, in the
 //! module system's own transaction.
 //!
-//! The connection credentials come from `DATABASE_URL` only (never from the command line; see
-//! ). The addons are discovered from `--addons-path`; the `erp` binary
+//! A protected server configuration supplies the owner connection, addon paths and SQL roles.
+//! Without it, credentials come from `DATABASE_URL` and addons from `--addons-path`. The `erp` binary
 //! composes the same linked native addons as the server, with their build-generated per-addon
 //! provenance. Additional data-only addons remain discoverable through the configured paths.
 
@@ -27,7 +27,7 @@ const POOL_SIZE: usize = 4;
 /// Default lifecycle executor for live execution: runs the operation through
 /// [`erp_modules::ModuleSystem`].
 ///
-/// Needs `DATABASE_URL` in the environment and a database initialized by the module system.
+/// Needs an owner connection and a database initialized by the module system.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultLifecycleExecutor;
 
@@ -53,7 +53,17 @@ async fn run(
     operation: ModuleOperation,
     request: &LifecycleRequest<'_>,
 ) -> Result<ExecutionReport> {
-    let pool = lifecycle_pool(connection_config(request.database)?, POOL_SIZE)?;
+    let (connection, options) = match request.config {
+        Some(config) => (
+            config.owner_connection(),
+            crate::sql_object_publication::options(config)?,
+        ),
+        None => (
+            connection_config(request.database)?,
+            erp_orm::SchemaSyncOptions::new(),
+        ),
+    };
+    let pool = lifecycle_pool(connection, POOL_SIZE)?;
     // Observe before source discovery/load; every live CLI operation participates in the same
     // durable registry fence as server and package operations.
     let baseline = {
@@ -95,6 +105,7 @@ async fn run(
     let packages = WasmPackages::new(Arc::new(HostLoader::new(Arc::new(host), Limits::default())));
     let demo_pool = pool.clone();
     let builder = ModuleSystem::builder(pool, index)
+        .schema_sync_options(options)
         .require_sql_objects(crate::native_addons::SQL_MANIFESTS.iter().copied())
         .require_sql_uninstall_guards(crate::native_addons::UNINSTALL_MANIFESTS.iter().copied())
         .code(crate::native_addons::DESCRIPTORS.iter().copied())

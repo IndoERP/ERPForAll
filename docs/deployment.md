@@ -509,18 +509,21 @@ database. Rehearse it on a copy first:
    `server.toml` at it, and run the steps below against the copy. Only continue if they finish with exit code 0.
 3. Stop the server.
 4. Install the new binary, addons directory and assets.
-5. Upgrade the modules, with the owner URL in `DATABASE_URL`:
+5. Upgrade the modules with the protected configuration of the target database:
 
    ```sh
-   erp module upgrade -d erp base --addons-path /srv/erp/addons
+   erp module upgrade -d erp base --config /srv/erp/private/server.toml
    ```
 
-   When the addons declare encrypted fields, add `--field-key-file /srv/erp/private/field-keys` (the file that
-   `field_key_file` names), run as the user that owns that file.
+   The same option applies to native module installation and removal. It selects the owner
+   connection, addon directories, field encryption keys and SQL object roles. The database
+   in the configuration must match `-d`. Provision each declared role before running the
+   operation. For Stock Valuation Admission, use a dedicated NOLOGIN function owner and
+   grant membership with SET and INHERIT only to the schema owner.
 
    Name the modules to upgrade (installed modules that depend on them are upgraded too); `--dry-run` shows the plan
    without changing anything. A non-zero exit code means the operation was refused or failed; the message names the
-   module and step. This command, for `base`, was run against a test database.
+   module and step.
 6. `erp db publish-grants --config /srv/erp/private/server.toml`, then start the server and wait for the health route.
 
 Upgrades and uninstalls compare each addon's files against a content receipt stored in the database. When the files

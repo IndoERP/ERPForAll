@@ -3,8 +3,9 @@
 use crate::args::{DatabaseName, ModuleAction, ModuleOpArgs};
 use crate::error::{CliError, Result};
 use erp_modules::{AddonIndex, LoadMode, ModuleGraph, ModuleName, ModuleState};
+use erp_server::config::ServerConfig;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod chart_defaults;
 
@@ -77,12 +78,31 @@ pub enum ModuleOperation {
     Uninstall,
 }
 
+/// The server configuration, which must name the database of `-d`: an operation never goes to a
+/// database other than the one the operator typed.
+pub(crate) fn configuration(path: &Path, database: &DatabaseName) -> Result<ServerConfig> {
+    let config = ServerConfig::load(path).map_err(|e| CliError::Execution(e.to_string()))?;
+    if config.database() != database.as_str() {
+        return Err(CliError::InvalidInput {
+            arg: "--database".to_owned(),
+            reason: format!(
+                "'{}' differs from the database '{}' of the configuration",
+                database,
+                config.database()
+            ),
+        });
+    }
+    Ok(config)
+}
+
 /// What a live module operation needs to run: the database, the modules the user named, the
 /// resolved plan, and the addon search paths the module system discovers addons from.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct LifecycleRequest<'a> {
-    /// The target database (`-d`); the credentials come from `DATABASE_URL`.
+    /// Deployment settings when the operator supplied `--config`.
+    pub config: Option<&'a ServerConfig>,
+    /// The target database (`-d`).
     pub database: &'a DatabaseName,
     /// The modules named on the command line, without duplicates, in command-line order. The
     /// module system resolves dependencies (install) and dependents (uninstall) against the
@@ -394,8 +414,8 @@ pub fn execute_module_command_with_executor<E: ModuleLifecycleExecutor>(
 /// Execute a module command action, resolving dependencies and returning the planned execution order.
 ///
 /// In dry-run mode, returns the resolved plan. In live mode (no `--dry-run`), runs the operation
-/// through [`DefaultLifecycleExecutor`] on the database named by `-d`, with the credentials of
-/// `DATABASE_URL`.
+/// through [`DefaultLifecycleExecutor`] on the database named by `-d`, using the owner
+/// connection of `--config` or the credentials of `DATABASE_URL` when it is omitted.
 ///
 /// # Errors
 ///
@@ -436,15 +456,23 @@ fn resolve_and_execute<E: ModuleLifecycleExecutor>(
             reason: "only the upgrade command rewrites generated company restrictions".to_owned(),
         });
     }
+    let config = args
+        .config
+        .as_deref()
+        .map(|path| configuration(path, &args.database))
+        .transpose()?;
+    let addons_path = config
+        .as_ref()
+        .map_or(args.addons_path.as_slice(), |config| config.addons());
     // 1. Build AddonIndex from configured search paths (scans developer directories)
     let mut index = AddonIndex::new(true);
-    for path in &args.addons_path {
+    for path in addons_path {
         index.add_dev_path(path);
     }
 
     let discovered = index
         .discover_all()
-        .map_err(|e| map_discovery_error(e, &args.addons_path))?;
+        .map_err(|e| map_discovery_error(e, addons_path))?;
 
     // 2. Verify all requested modules exist in discovered addons
     for mod_name in &args.modules {
@@ -655,7 +683,8 @@ fn resolve_and_execute<E: ModuleLifecycleExecutor>(
         database: &args.database,
         requested: &requested,
         plan: &plan,
-        addons_path: &args.addons_path,
+        config: config.as_ref(),
+        addons_path,
         restore_generated_restrictions: args.restore_generated_restrictions,
         identity_previous: args.identity_previous.as_deref(),
         demo: args.demo.choice(),

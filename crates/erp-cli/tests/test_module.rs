@@ -749,3 +749,62 @@ fn restore_generated_restrictions_is_refused_outside_the_upgrade_command() {
     // the upgrade command accepts it
     execute_module_command(&ModuleAction::Upgrade(args())).expect("upgrade accepts the flag");
 }
+
+#[test]
+fn native_module_config_binds_the_database_addons_and_sql_roles() {
+    use clap::Parser as _;
+    use erp_cli::args::{Cli, Commands};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = tempdir().unwrap();
+    create_mock_addon(&tmp.path().join("addons"), "base", &[]);
+    for login in ["owner", "request"] {
+        let url = tmp.path().join(login);
+        fs::write(&url, format!("postgresql://{login}@localhost/tenant")).unwrap();
+        fs::set_permissions(url, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let config = tmp.path().join("server.toml");
+    fs::write(&config, "database='tenant'\ndatabase_url_file='request'\nowner_database_url_file='owner'\nbind='127.0.0.1:18069'\npublic_origin='http://127.0.0.1:18069'\nproxy_mode='direct'\naddons_path=['addons']\nassets_manifest='manifest.json'\nsql_object_definer_role='valuation_definer'\n").unwrap();
+    struct VerifyConfig;
+    impl ModuleLifecycleExecutor for VerifyConfig {
+        fn execute(
+            &self,
+            _: ModuleOperation,
+            request: &LifecycleRequest<'_>,
+        ) -> erp_cli::Result<ExecutionReport> {
+            let config = request
+                .config
+                .expect("configuration passed to the live executor");
+            assert_eq!(config.owner_connection().get_user(), Some("owner"));
+            assert_eq!(config.runtime_connection().get_user(), Some("request"));
+            assert_eq!(config.sql_object_definer_role(), Some("valuation_definer"));
+            assert_eq!(config.addons(), request.addons_path);
+            Ok(ExecutionReport::default())
+        }
+    }
+    for op in ["install", "upgrade", "uninstall"] {
+        let argv = [
+            "erp",
+            "module",
+            op,
+            "-d",
+            "tenant",
+            "--config",
+            config.to_str().unwrap(),
+            "base",
+        ];
+        let Commands::Module(command) = Cli::try_parse_from(argv).unwrap().command else {
+            panic!()
+        };
+        execute_module_command_with_executor(&command.action, &VerifyConfig).unwrap();
+        let mut wrong = argv;
+        wrong[4] = "another";
+        let Commands::Module(command) = Cli::try_parse_from(wrong).unwrap().command else {
+            panic!()
+        };
+        assert!(
+            matches!(execute_module_command_with_executor(&command.action, &VerifyConfig), Err(CliError::InvalidInput { arg, .. }) if arg == "--database")
+        );
+        assert!(Cli::try_parse_from(argv.into_iter().chain(["--addons-path", "./other"])).is_err());
+    }
+}

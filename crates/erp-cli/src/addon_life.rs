@@ -59,23 +59,6 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .map_err(|e| CliError::Execution(format!("could not start the async runtime: {e}")))
 }
 
-/// The server configuration, which must name the database of `-d`: a package never goes to a
-/// database other than the one the operator typed.
-fn configuration(path: &Path, database: &DatabaseName) -> Result<ServerConfig> {
-    let config = ServerConfig::load(path).map_err(|e| CliError::Execution(e.to_string()))?;
-    if config.database() != database.as_str() {
-        return Err(CliError::InvalidInput {
-            arg: "--database".to_owned(),
-            reason: format!(
-                "'{}' differs from the database '{}' of the configuration",
-                database,
-                config.database()
-            ),
-        });
-    }
-    Ok(config)
-}
-
 /// The administrator's consent as the command line states it.
 fn consent_of(
     package: &ErpAddonPackage,
@@ -224,7 +207,7 @@ fn check_post_commit(outcome: &OperationOutcome) -> Result<()> {
 /// refused by the lifecycle (exit 1), and for the module system's own errors.
 pub(crate) fn run(operation: Operation, args: &AddonInstallArgs) -> Result<String> {
     runtime()?.block_on(async {
-        let config = configuration(&args.config, &args.database)?;
+        let config = crate::module::configuration(&args.config, &args.database)?;
         let package = ErpAddonPackage::open(&args.file).map_err(module_error)?;
         let consent = consent_of(&package, &args.approve, args.ack_client_digest.as_deref())?;
         let package: ConsentedPackage = package.consent(&consent).map_err(module_error)?;
@@ -270,7 +253,7 @@ pub(crate) fn run(operation: Operation, args: &AddonInstallArgs) -> Result<Strin
 /// named.
 pub(crate) fn uninstall(args: &AddonUninstallArgs) -> Result<String> {
     runtime()?.block_on(async {
-        let config = configuration(&args.config, &args.database)?;
+        let config = crate::module::configuration(&args.config, &args.database)?;
         let (node, caller) = open(&config).await?;
         let outcome = node
             .lifecycle()
