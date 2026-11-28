@@ -117,6 +117,34 @@
       </search>
     </field>
   </record>
+  <record id="overview_list" model="ir.ui.view">
+    <field name="name">approval.request.view.overview</field>
+    <field name="model">approval.request.view</field>
+    <field name="priority" eval="30"/>
+    <field name="arch" type="xml">
+      <list string="Approvals Overview" create="0" edit="0" delete="0" limit="25">
+        <dashboard>
+          <count name="to_review" string="To review" filter="to_review" color="warning"/>
+          <count name="is_mine" string="My requests" filter="is_mine" color="info"/>
+          <count name="is_reviewed" string="Reviewed" filter="is_reviewed" color="success"/>
+        </dashboard>
+        <field name="name" string="Request" width="[100px]"/>
+        <field name="policy_name" string="Workflow" width="[180px]"/>
+        <field name="state" string="Status" widget="badge"
+               options="{'tone_success': ['approved', 'executed'], 'tone_warning': ['pending'], 'tone_danger': ['denied'], 'tone_muted': ['expired']}"/>
+        <field name="current_step_name" string="Review stage"/>
+        <field name="requester_name" string="Requested by"/>
+        <field name="expires_at" string="Expires"/>
+      </list>
+    </field>
+  </record>
+  <record id="overview_window" model="ir.actions.act_window">
+    <field name="name">Approvals Overview</field>
+    <field name="res_model">approval.request.view</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="overview_list"/>
+    <field name="search_view_id" ref="request_search"/>
+  </record>
   <record id="requests_window" model="ir.actions.act_window">
     <field name="name">Approval requests</field>
     <field name="res_model">approval.request.view</field>

@@ -514,10 +514,10 @@
   <menuitem id="menu_analytic_skf" name="Statistical Key Figures" parent="menu_finance_configuration" action="action_analytic_skf" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="84"/>
   <menuitem id="menu_cost_allocation_cycles" name="Cost Allocation Cycles" parent="menu_finance_configuration" action="action_cost_allocation_cycle" groups="account.group_account_manager,account.group_cost_center_controlling" sequence="85"/>
   <record id="menu_analytic_items" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
-  <record id="menu_cost_allocation_runs" model="ir.ui.menu"><field name="web_icon">lucide:split</field></record>
+  <record id="menu_cost_allocation_runs" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
   <record id="menu_analytic_plans" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
   <record id="menu_analytic_accounts" model="ir.ui.menu"><field name="web_icon">lucide:network</field></record>
   <record id="menu_analytic_distribution_models" model="ir.ui.menu"><field name="web_icon">lucide:workflow</field></record>
-  <record id="menu_analytic_skf" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
-  <record id="menu_cost_allocation_cycles" model="ir.ui.menu"><field name="web_icon">lucide:repeat</field></record>
+  <record id="menu_analytic_skf" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
+  <record id="menu_cost_allocation_cycles" model="ir.ui.menu"><field name="web_icon">lucide:refresh-cw</field></record>
 </erp>

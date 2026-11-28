@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <erp>
+  <record id="overview_action" model="ir.actions.client">
+    <field name="name">CRM Overview</field>
+    <field name="tag">crm.overview</field>
+  </record>
   <menuitem id="menu_crm" name="CRM" groups="sales_team.group_sale_salesman" web_icon="lucide:target" sequence="30">
+    <menuitem id="menu_overview" name="Overview" action="overview_action" sequence="0"/>
     <menuitem id="menu_pipeline" name="Pipeline" action="pipeline_window" sequence="10"/>
     <menuitem id="menu_leads" name="Leads" action="lead_window" sequence="20"/>
-    <menuitem id="menu_submit_lead" name="Submit Lead" action="submit_lead_window" sequence="25"/>
+    <menuitem id="menu_submit_lead" name="Submit Lead" action="submit_lead_window" sequence="25" active="False"/>
     <menuitem id="menu_opportunities" name="All Opportunities" action="opportunity_window" sequence="30"/>
     <menuitem id="menu_accounts" name="Business Accounts" action="account_window" sequence="40"/>
     <menuitem id="menu_contacts" name="Contacts" action="contacts.action_contacts" sequence="45"/>
@@ -24,4 +29,25 @@
       <menuitem id="menu_quotas" name="Sales Quotas" action="quota_window" sequence="50"/>
     </menuitem>
   </menuitem>
+  <record id="menu_overview" model="ir.ui.menu"><field name="web_icon">lucide:panels-top-left</field></record>
+
+  <record id="menu_pipeline" model="ir.ui.menu"><field name="web_icon">lucide:kanban</field></record>
+  <record id="menu_leads" model="ir.ui.menu"><field name="web_icon">lucide:inbox</field></record>
+  <record id="menu_opportunities" model="ir.ui.menu"><field name="web_icon">lucide:target</field></record>
+  <record id="menu_accounts" model="ir.ui.menu"><field name="web_icon">lucide:building</field></record>
+  <record id="menu_contacts" model="ir.ui.menu"><field name="web_icon">lucide:contact</field></record>
+  <record id="menu_reporting" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
+  <record id="menu_forecast" model="ir.ui.menu"><field name="web_icon">lucide:trending-up</field></record>
+  <record id="menu_attainment" model="ir.ui.menu"><field name="web_icon">lucide:award</field></record>
+  <record id="menu_pipeline_analysis" model="ir.ui.menu"><field name="web_icon">lucide:chart-bar</field></record>
+  <record id="menu_conversion" model="ir.ui.menu"><field name="web_icon">lucide:chart-line</field></record>
+  <record id="menu_loss_reasons" model="ir.ui.menu"><field name="web_icon">lucide:archive</field></record>
+  <record id="menu_stage_history" model="ir.ui.menu"><field name="web_icon">lucide:timer</field></record>
+  <record id="menu_changes" model="ir.ui.menu"><field name="web_icon">lucide:move-horizontal</field></record>
+  <record id="menu_config" model="ir.ui.menu"><field name="web_icon">lucide:sliders-horizontal</field></record>
+  <record id="menu_pipeline_config" model="ir.ui.menu"><field name="web_icon">lucide:folder-kanban</field></record>
+  <record id="menu_stages" model="ir.ui.menu"><field name="web_icon">lucide:layers</field></record>
+  <record id="menu_teams" model="ir.ui.menu"><field name="web_icon">lucide:users</field></record>
+  <record id="menu_rules" model="ir.ui.menu"><field name="web_icon">lucide:workflow</field></record>
+  <record id="menu_quotas" model="ir.ui.menu"><field name="web_icon">lucide:target</field></record>
 </erp>

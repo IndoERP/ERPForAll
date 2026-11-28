@@ -1,0 +1,21 @@
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+.crm-overview { box-sizing: border-box; width: 100%; max-width: 86rem; margin-inline: auto; padding: clamp(.75rem, 2vw, 1.75rem); color: var(--text); }
+.crm-metrics, .crm-overview-panels { display: grid; gap: 1rem; }
+.crm-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+.crm-overview-panels { grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr)); align-items: start; margin-block-start: 1.25rem; }
+.crm-metric, .crm-overview-panel { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.crm-metric { display: grid; gap: .45rem; padding: 1rem 1.25rem; font: inherit; color: var(--muted); text-align: start; cursor: pointer; }
+.crm-metric strong { color: var(--text); font-size: 1.75rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.crm-metric:hover { border-color: var(--accent); background: var(--surface-subtle); }
+.crm-overview-panel { padding: .95rem 1.2rem; }
+.crm-overview-panel h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+.crm-overview-panel h3 { margin: 1rem 0 .25rem; font-size: .85rem; color: var(--muted); }
+.crm-overview-row { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; width: 100%; min-height: 2.5rem; padding: .65rem .25rem; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: var(--surface); font: inherit; text-align: start; color: var(--text); cursor: pointer; }
+.crm-overview-row:hover { color: var(--accent); background: var(--surface-subtle); }
+.crm-overview-row strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.crm-follow-up { display: grid; gap: .2rem; min-width: 0; overflow-wrap: anywhere; }
+.crm-follow-up span, .crm-overview-row time, .crm-empty { color: var(--muted); font-size: .88rem; }
+.crm-overview-row time { flex-shrink: 0; }
+.crm-empty { padding: .75rem 0; margin: 0; }
+.crm-overview-more { margin-top: .65rem; padding: .35rem; background: none; border: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.crm-overview-error { color: var(--danger); }

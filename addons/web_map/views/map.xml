@@ -25,4 +25,6 @@
     </field>
   </record>
   <menuitem id="contact_map_menu" name="Contact Map" parent="contacts.menu_contacts_root" action="contact_map_action" sequence="30" groups="base.group_user"/>
+
+  <record id="contact_map_menu" model="ir.ui.menu"><field name="web_icon">lucide:map-pin</field></record>
 </erp>

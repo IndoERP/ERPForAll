@@ -51,6 +51,8 @@ export interface ActionRequest { xmlId: string; viewMode: "form" | "list" | null
 export interface ShellNavigation {
   navigate(route: Route): Promise<void>;
   openAction(request: ActionRequest): Promise<void>;
+  /** Open the native route of a visible menu by its installed window action XML id. */
+  openMenuAction?(xmlId: string): Promise<void>;
 }
 export interface WidgetEnvironment extends FieldWidgetProps {
   /** Signed-in user and owning form view for local table preferences. */
@@ -125,6 +127,8 @@ export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   restored: unknown;
   /** Run an action result (an existing record form, a related list or another client action) through the normal navigation; the screen stays in the breadcrumb. */
   open(result: unknown): Promise<void>;
+  /** Open an authorized modal action by XML id; resolves true on a completed action and false on dismissal. */
+  openWizard?(xmlId: string): Promise<boolean>;
   /** Open an unsaved form through its installed window action, after shell navigation guards. */
   openDraft?(xmlId: string, defaults: Readonly<Record<string, string>>): Promise<void>;
 }

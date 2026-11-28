@@ -20,4 +20,6 @@
     <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
   </record>
   <menuitem id="smtp_relay_menu" name="Outgoing Mail Servers" parent="technical_mail_menu" action="smtp_relay_action" groups="base.group_system" sequence="50"/>
+
+  <record id="smtp_relay_menu" model="ir.ui.menu"><field name="web_icon">lucide:server</field></record>
 </erp>

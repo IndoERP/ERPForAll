@@ -263,7 +263,11 @@ fn contacts_install_creates_every_record_by_xml_id() {
         let (_db, orm) = with_contacts(false).await;
         assert_eq!(
             xml_ids(&orm, "contacts", "ir.actions.act_window").await,
-            ["contacts.action_contact_tags", "contacts.action_contacts"]
+            [
+                "contacts.action_contact_tags",
+                "contacts.action_contacts",
+                "contacts.contacts_overview_action",
+            ]
         );
         assert_eq!(
             xml_ids(&orm, "contacts", "ir.actions.act_window.view").await,
@@ -290,7 +294,7 @@ fn contacts_install_creates_every_record_by_xml_id() {
         );
         assert_eq!(
             xml_ids(&orm, "contacts", "ir.ui.view").await,
-            ["contacts.partner_kanban"]
+            ["contacts.contacts_overview_list", "contacts.partner_kanban"]
         );
         let base_views = xml_ids(&orm, "base", "ir.ui.view").await;
         for id in [
@@ -315,7 +319,7 @@ fn contacts_install_creates_every_record_by_xml_id() {
 fn contacts_menu_resolves_to_a_list_and_form_action() {
     big_stack(async {
         let (_db, orm) = with_contacts(false).await;
-        // Top-level menu: opens the Contacts action, visible to internal users (base.group_user).
+        // Opening the app loads the overview. The Directory entry keeps the original action.
         assert_eq!(
             strings(
                 &orm,
@@ -331,7 +335,7 @@ fn contacts_menu_resolves_to_a_list_and_form_action() {
                    AND m.parent_id IS NULL AND m.web_icon = 'lucide:contact'"
             )
             .await,
-            ["res.partner|list,kanban,form|contacts.action_contacts|group_user"]
+            ["res.partner|list,form|contacts.contacts_overview_action|group_user"]
         );
         // The Contact Tags entry sits under Configuration (administrators) and opens the tag action.
         assert_eq!(

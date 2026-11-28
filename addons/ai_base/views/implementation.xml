@@ -90,4 +90,8 @@
   <menuitem id="chat_menu" name="Assistant" parent="workspace_menu" action="workspace_action" groups="base.group_user" sequence="10"/>
   <menuitem id="implementation_menu" name="Implementation Projects" parent="workspace_menu" action="implementation_projects" groups="ai_base.group_implementation" sequence="30"/>
   <menuitem id="implementation_steps_menu" name="Implementation Steps" parent="workspace_menu" action="implementation_steps" groups="ai_base.group_implementation" sequence="40"/>
+
+  <record id="chat_menu" model="ir.ui.menu"><field name="web_icon">lucide:messages-square</field></record>
+  <record id="implementation_menu" model="ir.ui.menu"><field name="web_icon">lucide:folder-kanban</field></record>
+  <record id="implementation_steps_menu" model="ir.ui.menu"><field name="web_icon">lucide:list-todo</field></record>
 </erp>

@@ -1346,9 +1346,23 @@ async fn load_action(
     source_ids(admission, 1)?;
     let ids = this.ids();
     let action_id = ids[0];
+    let include_help = tx
+        .has_field_access(
+            &env,
+            "ir.actions.act_window",
+            "help",
+            erp_sdk::FieldOp::Read,
+        )
+        .await?;
+    let help_size = if include_help {
+        "coalesce(octet_length(w.help)::bigint, 0)"
+    } else {
+        "0"
+    };
     let action_stats_sql = admission.format(format_args!(
         "WITH action_payload AS ( \
            SELECT w.id, coalesce(octet_length(a.name)::bigint, 0) AS name_bytes, \
+                  {help_size} AS help_bytes, \
                   coalesce(octet_length(w.res_model)::bigint, 0) AS model_bytes, \
                   coalesce(octet_length(w.target)::bigint, 0) AS target_bytes, \
                   coalesce(octet_length(w.domain)::bigint, 0) AS domain_bytes, \
@@ -1370,7 +1384,7 @@ async fn load_action(
          ) SELECT coalesce(max(name_bytes), 0)::bigint, coalesce(max(model_bytes), 0)::bigint, \
                   coalesce(max(target_bytes), 0)::bigint, coalesce(max(domain_bytes), 0)::bigint, \
                   coalesce(max(context_bytes), 0)::bigint, coalesce(max(view_mode_bytes), 0)::bigint, \
-                  coalesce(max(name_bytes + model_bytes + target_bytes + domain_bytes + context_bytes + view_mode_bytes), 0)::bigint, \
+                  coalesce(max(name_bytes + help_bytes + model_bytes + target_bytes + domain_bytes + context_bytes + view_mode_bytes), 0)::bigint, \
                   coalesce(sum(groups), 0)::bigint, coalesce(max(computed_views), 0)::bigint, \
                   coalesce(max(explicit_mode_bytes), 0)::bigint, \
                   coalesce(max(max_explicit_mode_bytes), 0)::bigint \
@@ -1467,11 +1481,17 @@ async fn load_action(
         "byte",
     )?;
     admission.phase("action:text:reserve");
+    let fields: &[&str] = if include_help {
+        &["name", "target", "views", "domain", "context", "help"]
+    } else {
+        &["name", "target", "views", "domain", "context"]
+    };
+    // Each source field apart from the computed JSON views is nullable text.
     admission.source_rows(
         1,
-        &["name", "target", "views", "domain", "context"],
+        fields,
         stat_size(action_stats[6])?,
-        4,
+        fields.len() - 1,
         0,
         0,
     )?;
@@ -1502,14 +1522,7 @@ async fn load_action(
         std::sync::atomic::AtomicUsize,
     )>(1)?;
     admission.phase("action:text:read");
-    let rows = this
-        .sudo(true)
-        .read_with(
-            tx,
-            &["name", "target", "views", "domain", "context"],
-            Load::Raw,
-        )
-        .await?;
+    let rows = this.sudo(true).read_with(tx, fields, Load::Raw).await?;
     let row = rows.first().ok_or_else(|| {
         Error::invariant("authorized window action disappeared during metadata read")
     })?;
@@ -1574,7 +1587,14 @@ async fn load_action(
         result_views,
         action_domain,
         action_context,
-    ))
+    )
+    .with_help(if include_help {
+        optional_text(row, "help")?
+            .map(|help| admission.format(format_args!("{help}")))
+            .transpose()?
+    } else {
+        None
+    }))
 }
 
 type ActionSources = (Option<wire::WireDocument>, Option<wire::WireDocument>);

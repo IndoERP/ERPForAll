@@ -1,6 +1,8 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { getActiveBottomSheetCount } from "./bottom-sheet.js";
 
+import { menuIcon } from "./icons.js";
+
 export interface HomeMenuApp {
   id: number;
   label: string;
@@ -110,6 +112,7 @@ export class HomeMenu {
       const iconBox = document.createElement("div");
       iconBox.className = "app-icon";
       iconBox.setAttribute("aria-hidden", "true");
+      iconBox.append(menuIcon(app.icon ?? null));
 
       const caption = document.createElement("div");
       caption.className = "app-caption";

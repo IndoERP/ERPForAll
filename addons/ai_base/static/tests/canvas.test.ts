@@ -348,7 +348,7 @@ describe("Canvas Visual Components", () => {
     expect(stage.node.querySelector(".canvas-pivot-grandtotal-val")).toBeNull();
     expect(stage.node.querySelector(".canvas-table-export")).toBeNull();
     expect(stage.node.querySelector("tbody")?.textContent).toContain("260");
-    const button = Array.from(stage.node.querySelectorAll("button")).find(node => node.textContent === "Save report")!;
+    const button = Array.from(stage.node.querySelectorAll("button")).find(node => node.textContent === "Save insight")!;
     button.click();
     expect(save).toHaveBeenCalledWith("Order values", JSON.stringify(definition));
     Array.from(stage.node.querySelectorAll("button")).find(node => node.textContent === "Open source records")!.click();

@@ -353,6 +353,6 @@
   <menuitem id="menu_consolidation_runs" name="Consolidation Runs" parent="menu_consolidation_root" action="action_consolidation_run" groups="account.group_account_readonly" sequence="10"/>
   <menuitem id="menu_consolidation_groups" name="Consolidation Groups" parent="menu_consolidation_root" action="action_consolidation_group" groups="account.group_account_manager" sequence="20"/>
   <record id="menu_consolidation_root" model="ir.ui.menu"><field name="web_icon">lucide:globe</field></record>
-  <record id="menu_consolidation_runs" model="ir.ui.menu"><field name="web_icon">lucide:combine</field></record>
+  <record id="menu_consolidation_runs" model="ir.ui.menu"><field name="web_icon">lucide:layers</field></record>
   <record id="menu_consolidation_groups" model="ir.ui.menu"><field name="web_icon">lucide:building</field></record>
 </erp>

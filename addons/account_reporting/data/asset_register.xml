@@ -60,5 +60,5 @@
     <field name="params" eval="{'report': ref('report_asset_register')}"/>
   </record>
   <menuitem id="menu_asset_register" name="Asset &amp; CIP History Sheet" parent="menu_account_reporting" action="action_asset_register" groups="account.group_asset_cip" sequence="64"/>
-  <record id="menu_asset_register" model="ir.ui.menu"><field name="web_icon">lucide:building-2</field></record>
+  <record id="menu_asset_register" model="ir.ui.menu"><field name="web_icon">lucide:building</field></record>
 </erp>

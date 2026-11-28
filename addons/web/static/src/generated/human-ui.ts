@@ -255,7 +255,11 @@ domain: WireDocument | null,
 /**
  *Wire member `context`.
  */
-context: WireDocument | null, };
+context: WireDocument | null,
+/**
+ *Wire member `help`.
+ */
+help?: string, };
 export type WindowActionViews = {
 /**
  *Wire member `action`.

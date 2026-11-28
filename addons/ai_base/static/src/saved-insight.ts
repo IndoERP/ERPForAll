@@ -118,11 +118,11 @@ async function panel(env: ClientActionEnvironment, raw: unknown, company: number
 /** Open under the reader's authenticated session and revalidate every time the data is refreshed. */
 export async function savedInsight(env: ClientActionEnvironment): Promise<ClientActionHandle> {
   const id = env.action.params["insight"], company = env.currentCompanyId;
-  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1 || !company) throw new Error("Select a saved report in your current company.");
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1 || !company) throw new Error("Select a saved insight in your current company.");
   const root = element("section"); root.className = "ai-insight";
   const head = element("header"); const title = element("h1", env.action.name);
   const refresh = element("button"); refresh.type = "button"; refresh.className = "erp-button";
-  refresh.setAttribute("aria-label", "Refresh report"); refresh.append(icon("refresh-cw"), document.createTextNode("Refresh"));
+  refresh.setAttribute("aria-label", "Refresh insight"); refresh.append(icon("refresh-cw"), document.createTextNode("Refresh"));
   head.append(title, refresh);
   const contents = element("div"); contents.className = "ai-insight-grid"; root.append(head, contents); env.host.append(root);
   let active: AbortController | undefined;

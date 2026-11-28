@@ -1,8 +1,8 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { button, el } from "./dom.js";
-import { icon } from "./icons.js";
+import { icon, menuIcon } from "./icons.js";
 
-export interface MenuSearchEntry { id: number; label: string; action: number; menu: number }
+export interface MenuSearchEntry { id: number; label: string; action: number; menu: number; icon: string | null }
 let nextSearch = 0;
 /** A search of already-authorized menus, never a substitute for a record-search service. */
 export function headerMenuSearch(env: { entries(): readonly MenuSearchEntry[]; choose(entry: MenuSearchEntry): void }): { node: HTMLElement; ready(): void; dispose(): void } {
@@ -27,8 +27,8 @@ export function headerMenuSearch(env: { entries(): readonly MenuSearchEntry[]; c
     shown = env.entries().filter(entry => entry.label.normalize("NFKC").toLowerCase().includes(query)).slice(0, 20);
     active = -1; results.replaceChildren();
     for (const [index, entry] of shown.entries()) {
-      // Data labels never choose command icons or behavior.
       const option = button(entry.label, () => select(entry), "office-menu-option");
+      option.prepend(menuIcon(entry.icon));
       option.id = `${results.id}-${index}`; option.setAttribute("role", "option"); option.setAttribute("aria-selected", "false"); option.tabIndex = -1;
       results.append(option);
     }

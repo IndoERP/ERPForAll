@@ -202,4 +202,12 @@
     <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
   </record>
   <menuitem id="outgoing_menu" name="Outgoing Email" parent="technical_mail_menu" action="outgoing_action" groups="base.group_system" sequence="45"/>
+
+  <record id="technical_mail_menu" model="ir.ui.menu"><field name="web_icon">lucide:messages-square</field></record>
+  <record id="technical_messages_menu" model="ir.ui.menu"><field name="web_icon">lucide:message-square</field></record>
+  <record id="technical_message_subtypes_menu" model="ir.ui.menu"><field name="web_icon">lucide:tags</field></record>
+  <record id="technical_followers_menu" model="ir.ui.menu"><field name="web_icon">lucide:users</field></record>
+  <record id="technical_activity_types_menu" model="ir.ui.menu"><field name="web_icon">lucide:list-todo</field></record>
+  <record id="outgoing_queue_health_menu" model="ir.ui.menu"><field name="web_icon">lucide:inbox</field></record>
+  <record id="outgoing_menu" model="ir.ui.menu"><field name="web_icon">lucide:send</field></record>
 </erp>

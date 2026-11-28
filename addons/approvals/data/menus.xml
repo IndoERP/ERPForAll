@@ -9,10 +9,18 @@
     <field name="name">Workflow configuration</field>
     <field name="tag">approvals.configuration</field>
   </record>
-  <menuitem id="approvals_menu" name="Approvals" action="requests_window"
+  <menuitem id="approvals_menu" name="Approvals"
             groups="base.group_user" web_icon="lucide:badge-check" sequence="15"/>
+  <!-- Existing installations also clear the former root action. -->
+  <record id="approvals_menu" model="ir.ui.menu"><field name="action" eval="False"/></record>
+  <menuitem id="overview_menu" name="Overview" parent="approvals_menu" action="overview_window"
+            groups="base.group_user" sequence="1"/>
+  <record id="overview_menu" model="ir.ui.menu"><field name="web_icon">lucide:panels-top-left</field></record>
   <menuitem id="requests_menu" name="Requests" parent="approvals_menu" action="requests_window"
             groups="base.group_user" sequence="10"/>
   <menuitem id="workflows_menu" name="Workflows" parent="approvals_menu" action="workflows_window"
             groups="base.group_system" sequence="20"/>
+
+  <record id="requests_menu" model="ir.ui.menu"><field name="web_icon">lucide:clipboard-check</field></record>
+  <record id="workflows_menu" model="ir.ui.menu"><field name="web_icon">lucide:workflow</field></record>
 </erp>

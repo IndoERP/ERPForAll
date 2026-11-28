@@ -138,5 +138,5 @@ test("free-form assistant text cannot claim ERP provenance, source permission, o
   expect(stage.node.querySelector(".studio-tab")).toBeNull();
   const readonly=createCanvasStage();
   readonly.renderArtifact(artifact);
-  expect([...readonly.node.querySelectorAll("button")].some(button=>["Save report","Open source records"].includes(button.textContent??""))).toBe(false);
+  expect([...readonly.node.querySelectorAll("button")].some(button=>["Save insight","Open source records"].includes(button.textContent??""))).toBe(false);
 });

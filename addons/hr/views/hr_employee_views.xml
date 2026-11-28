@@ -301,6 +301,31 @@
   </record>
 
   <!-- Window Actions -->
+  <record id="employee_overview_list" model="ir.ui.view">
+    <field name="name">hr.employee.overview.list</field>
+    <field name="model">hr.employee</field>
+    <field name="inherit_id" ref="hr_employee_view_list"/>
+    <field name="mode">primary</field>
+    <field name="priority" eval="90"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='name']" position="before">
+        <dashboard>
+          <count name="directory" string="Active employees" domain="[('active', '=', True)]" color="info"/>
+          <count name="unassigned" string="Without a department" domain="[('department_id', '=', False)]" color="warning"/>
+        </dashboard>
+      </xpath>
+    </field>
+  </record>
+
+  <record id="employee_overview_action" model="ir.actions.act_window">
+    <field name="name">Employees Overview</field>
+    <field name="res_model">hr.employee</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="employee_overview_list"/>
+    <field name="search_view_id" ref="hr_employee_view_search"/>
+    <field name="context">{'search_default_group_department': 1}</field>
+  </record>
+
   <record id="hr_employee_action" model="ir.actions.act_window">
     <field name="name">Employees</field>
     <field name="res_model">hr.employee</field>

@@ -5,6 +5,8 @@
   <menuitem id="hr_menu_root" name="Employees" sequence="70" web_icon="lucide:users"/>
 
   <!-- Top-level App Navigation -->
+  <menuitem id="hr_overview_menu" name="Overview" parent="hr_menu_root" action="employee_overview_action" sequence="1" groups="base.group_user"/>
+  <record id="hr_overview_menu" model="ir.ui.menu"><field name="web_icon">lucide:panels-top-left</field></record>
   <menuitem id="hr_employee_menu" name="Management" parent="hr_menu_root" action="hr_employee_action" sequence="10" groups="hr.group_hr_user"/>
   <menuitem id="hr_directory_menu" name="Directory" parent="hr_menu_root" action="hr_employee_directory_action" sequence="20" groups="base.group_user"/>
   <menuitem id="hr_department_menu" name="Departments" parent="hr_menu_root" action="hr_department_action" sequence="30" groups="base.group_user"/>
@@ -38,4 +40,28 @@
   <menuitem id="hr_config_skills_menu" name="Skills &amp; Resume" parent="hr_configuration_menu" sequence="40"/>
   <menuitem id="hr_skill_type_menu" name="Skill Types" parent="hr_config_skills_menu" action="hr_skill_type_action" sequence="10"/>
   <menuitem id="hr_resume_line_type_menu" name="Resume Sections" parent="hr_config_skills_menu" action="hr_resume_line_type_action" sequence="20"/>
+
+  <record id="hr_employee_menu" model="ir.ui.menu"><field name="web_icon">lucide:user-cog</field></record>
+  <record id="hr_directory_menu" model="ir.ui.menu"><field name="web_icon">lucide:contact</field></record>
+  <record id="hr_department_menu" model="ir.ui.menu"><field name="web_icon">lucide:network</field></record>
+  <record id="hr_learning_menu" model="ir.ui.menu"><field name="web_icon">lucide:graduation-cap</field></record>
+  <record id="hr_resume_line_menu" model="ir.ui.menu"><field name="web_icon">lucide:notebook-text</field></record>
+  <record id="hr_employee_skill_menu" model="ir.ui.menu"><field name="web_icon">lucide:award</field></record>
+  <record id="hr_reporting_menu" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
+  <record id="hr_reporting_headcount_menu" model="ir.ui.menu"><field name="web_icon">lucide:users</field></record>
+  <record id="hr_reporting_contracts_menu" model="ir.ui.menu"><field name="web_icon">lucide:notebook-pen</field></record>
+  <record id="hr_reporting_skills_menu" model="ir.ui.menu"><field name="web_icon">lucide:clipboard-list</field></record>
+  <record id="hr_configuration_menu" model="ir.ui.menu"><field name="web_icon">lucide:sliders-horizontal</field></record>
+  <record id="hr_config_employee_menu" model="ir.ui.menu"><field name="web_icon">lucide:user-cog</field></record>
+  <record id="hr_employee_type_menu" model="ir.ui.menu"><field name="web_icon">lucide:id-card</field></record>
+  <record id="hr_work_location_menu" model="ir.ui.menu"><field name="web_icon">lucide:map-pin</field></record>
+  <record id="hr_departure_reason_menu" model="ir.ui.menu"><field name="web_icon">lucide:log-out</field></record>
+  <record id="hr_employee_category_menu" model="ir.ui.menu"><field name="web_icon">lucide:tags</field></record>
+  <record id="hr_config_time_menu" model="ir.ui.menu"><field name="web_icon">lucide:clock</field></record>
+  <record id="hr_work_schedule_menu" model="ir.ui.menu"><field name="web_icon">lucide:calendar-days</field></record>
+  <record id="hr_config_recruitment_menu" model="ir.ui.menu"><field name="web_icon">lucide:briefcase</field></record>
+  <record id="hr_job_menu" model="ir.ui.menu"><field name="web_icon">lucide:briefcase</field></record>
+  <record id="hr_config_skills_menu" model="ir.ui.menu"><field name="web_icon">lucide:graduation-cap</field></record>
+  <record id="hr_skill_type_menu" model="ir.ui.menu"><field name="web_icon">lucide:award</field></record>
+  <record id="hr_resume_line_type_menu" model="ir.ui.menu"><field name="web_icon">lucide:list</field></record>
 </erp>

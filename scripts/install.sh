@@ -259,13 +259,14 @@ build_binaries() {
 
 # ---- 4. web client ------------------------------------------------------------------------------
 build_web() {
+  local client_addons=web,approvals,ai_base,reporting,stock_account,hr,crm,theme_office_blue
   step "4/8 Building the web client"
-  dry "scripts/web-toolchain.sh install; pnpm --dir web install --frozen-lockfile; node web/scripts/build-human-ui.mjs --addons web,approvals,reporting,stock_account,hr" && return 0
+  dry "scripts/web-toolchain.sh install; pnpm --dir web install --frozen-lockfile; node web/scripts/build-human-ui.mjs --addons $client_addons" && return 0
   ( cd "$ROOT"
     scripts/web-toolchain.sh install
     eval "$(scripts/web-toolchain.sh env)"
     pnpm --dir web install --frozen-lockfile
-    ERP_UI_COMPILER="$ERP_UI_COMPILER_BIN" node web/scripts/build-human-ui.mjs --addons web,approvals,reporting,stock_account,hr )
+    ERP_UI_COMPILER="$ERP_UI_COMPILER_BIN" node web/scripts/build-human-ui.mjs --addons "$client_addons" )
   [ -f "$ROOT/web/dist/human-ui/manifest.json" ] || die "the web client build left no web/dist/human-ui/manifest.json"
 }
 

@@ -37,6 +37,8 @@ export class WizardDialog {
   private nextFocus: string | undefined;
   private passwordFocus: HTMLInputElement | undefined;
   private dead = false;
+  private finish!: (completed: boolean) => void;
+  readonly completion = new Promise<boolean>(resolve => { this.finish = resolve; });
   private readonly debounce=new ButtonDebouncer();
   private readonly hotkeys:ButtonHotkeys;
   private disabled = new Map<FormElement, boolean>();
@@ -382,13 +384,14 @@ export class WizardDialog {
   async canLeave(insideOperation = false): Promise<boolean> {
     return !(this.dead || (this.pending || this.commitPending !== undefined) && !insideOperation || this.uncertain || this.saveUncertain || this.env.state.busy);
   }
-  async close(): Promise<void> {
+  async close(completed = false): Promise<void> {
     if (this.dead || this.uncertain || this.saveUncertain) return;
-    this.dispose();
+    this.dispose(completed);
     await this.env.closed();
   }
-  dispose(): void {
+  dispose(completed = false): void {
     if (this.dead) return;
+    this.finish(completed);
     this.dead = true; this.queuedCommits.length = 0; this.queuedActivation = undefined;
     this.hotkeys.dispose(); this.debounce.dispose(); this.abort.abort(); this.surface.dispose();
     if (this.modal) { this.modal.dispose(); this.modal = undefined; } else { this.dialog.close(); this.dialog.remove(); }

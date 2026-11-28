@@ -211,18 +211,19 @@ fn product_installs_with_its_data_security_and_views() {
         let actions = strings(
             &orm,
             "SELECT name FROM ir_model_data WHERE module='product' AND model='ir.actions.act_window' \
-             AND name IN ('product_template_action','product_product_action','product_pricelist_action2', \
+             AND name IN ('catalog_overview_action','product_template_action','product_product_action','product_pricelist_action2', \
                           'product_category_action_form','product_uom_action_view_list', \
                           'product_attribute_action') ORDER BY name",
         )
         .await;
-        assert_eq!(actions.len(), 6, "actions: {actions:?}");
+        assert_eq!(actions.len(), 7, "actions: {actions:?}");
         let menus = strings(
             &orm,
             "SELECT name FROM ir_model_data WHERE module='product' AND model='ir.ui.menu' ORDER BY name",
         )
         .await;
-        assert_eq!(menus.len(), 6, "menus: {menus:?}");
+        assert_eq!(menus.len(), 7, "menus: {menus:?}");
+        assert!(menus.iter().any(|id| id == "menu_catalog_overview"));
 
         let arch = strings(
             &orm,

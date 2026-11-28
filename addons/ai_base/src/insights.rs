@@ -13,7 +13,7 @@ const TAG: &str = "ai_base.saved_insight";
 const MAX_PANELS: usize = 8;
 const MAX_DEFINITION_BYTES: usize = 32 * 1024;
 
-#[model(name="ai.insight", description="Saved Report or Dashboard", order="name, id",
+#[model(name="ai.insight", description="Saved Insight", order="name, id",
     company_access=direct(field="company_id",branch="exact",empty="deny"))]
 pub struct Insight {
     #[field(char, required = true, size = 160)]

@@ -14,7 +14,8 @@ source and `erp --help`; the places where a step was **run** on a test machine o
 cargo build --release -p erp-cli --bin erp -p erp-ui-compiler-cli --bin erp-ui-compile
 eval "$(scripts/web-toolchain.sh env)"
 pnpm --dir web install --frozen-lockfile
-ERP_UI_COMPILER="$PWD/target/release/erp-ui-compile" node web/scripts/build-human-ui.mjs
+ERP_UI_COMPILER="$PWD/target/release/erp-ui-compile" node web/scripts/build-human-ui.mjs \
+  --addons web,approvals,ai_base,reporting,stock_account,hr,crm,theme_office_blue
 rsync -a --exclude node_modules --exclude target addons/ /srv/erp/addons/
 install -m 0755 target/release/erp /usr/local/bin/erp
 mkdir -p /srv/erp/assets && cp -r web/dist/human-ui/. /srv/erp/assets/
@@ -178,7 +179,7 @@ Omitting the access object retains the existing delegated tool and approval beha
 ### AI Assistant and implementation projects
 
 After upgrading the server and client assets, upgrade the installed `ai_base` addon
-to 0.5.0 using the module upgrade procedure below. In **Settings → Technical → AI**,
+to 0.5.1 using the module upgrade procedure below. In **Settings → Technical → AI**,
 configure the provider, company route and budget before sending the first question.
 
 The workspace and header chat share a conversation for the signed-in user and active
@@ -204,7 +205,7 @@ Documents can include comparison tables, labelled values and literal code. Sessi
 history retains questions and operation receipts. Save a live analysis to reopen it
 after reloading the page.
 
-**Saved reports and dashboards** keeps the query definition. The owner can share it
+**Saved Insights** keeps the query definition. The owner can share it
 with an internal group. Each reader refreshes and opens its source with their own
 ERP permissions. Use the native list export action to export source records.
 

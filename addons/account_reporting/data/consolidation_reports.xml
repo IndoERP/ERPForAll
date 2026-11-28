@@ -141,6 +141,6 @@
   <menuitem id="menu_consolidated_pl" name="Consolidated Profit &amp; Loss" parent="account.menu_consolidation_root" action="action_consolidated_pl" groups="account.group_account_readonly" sequence="35"/>
   <menuitem id="menu_ic_reconciliation" name="IC Reconciliation Matrix" parent="account.menu_consolidation_root" action="action_ic_reconciliation" groups="account.group_account_readonly" sequence="40"/>
   <record id="menu_consolidated_bs" model="ir.ui.menu"><field name="web_icon">lucide:scale</field></record>
-  <record id="menu_consolidated_pl" model="ir.ui.menu"><field name="web_icon">lucide:line-chart</field></record>
-  <record id="menu_ic_reconciliation" model="ir.ui.menu"><field name="web_icon">lucide:arrow-left-right</field></record>
+  <record id="menu_consolidated_pl" model="ir.ui.menu"><field name="web_icon">lucide:chart-line</field></record>
+  <record id="menu_ic_reconciliation" model="ir.ui.menu"><field name="web_icon">lucide:move-horizontal</field></record>
 </erp>

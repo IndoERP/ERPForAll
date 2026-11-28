@@ -1,7 +1,23 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import type { ClientActionEnvironment } from "@erpforall/client";
 import { savedInsight } from "../src/saved-insight.js";
+
+it("the Saved Insights menu opens the native collection with instructions and the owner's filter", () => {
+  const path = resolve(dirname(fileURLToPath(import.meta.url)), "../../views/insights.xml");
+  const doc = new DOMParser().parseFromString(readFileSync(path, "utf8"), "application/xml");
+  const menu = doc.querySelector('menuitem[id="insights_menu"]')!;
+  const action = doc.getElementById(menu.getAttribute("action")!)!;
+  expect(menu.getAttribute("name")).toBe("Saved Insights");
+  expect(action.querySelector('field[name="name"]')?.textContent).toBe("Saved Insights");
+  expect(action.querySelector('field[name="view_mode"]')?.textContent).toBe("list,form");
+  expect(action.querySelector('field[name="help"]')?.textContent).toMatch(/Save a report or dashboard from Canvas Studio/);
+  expect(doc.querySelector('filter[name="mine"]')?.getAttribute("string")).toBe("My insights");
+  expect(doc.querySelector('button[name="action_open"]')?.getAttribute("string")).toBe("Open insight");
+});
 
 function setup() {
   const query = {
@@ -37,7 +53,7 @@ it("shows a source access error and clears stale numbers when refreshing", async
   await savedInsight(env);
   expect(host.querySelector("tbody")).not.toBeNull();
   call.mockResolvedValueOnce({ name: "Sales", panels: [query] }).mockRejectedValueOnce(new Error("Source access denied"));
-  host.querySelector<HTMLButtonElement>("button[aria-label='Refresh report']")!.click();
+  host.querySelector<HTMLButtonElement>("button[aria-label='Refresh insight']")!.click();
   await vi.waitFor(() => expect(host.querySelector("[role=alert]")?.textContent).toContain("Source access denied"));
   expect(host.querySelector("tbody")).toBeNull();
 });

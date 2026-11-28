@@ -336,7 +336,7 @@
   <menuitem id="menu_account_budget_commitment" name="Budget Commitments" parent="menu_finance_entries" action="action_account_budget_commitment" groups="account.group_budget_avc" sequence="47"/>
   <menuitem id="menu_account_budget_profile" name="Budget Control Profiles" parent="menu_finance_configuration" action="action_account_budget_profile" groups="account.group_budget_avc" sequence="81"/>
   <record id="menu_account_budget" model="ir.ui.menu"><field name="web_icon">lucide:trending-up</field></record>
-  <record id="menu_account_budget_amendment" model="ir.ui.menu"><field name="web_icon">lucide:file-diff</field></record>
+  <record id="menu_account_budget_amendment" model="ir.ui.menu"><field name="web_icon">lucide:notebook-pen</field></record>
   <record id="menu_account_budget_commitment" model="ir.ui.menu"><field name="web_icon">lucide:lock</field></record>
   <record id="menu_account_budget_profile" model="ir.ui.menu"><field name="web_icon">lucide:shield-check</field></record>
 </erp>

@@ -149,4 +149,7 @@
               action="action_reporting_report_expression" groups="base.group_system" sequence="7"/>
 
   <record id="menu_reporting_report" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
+
+  <record id="menu_reporting_report_line" model="ir.ui.menu"><field name="web_icon">lucide:list</field></record>
+  <record id="menu_reporting_report_expression" model="ir.ui.menu"><field name="web_icon">lucide:calculator</field></record>
 </erp>

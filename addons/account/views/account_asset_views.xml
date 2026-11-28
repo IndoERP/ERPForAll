@@ -459,7 +459,7 @@
   <menuitem id="menu_account_asset_dep_run" name="Depreciation Runs" parent="menu_finance_entries" action="action_account_asset_dep_run" groups="account.group_asset_cip" sequence="52"/>
   <menuitem id="menu_account_asset_category" name="Asset Classes" parent="menu_finance_configuration" action="action_account_asset_category" groups="account.group_asset_cip" sequence="80"/>
   <record id="menu_account_asset" model="ir.ui.menu"><field name="web_icon">lucide:archive</field></record>
-  <record id="menu_account_asset_settlement" model="ir.ui.menu"><field name="web_icon">lucide:building-2</field></record>
-  <record id="menu_account_asset_dep_run" model="ir.ui.menu"><field name="web_icon">lucide:calendar-check</field></record>
+  <record id="menu_account_asset_settlement" model="ir.ui.menu"><field name="web_icon">lucide:building</field></record>
+  <record id="menu_account_asset_dep_run" model="ir.ui.menu"><field name="web_icon">lucide:calendar-days</field></record>
   <record id="menu_account_asset_category" model="ir.ui.menu"><field name="web_icon">lucide:layers</field></record>
 </erp>

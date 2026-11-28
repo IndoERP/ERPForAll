@@ -340,7 +340,7 @@ export function createCanvasStage(
       const save = document.createElement("button");
       save.type = "button";
       save.className = "erp-button";
-      save.textContent = "Save report";
+      save.textContent = "Save insight";
       save.addEventListener("click", () => onSave(title, JSON.stringify(data["analysis_definition"])));
       cardActions.append(save);
     }

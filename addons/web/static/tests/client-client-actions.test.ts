@@ -362,3 +362,36 @@ test("a denied native menu action preserves the refusal without probing a legacy
   expect(root.querySelector("[data-client-content]")?.textContent).toContain("This screen is not open to your account.");
   expect(fetch.mock.calls.some(([path]) => path.endsWith("erp_load_web_client_action"))).toBe(false);
 });
+
+test("the approval shortcut opens the authorized review queue even when the app opens Overview", async () => {
+  history.replaceState(null, "", "/erp");
+  const approveRoot = { ...approvalsMenu, action_id: null, children: [13, 14] };
+  const overview = { ...approvalsMenu, id: 13, parent_id: 12, label: "Overview", action_id: 62 };
+  const queue = { ...approvalsMenu, id: 14, parent_id: 12, label: "Mes demandes", action_id: 61 };
+  const queueAction = { ...requestAction, views: [{ id: 2, type: "list" }, ...requestAction.views] };
+  const queueViews = { ...requestView, views: [...requestView.views, {
+    identity: { kind: "stored", id: 2 }, type: "list", schema_major: 1, renderer: "web.list", root: 0,
+    nodes: [{ kind: "list", children: [1] }, requestView.views[0]!.nodes[1]],
+  }] };
+  const references: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    if (path.endsWith("erp_load_web_menus")) return json({ ...menus, roots: [12], nodes: [approveRoot, overview, queue] });
+    if (path.endsWith("erp_load_web_action_ref")) {
+      references.push(JSON.parse(String(init?.body)).xml_id);
+      return json(queueAction);
+    }
+    if (path.endsWith("erp_load_web_action_views")) return json({ action: queueAction, views: queueViews });
+    if (path.endsWith("web_search_read")) return json({ length: 0, records: [] });
+    if (path.endsWith("res.users/web_read")) return json([{ id: 2, action_id: false }]);
+    return json([]);
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  const shortcut = [...root.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Review approval");
+  expect(shortcut).toBeDefined();
+  shortcut!.click();
+  await vi.waitFor(() => expect(references).toEqual(["approvals.requests_window"]));
+  await vi.waitFor(() => expect(location.pathname).toBe("/erp/action-61"));
+  expect(new URL(location.href).searchParams.get("menu")).toBe("14");
+});

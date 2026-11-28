@@ -30,7 +30,7 @@ describe("M4 Shell Base: Home and Mobile", () => {
     let closedCalled = false;
 
     const apps: HomeMenuApp[] = [
-      { id: 1, label: "Sales", actionId: 101 },
+      { id: 1, label: "Sales", actionId: 101, icon: "lucide:handshake" },
       { id: 2, label: "Accounting", actionId: 102 }
     ];
 
@@ -80,6 +80,8 @@ describe("M4 Shell Base: Home and Mobile", () => {
     home.open();
     expect(home.isOpen).toBe(true);
     expect(home.isInApp).toBe(false);
+    expect(Array.from(home.getGrid().querySelectorAll(".app-icon [data-icon]"),
+      glyph => glyph.getAttribute("data-icon"))).toEqual(["handshake", "layout-grid"]);
 
     home.updateAppToggle(appToggleBtn, navbar);
     expect(appToggleBtn.title).toBe("Previous view");

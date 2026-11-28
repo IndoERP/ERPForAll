@@ -3099,7 +3099,7 @@ test("Office header searches actual menus and retains the dirty-form navigation 
     const actionId = body.ids?.[0];
     const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10, 11], nodes: [
       { module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
-      { module: null, id: 11, parent_id: null, label: "Actions", action_id: 21, children: [], icon: null }
+      { module: null, id: 11, parent_id: null, label: "Actions", action_id: 21, children: [], icon: "lucide:zap" }
     ] } : path.endsWith("erp_load_web_action_views") ? actionMetadata(path, { wire_major: 1, id: actionId, name: actionId === 20 ? "Notes" : "Actions", model: "test.note", target: "current", views: [{ id: actionId === 20 ? 1 : 2, type: actionId === 20 ? "form" : "list" }], domain: null, context: null }, description)
       : path.endsWith("web_read") ? [{ id: 5, name: "Existing title" }]
       : path.endsWith("onchange") ? { value: {} }
@@ -3118,6 +3118,7 @@ test("Office header searches actual menus and retains the dirty-form navigation 
   const choose = (): void => {
     search!.focus(); search!.value = "Actions"; search!.dispatchEvent(new Event("input"));
     const option = root.querySelector<HTMLButtonElement>('.office-header-search [role="option"]')!;
+    expect(option.querySelector("svg")?.getAttribute("data-icon")).toBe("zap");
     expect(option.textContent).toBe("Actions"); expect(option.classList.contains("has-action-icon")).toBe(false);
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -3150,13 +3151,15 @@ test('loaded-empty help is distinct from pending reads and load failures',async(
  let readStarted=false, fail=false, complete:((value:Response)=>void)|undefined;
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
   if(path.endsWith('web_search_read')){readStarted=true;if(fail)return new Response('{"message":"List failed"}',{status:500,headers:{'Content-Type':'application/json'}});return new Promise<Response>(resolve=>{complete=resolve;});}
-  const value=path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:2,type:'list'}],domain:null,context:null},description):path.endsWith('get_views')?description:[];
+  const value=path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',help:'<p>Save a report &amp; dashboard.</p><p>Find it here.</p><img src="/private-preview"><style>unused</style>',views:[{id:2,type:'list'}],domain:null,context:null},description):path.endsWith('get_views')?description:[];
   return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
  }));
  const root=host();app=new HumanApp(root,bootstrap);const started=app.start();
  await vi.waitFor(()=>expect(readStarted).toBe(true));expect(root.querySelector('.message-no-content')).toBeNull();
  complete!(new Response('{"length":0,"records":[]}',{headers:{'Content-Type':'application/json'}}));await started;
  expect(root.querySelector('.message-no-content')?.getAttribute('role')).toBe('alert');expect(root.querySelector('.message-no-content h2')?.textContent).toBe('No Notes records yet');
+ expect(root.querySelector('.action-help-text')?.textContent).toBe('Save a report & dashboard. Find it here.');
+ expect(root.querySelector('.action-help-text img, .action-help-text style')).toBeNull();
  expect(root.querySelector('table[aria-label="Records"]')).not.toBeNull();
  expect(root.querySelectorAll('table[aria-label="Records"] tbody tr').length).toBe(0);
  app.dispose();root.remove();fail=true;history.replaceState(null,'','/erp/action-20?view_type=list');const errorRoot=host();app=new HumanApp(errorRoot,bootstrap);
@@ -3690,13 +3693,14 @@ test("HumanApp.openCommandPalette forwards registered command categories into co
 test("the command palette lists authorized menus, finds Notes from 'No', and hints before anything is typed", async () => {
   history.replaceState(null, "", "/erp");
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("erp_load_web_menus")
-    ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] } : []), { headers: { "Content-Type": "application/json" } })));
+    ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: "lucide:notebook" }] } : []), { headers: { "Content-Type": "application/json" } })));
   const root = host(); app = new HumanApp(root, bootstrap); await app.start();
   app.openCommandPalette();
   const palette = getActiveCommandPalette()!;
   const input = palette.node.querySelector<HTMLInputElement>(".command-palette-input")!;
   expect(input.placeholder).toBe("Search commands…");
   await vi.waitFor(() => expect(palette.node.querySelector(".command-name")?.textContent).toBe("Notes"));
+  expect(palette.node.querySelector(".command-palette-item > .erp-icon")?.getAttribute("data-icon")).toBe("notebook");
   expect(palette.node.querySelector(".command-category")?.textContent).toBe("Menus");
   input.value = "no"; input.dispatchEvent(new Event("input"));
   await vi.waitFor(() => expect(palette.node.querySelectorAll(".command-name")).toHaveLength(1));

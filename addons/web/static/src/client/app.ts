@@ -13,6 +13,7 @@ import { SearchModel, createSearchBar, readSearchArch, applySearchDefaults, spli
 import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
 import { MessageServices } from "./messages.js";
+import { htmlFieldText } from "./html-field.js";
 import { noContentHelp } from "./message-widgets.js";
 import { waitForApproval } from "./approval.js";
 import { ErrorDialog } from "./error-dialog.js";
@@ -592,7 +593,7 @@ export class HumanApp {
         return [...this.menus.values()].flatMap(menu => {
           const target = this.defaultActionForMenu(menu.id);
           if (!target || !menu.label.normalize("NFKC").toLowerCase().includes(query)) return [];
-          return [{ id: `menu-${menu.id}`, name: menu.label, category: "Menus", action: () => this.navigate({ action: String(target.action), menu: String(target.menu) }) }];
+          return [{ id: `menu-${menu.id}`, name: menu.label, icon: menu.icon, category: "Menus", action: () => this.navigate({ action: String(target.action), menu: String(target.menu) }) }];
         }).slice(0, 50);
       }
     });
@@ -682,7 +683,7 @@ export class HumanApp {
       const search = headerMenuSearch({
         entries: () => [...this.menus.values()].flatMap(menu => {
           const target = this.defaultActionForMenu(menu.id);
-          return target ? [{ id: menu.id, label: menu.label, ...target }] : [];
+          return target ? [{ id: menu.id, label: menu.label, icon: menu.icon, ...target }] : [];
         }),
         choose: entry => this.run(() => this.navigate({ action: String(entry.action), menu: String(entry.menu) }))
       });
@@ -1465,6 +1466,9 @@ export class HumanApp {
         }
         await this.navigate(route);
       },
+      openMenuAction: async xmlId => {
+        if (usable()) await this.openMenuAction(xmlId);
+      },
       openAction: async request => {
         if (!usable()) return;
         const admitted = admitAddonActionRequest(request);
@@ -2017,7 +2021,9 @@ export class HumanApp {
       list.append(entry);
     };
     const group = (menu: Menu): void => {
-      list.append(el("div", menu.label, "dropdown-header"));
+      const heading = el("div", menu.label, "dropdown-header");
+      heading.prepend(menuIcon(menu.icon ?? "lucide:folder-open"));
+      list.append(heading);
       for (const memberId of menu.children) {
         const member = this.menus.get(memberId);
         if (!member || visited.has(member.id)) continue;
@@ -2151,6 +2157,7 @@ export class HumanApp {
                   menuList.append(item);
                 } else if (this.hasLeafAction(member.id)) {
                   const header = el("div", member.label, "dropdown-header");
+                  header.prepend(menuIcon(member.icon ?? "lucide:folder-open"));
                   header.dataset["menuId"] = String(member.id);
                   menuList.append(header);
                   appendDropdownItems(member.id);
@@ -2213,6 +2220,7 @@ export class HumanApp {
               drawerSections.append(item);
             } else if (this.hasLeafAction(member.id)) {
               const subtitle = el("div", member.label, "drawer-section-subtitle");
+              subtitle.prepend(menuIcon(member.icon ?? "lucide:folder-open"));
               subtitle.dataset["menuId"] = String(member.id);
               if (level > 0) {
                 subtitle.style.paddingLeft = `${12 + level * 12}px`;
@@ -2467,28 +2475,8 @@ export class HumanApp {
           if (entry || route.id || route.method_action) {
             throw new ClientError("unsupported", "Unsupported or mismatched window action.");
           }
-          const actionDefaults = this.actionContext(action);
-          const { context: dialogContext } = splitSearchDefaults({ ...this.context, ...actionDefaults });
-          if (this.actionDomain(action, dialogContext).length) {
-            throw new ClientError("unsupported", "A dialog action cannot carry a domain.");
-          }
-          const model = text(action["model"], "action model");
-          const normalized = actionResult(await this.rpc.call(model, "erp_normalize_action_result", {
-            wire_major: 1,
-            result: {
-              type: "ir.actions.act_window",
-              name: text(action["name"], "action name"),
-              res_model: model,
-              target: "new",
-              views: actionViews(action),
-              context: actionDefaults,
-            },
-            context: this.context,
-          }));
+          const normalized = await this.normalizeWizardAction(action);
           if (generation !== this.generation || this.expired) return;
-          if (normalized.kind !== "window") {
-            throw new ClientError("unsupported", "Unsupported or mismatched window action.");
-          }
           pendingDialog = normalized;
           break stage;
         }
@@ -4977,7 +4965,7 @@ export class HumanApp {
           );
         } else if (actionHelp) {
           const helpDiv = el("div", undefined, "action-help-text");
-          helpDiv.textContent = actionHelp;
+          helpDiv.textContent = htmlFieldText(actionHelp);
           empty.append(
             el("h2", t("No {name} records yet", { name: actionTitle })),
             helpDiv
@@ -5040,13 +5028,24 @@ export class HumanApp {
 
   private approvalsMenu(): Menu | undefined {
     return [...this.menus.values()].find(menu =>
-      menu.module === "approvals" && menu.parentId === null && menu.action !== null);
+      menu.module === "approvals" && menu.parentId === null);
   }
 
   private async openApprovals(): Promise<void> {
-    const menu = this.approvalsMenu();
-    if (!menu?.action) throw new ClientError("permission", "The Approvals menu is unavailable for this user.");
-    await this.navigate({ action: String(menu.action), menu: String(menu.id) });
+    if (!this.approvalsMenu()) throw new ClientError("permission", "The Approvals menu is unavailable for this user.");
+    await this.openMenuAction("approvals.requests_window");
+  }
+
+  private async openMenuAction(xmlId: string): Promise<void> {
+    const generation = this.generation, request = ++this.actionRequest;
+    const action = object(await this.rpc.call("ir.actions.act_window", "erp_load_web_action_ref",
+      { xml_id: xmlId, context: this.context }, { signal: this.lifetime.signal }));
+    if (this.expired || this.lifetime.signal.aborted || request !== this.actionRequest || generation !== this.generation) return;
+    if (action["wire_major"] !== 1 || action["target"] !== "current") throw new ClientError("unsupported", "Expected a current window action.");
+    const id = integer(action["id"], "menu action");
+    const menu = [...this.menus.values()].find(entry => entry.kind === "window" && entry.action === id);
+    if (!menu) throw new ClientError("permission", "This menu is unavailable for this user.");
+    await this.navigate({ action: String(id), menu: String(menu.id) });
   }
 
   private async loadClientAction(id: number): Promise<ClientResult> {
@@ -5077,6 +5076,15 @@ export class HumanApp {
       action: { id: result.id, name: result.name, tag: result.tag, params: result.params },
       restored: this.clientStates.get(key) ?? null,
       open: input => this.openFromClientAction(input, generation, result.name),
+      openWizard: async xmlId => {
+        if (!this.live(generation) || this.wizard) return false;
+        const action = object(await this.rpc.call("ir.actions.act_window", "erp_load_web_action_ref", { xml_id: xmlId, context: this.context }));
+        if (!this.live(generation) || this.wizard) return false;
+        const result = await this.normalizeWizardAction(action);
+        if (!this.live(generation) || this.wizard) return false;
+        const dialog = await this.openWindowDialog(result, undefined, generation, async () => {}, undefined, this.context);
+        return dialog ? dialog.completion : false;
+      },
       openDraft: async (xmlId, defaults) => {
         if (generation !== this.generation || this.expired) throw new ClientError("validation", "Reopen this screen before creating a draft.");
         const context: Record<string, unknown> = {};
@@ -5291,18 +5299,18 @@ export class HumanApp {
       else this.messages.notifications.add(result.message, { ...(result.title ? { title: result.title } : {}), level: result.level });
       if (!result.then_close) { if (!source) await refresh(); return; }
       if (!source) throw new ClientError("validation", "Invalid transition: no action dialog to close.");
-      await source.close(); return;
+      await source.close(true); return;
     }
     if (result.kind === "report") {
       // The print request checks the report and the records again; a dialog that asked for it is done. It closes first:
       // closing it closes the dialogs above it, and the progress dialog of a large print must stay open.
-      if (source) await source.close();
+      if (source) await source.close(true);
       await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, { report: result.report, name: result.name }, result.model, result.ids);
       if (!source) await refresh();
       return;
     }
     if (result.kind === "close" || result.kind === "none") {
-      if (source) { await source.close(); return; }
+      if (source) { await source.close(true); return; }
       if (result.kind === "close") throw new ClientError("validation", "Invalid transition: no action dialog to close.");
       await refresh(); return;
     }
@@ -5311,7 +5319,7 @@ export class HumanApp {
       // top of the page under the dialog. A dialog that stays open (it may not be left) opens nothing.
       if (source) {
         if (!await source.canLeave(true)) return;
-        await source.close();
+        await source.close(true);
         if (this.wizard === source || !this.live(binding)) return;
       }
       const invocation = source ? undefined : this.pendingInvocation;
@@ -5376,12 +5384,30 @@ export class HumanApp {
     await this.consumeAction(normalized, caller, binding, refresh, undefined, callerContext, resubmit);
   }
 
+  private async normalizeWizardAction(action: Record<string, unknown>): Promise<Extract<ActionResult, { kind: "window" }>> {
+    if (action["wire_major"] !== 1 || action["target"] !== "new") {
+      throw new ClientError("unsupported", "A wizard requires a modal window action.");
+    }
+    const defaults = this.actionContext(action);
+    const { context } = splitSearchDefaults({ ...defaults, ...this.context });
+    if (this.actionDomain(action, context).length) throw new ClientError("unsupported", "A dialog action cannot carry a domain.");
+    const model = text(action["model"], "action model");
+    const normalized = actionResult(await this.rpc.call(model, "erp_normalize_action_result", {
+      wire_major: 1,
+      result: { type: "ir.actions.act_window", name: text(action["name"], "action name"), res_model: model,
+        target: "new", views: actionViews(action), context: defaults },
+      context: this.context,
+    }));
+    if (normalized.kind !== "window") throw new ClientError("unsupported", "The wizard action did not return a modal form.");
+    return normalized;
+  }
+
   /** Open a `target="new"` window action as the one action dialog. `caller` is the record whose
    *  button produced the action; the user menu opens one without a caller record, and a result
    *  handed back from that dialog then names the dialog's own record as its caller. `onResult`
    *  runs after the dialog's own method result was consumed (the preferences dialog reloads the
    *  page there). */
-  private async openWindowDialog(result: Extract<ActionResult, { kind: "window" }>, caller: RecordState | undefined, binding: Binding, refresh: () => Promise<void>, source: WizardDialog | undefined, callerContext: Record<string, unknown>, onResult?: (result: ActionResult, button: string | undefined) => void, confirmed?: Resubmission, profileTitle = false): Promise<void> {
+  private async openWindowDialog(result: Extract<ActionResult, { kind: "window" }>, caller: RecordState | undefined, binding: Binding, refresh: () => Promise<void>, source: WizardDialog | undefined, callerContext: Record<string, unknown>, onResult?: (result: ActionResult, button: string | undefined) => void, confirmed?: Resubmission, profileTitle = false): Promise<WizardDialog | undefined> {
     const previous = this.wizard;
     if (previous && ((previous !== source && previous.busy) || !await previous.canLeave(previous === source))) return;
     const context = { ...callerContext, ...(caller ? { active_model: caller.model, active_id: caller.id,
@@ -5394,7 +5420,7 @@ export class HumanApp {
     if (!this.live(binding)) return;
     const state = new RecordState(this.rpc, result.model, view.fields, context);
     await state.load(result.res_id ?? undefined);
-    if (!this.live(binding)) return;
+    if (!this.live(binding) || this.wizard !== previous) return;
     let scope: WizardDialog;
     scope = new WizardDialog({ actorName: this.userName, profileTitle, numericLocale: this.numericLocale, name: result.name, state, view, rpc: this.rpc, context,debug:this.debug,uid:this.userId,
       action:(id,effective)=>this.declaredButtonAction(id,state,view.fields,effective,binding,refresh,scope),
@@ -5424,6 +5450,7 @@ export class HumanApp {
     previous?.dispose();
     this.wizard = scope;
     scope.mount();
+    return scope;
   }
 
   private async applyUserColorScheme(): Promise<void> {

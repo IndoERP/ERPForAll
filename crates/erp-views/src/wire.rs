@@ -228,7 +228,8 @@ impl ViewType {
 }
 object!(/// Authorized window action. Unsupported registered view types fail at admission.
     WindowAction { wire_major: WireMajor, id: WireId, name: String, model: String,
-        target: ActionTarget, views: Vec<ActionView>, #[serde(deserialize_with="required_nullable")] domain: Option<WireDocument>, #[serde(deserialize_with="required_nullable")] context: Option<WireDocument> });
+        target: ActionTarget, views: Vec<ActionView>, #[serde(deserialize_with="required_nullable")] domain: Option<WireDocument>, #[serde(deserialize_with="required_nullable")] context: Option<WireDocument>,
+        #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] help: Option<String> });
 object!(/// Selected view request attached to an action.
     ActionView { #[serde(deserialize_with="required_nullable")] id: Option<WireId>, #[serde(rename="type")] view_type: ViewType });
 object!(/// Typed accessible view descriptions for one model.
@@ -1819,7 +1820,14 @@ impl WindowAction {
             views,
             domain,
             context,
+            help: None,
         }
+    }
+
+    /// Add the action's empty-state description for clients to display as text.
+    pub fn with_help(mut self, help: Option<String>) -> Self {
+        self.help = help;
+        self
     }
 }
 impl WindowActionViews {

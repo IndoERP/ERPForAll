@@ -1,5 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { createFocusTrap } from "@erpforall/elang";
+import { menuIcon } from "./icons.js";
 import { openProviderUrl } from "./button-url.js";
 import { deliverFailure, launch, reportFailure } from "./failure-owner.js";
 import type { Route } from "./route.js";
@@ -8,6 +9,8 @@ export interface Command {
   id?: string;
   name: string;
   category?: string;
+  /** A menu glyph or published addon image, using the same syntax as ir.ui.menu.web_icon. */
+  icon?: string | null;
   action?(): void | Promise<void>;
   href?: string;
 }
@@ -309,6 +312,7 @@ export function openCommandPalette(
           const nameSpan = document.createElement("span");
           nameSpan.className = "command-name";
           nameSpan.textContent = cmd.name;
+          if (cmd.icon !== undefined) item.append(menuIcon(cmd.icon));
           item.append(nameSpan);
 
           if (displayCategory) {

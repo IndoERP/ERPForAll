@@ -254,6 +254,7 @@ async fn install() {
     assert_eq!(
         names(&client, "ir.ui.view").await,
         [
+            "employee_overview_list",
             "hr_department_view_form",
             "hr_department_view_hierarchy",
             "hr_department_view_kanban",
@@ -306,6 +307,7 @@ async fn install() {
     assert_eq!(
         names(&client, "ir.actions.act_window").await,
         [
+            "employee_overview_action",
             "hr_department_action",
             "hr_departure_reason_action",
             "hr_employee_action",
@@ -342,6 +344,7 @@ async fn install() {
             "hr_job_menu",
             "hr_learning_menu",
             "hr_menu_root",
+            "hr_overview_menu",
             "hr_reporting_contracts_menu",
             "hr_reporting_headcount_menu",
             "hr_reporting_menu",

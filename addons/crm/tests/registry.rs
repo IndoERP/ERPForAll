@@ -23,6 +23,13 @@ fn registry_composes_crm_with_its_real_sales_and_mail_parents() {
     ])
     .build()
     .expect("CRM registry composition");
+    assert!(
+        erp_sdk::client_actions::registry_of(&registry)
+            .expect("client action declarations")
+            .get("crm.overview")
+            .is_some(),
+        "the CRM home menu requires its registered client action"
+    );
     let lead = registry.model("crm.lead").expect("CRM lead");
     for field in [
         "activity_ids",

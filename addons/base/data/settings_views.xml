@@ -297,4 +297,6 @@ Each
     <field name="view_mode">form</field>
     <field name="sequence" eval="20"/>
   </record>
+
+  <record id="translation_catalog_menu" model="ir.ui.menu"><field name="web_icon">lucide:globe</field></record>
 </erp>

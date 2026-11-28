@@ -99,19 +99,22 @@ export function renderHtmlField(env: WidgetEnvironment): WidgetHandle {
   };
 }
 
+/** Extract readable text in an inert template. None of the parsed nodes enter the live document. */
+export function htmlFieldText(value: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = value;
+  template.content.querySelectorAll("script,style").forEach(node => node.remove());
+  for (const block of template.content.querySelectorAll("p,div,li,br,h1,h2,h3,h4,h5,h6")) block.after(" ");
+  return (template.content.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
 /** List cells have no RecordForm draft lifecycle: they display safe read-only plain text. */
 export function renderListHtmlField(env: WidgetEnvironment): WidgetHandle {
   const value = env.value;
   if (value !== false && value !== null && value !== undefined && typeof value !== "string") {
     throw new ClientError("server", `Html field ${env.field.label} must contain text.`);
   }
-  let text = "";
-  if (typeof value === "string" && value !== "") {
-    const template = document.createElement("template");
-    template.innerHTML = value;
-    template.content.querySelectorAll("script,style").forEach(s => s.remove());
-    text = template.content.textContent ?? "";
-  }
+  const text = typeof value === "string" && value !== "" ? htmlFieldText(value) : "";
   const node = el("span", text, "field-read-value list-html");
   node.setAttribute("aria-label", env.field.label);
   return { node, dispose: () => {} };

@@ -1060,4 +1060,10 @@
   <record id="technical_reporting_menu" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
   <record id="technical_paperformat_menu" model="ir.ui.menu"><field name="web_icon">lucide:file-text</field></record>
   <record id="technical_reports_menu" model="ir.ui.menu"><field name="web_icon">lucide:file-text</field></record>
+
+  <record id="technical_attachments_menu" model="ir.ui.menu"><field name="web_icon">lucide:files</field></record>
+  <record id="technical_field_access_menu" model="ir.ui.menu"><field name="web_icon">lucide:shield-check</field></record>
+  <record id="technical_sessions_menu" model="ir.ui.menu"><field name="web_icon">lucide:monitor</field></record>
+  <record id="identity_provider_menu" model="ir.ui.menu"><field name="web_icon">lucide:key</field></record>
+  <record id="technical_settings_changes_menu" model="ir.ui.menu"><field name="web_icon">lucide:notebook-pen</field></record>
 </erp>

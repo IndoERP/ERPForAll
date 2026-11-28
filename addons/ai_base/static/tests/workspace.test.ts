@@ -101,7 +101,8 @@ test("a proposed reference resolves inside the current company only after a clic
 });
 
 test("the workspace shows a usable conversation and shares the draft without opening the dock", async () => {
-  const env = { currentCompanyId: 7, userId: 42, companies: [], csrfToken: "fixture", host: document.body, rpc: {},
+  const openMenuAction = vi.fn().mockResolvedValue(undefined);
+  const env = { openMenuAction, currentCompanyId: 7, userId: 42, companies: [], csrfToken: "fixture", host: document.body, rpc: {},
     action: { params: { company_id: 7, sources: [], limit: 2, history: { turns: 4, bytes: 4096, message_bytes: 2048 } } },
     run: (job: () => Promise<void>) => { void job(); },
   } as unknown as ClientActionEnvironment;
@@ -111,6 +112,9 @@ test("the workspace shows a usable conversation and shares the draft without ope
   const view = await workspace(env);
   try {
     expect(chat.readDock().mode).toBe("closed");
+    const insights = [...document.querySelectorAll("nav button")].find(button => button.textContent === "Saved Insights") as HTMLButtonElement;
+    insights.click();
+    expect(openMenuAction).toHaveBeenCalledWith("ai_base.insight_action");
     const input = document.querySelector("textarea")!;
     expect(input.value).toBe("Prepare a draft");
     input.form!.requestSubmit();

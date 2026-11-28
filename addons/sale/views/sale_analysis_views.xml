@@ -107,7 +107,7 @@
   </record>
 
   <record id="action_sale_teams_dashboard" model="ir.actions.act_window">
-    <field name="name">Sales Teams</field>
+    <field name="name">Sales Overview</field>
     <field name="res_model">crm.team</field>
     <field name="view_mode">kanban,list,form</field>
     <field name="view_id" ref="crm_team_view_kanban_sale"/>

@@ -165,8 +165,8 @@
     <menuitem id="menu_purchase_by_product_report" groups="purchase.group_purchase_user" name="Purchases by Product" action="action_purchase_by_product_report" sequence="15"/>
     <menuitem id="menu_purchase_analysis" name="Purchase Pivot &amp; Graph" action="action_purchase_order_analysis" sequence="20"/>
   </menuitem>
-  <record id="menu_purchase_report" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
+  <record id="menu_purchase_report" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
   <record id="menu_purchase_dynamic_report" model="ir.ui.menu"><field name="web_icon">lucide:trending-up</field></record>
   <record id="menu_purchase_by_product_report" model="ir.ui.menu"><field name="web_icon">lucide:package</field></record>
-  <record id="menu_purchase_analysis" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
+  <record id="menu_purchase_analysis" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
 </erp>

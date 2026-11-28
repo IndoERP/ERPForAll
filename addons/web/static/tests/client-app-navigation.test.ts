@@ -441,7 +441,7 @@ function mockIconNavigation() {
         node(12, 10, "Actions", [14, 15], null, "lucide:settings"),
         node(13, 10, "Empty category", [], null, null),
         node(14, 12, "Unknown glyph", [], 20, "https://invalid.example/icon.svg"),
-        node(15, 12, "Nested", [16], null, null),
+        node(15, 12, "Nested", [16], null, "lucide:layers"),
         node(16, 15, "Laporan panjang — 日本語", [], 20, null),
       ],
     }), { headers: { "Content-Type": "application/json" } });
@@ -471,7 +471,8 @@ test("application navigation carries local icons without treating data labels as
   expect(unknown.getAttribute("aria-current")).toBe("page");
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("is not a shipped icon; showing the default icon"));
   expect(sections.querySelector('[data-menu-id="13"]')).toBeNull();
-  expect(sections.querySelector(".dropdown-header")?.querySelector("svg")).toBeNull();
+  expect(sections.querySelector(".dropdown-header > .erp-icon")?.getAttribute("data-icon")).toBe("layers");
+  expect(root.querySelector('.mobile-drawer [data-menu-id="15"] > .erp-icon')?.getAttribute("data-icon")).toBe("layers");
   const desktop = [...sections.querySelectorAll<HTMLButtonElement>("button[data-menu-id]")];
   for (const entry of desktop) {
     const mobile = root.querySelector(`.mobile-drawer button[data-menu-id="${entry.dataset["menuId"]}"]`)!;

@@ -1,7 +1,7 @@
 name = "Office Blue Theme"
 summary = "Compact blue office appearance for the web client"
 icon = "lucide:palette"
-version = "1.0"
+version = "1.0.1"
 license = "MIT OR Apache-2.0"
 author = "Arkana"
 depends = ["base", "web"]

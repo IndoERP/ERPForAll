@@ -213,5 +213,5 @@
     <field name="sequence" eval="40"/>
   </record>
   <menuitem id="menu_invoice_pivot_graph" name="Invoice Pivot &amp; Graph" parent="menu_account_reporting" action="action_invoice_pivot_graph" groups="account.group_account_readonly" sequence="56"/>
-  <record id="menu_invoice_pivot_graph" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
+  <record id="menu_invoice_pivot_graph" model="ir.ui.menu"><field name="web_icon">lucide:chart-column</field></record>
 </erp>

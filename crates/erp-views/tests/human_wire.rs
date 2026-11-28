@@ -140,6 +140,29 @@ fn versions_identities_and_scope_shapes_are_closed() {
 }
 
 #[test]
+fn window_action_help_is_optional_and_roundtrips_as_text() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../testdata/contracts/human-ui-v1.json")).unwrap();
+    let base = fixture["action"]["response"].clone();
+    let action = serde_json::from_value::<WindowAction>(base.clone()).unwrap();
+    assert!(action.help.is_none());
+    let text = "Save a report in Canvas Studio.";
+    let mut with_help = base.clone();
+    with_help["help"] = json!(text);
+    assert_eq!(
+        serde_json::to_value(action.with_help(Some(text.to_owned()))).unwrap(),
+        with_help
+    );
+    assert_eq!(
+        serde_json::from_value::<WindowAction>(with_help)
+            .unwrap()
+            .help
+            .as_deref(),
+        Some(text)
+    );
+}
+
+#[test]
 fn nullable_keys_are_required_and_not_silently_defaulted() {
     let fixture: Value =
         serde_json::from_str(include_str!("../../../testdata/contracts/human-ui-v1.json")).unwrap();

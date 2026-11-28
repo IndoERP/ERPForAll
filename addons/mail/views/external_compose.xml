@@ -32,4 +32,6 @@
       <field name="filename" readonly="1"/><field name="content" filename="filename" readonly="1"/>
     </group><footer><button special="cancel" string="Back to email"/></footer></form></field>
   </record>
+
+  <record id="document_template_menu" model="ir.ui.menu"><field name="web_icon">lucide:file-text</field></record>
 </erp>

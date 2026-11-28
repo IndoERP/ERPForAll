@@ -72,7 +72,7 @@
 :root[data-office-theme="office-blue"] .office-header-search > input { width: 100%; padding-inline: 36px 12px; background: var(--surface-subtle); border-color: var(--input-line); }
 :root[data-office-theme="office-blue"] .office-menu-results { position: absolute; top: calc(100% + 4px); inset-inline: 0; max-height: min(60vh,360px); overflow-y: auto; padding: 4px; background: var(--surface); border: 1px solid var(--line); z-index: 90; }
 :root[data-office-theme="office-blue"] .office-menu-results[hidden] { display: none; }
-:root[data-office-theme="office-blue"] .office-menu-option { display: block; width: 100%; border: 0; background: transparent; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+:root[data-office-theme="office-blue"] .office-menu-option { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; text-align: start; white-space: normal; overflow-wrap: anywhere; }
 :root[data-office-theme="office-blue"] .office-menu-option:hover,
 :root[data-office-theme="office-blue"] .office-menu-option[aria-selected="true"] { background: var(--selected); color: var(--selected-text); }
 :root[data-office-theme="office-blue"] .office-menu-empty { padding: var(--office-menu-padding); margin: 0; color: var(--muted); }

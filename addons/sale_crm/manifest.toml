@@ -1,7 +1,7 @@
 name = "CRM and Sales"
 summary = "Quotation creation, bookings and opportunity outcomes from Sales"
 category = "Sales/CRM"
-version = "1.0.0"
+version = "1.0.1"
 license = "MIT OR Apache-2.0"
 author = "ERPForAll"
 depends = ["base", "crm", "mail", "reporting", "sale", "sales_team", "web"]

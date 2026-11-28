@@ -35,6 +35,7 @@ fn the_sales_application_shows_the_sales_menu() {
         assert_eq!(
             children,
             [
+                "sale.menu_sale_teams_dashboard",
                 "sale.sale_order_menu",
                 "sale.product_menu_catalog",
                 "sale.menu_sale_report",
@@ -47,7 +48,6 @@ fn the_sales_application_shows_the_sales_menu() {
             [
                 "sale.menu_sale_quotations",
                 "sale.menu_sale_order",
-                "sale.menu_sale_teams_dashboard",
                 "sale.res_partner_menu",
             ]
         );

@@ -76,7 +76,7 @@
     <field name="arch" type="xml">
       <list>
         <dashboard>
-          <count name="rfq" string="RFQs" filter="draft" color="info"/>
+          <count name="rfq" string="RFQs" domain="[('state', 'in', ['draft', 'sent'])]" color="info"/>
           <count name="to_approve" string="To Approve" filter="to_approve" color="warning"/>
           <count name="purchase" string="Purchase Orders" filter="purchase" color="success"/>
           <count name="waiting_bills" string="Waiting Bills" filter="waiting_bills" color="warning"/>
@@ -209,6 +209,14 @@
     </field>
   </record>
 
+  <record id="purchase_overview_action" model="ir.actions.act_window">
+    <field name="name">Purchase Overview</field>
+    <field name="res_model">purchase.order</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="purchase_order_list"/>
+    <field name="search_view_id" ref="purchase_order_search"/>
+  </record>
+
   <!-- Requests for Quotation shows every order, as the reference does; Purchase Orders the confirmed ones. -->
   <record id="purchase_rfq" model="ir.actions.act_window">
     <field name="name">Requests for Quotation</field>
@@ -266,6 +274,7 @@
   </record>
 
   <menuitem id="menu_purchase_root" name="Purchase" sequence="40" groups="purchase.group_purchase_user" web_icon="lucide:shopping-cart">
+    <menuitem id="menu_purchase_overview" name="Overview" action="purchase_overview_action" sequence="1"/>
     <menuitem id="menu_procurement_management" name="Orders" sequence="10">
       <menuitem id="menu_purchase_rfq" name="Requests for Quotation" action="purchase_rfq" sequence="10"/>
       <menuitem id="menu_purchase_form_action" name="Purchase Orders" action="purchase_form_action" sequence="20"/>
@@ -284,6 +293,7 @@
   </menuitem>
 
   <record id="menu_procurement_management" model="ir.ui.menu"><field name="web_icon">lucide:clipboard-list</field></record>
+  <record id="menu_purchase_overview" model="ir.ui.menu"><field name="web_icon">lucide:panels-top-left</field></record>
   <record id="menu_purchase_rfq" model="ir.ui.menu"><field name="web_icon">lucide:file-text</field></record>
   <record id="menu_purchase_form_action" model="ir.ui.menu"><field name="web_icon">lucide:shopping-cart</field></record>
   <record id="menu_purchase_requisition" model="ir.ui.menu"><field name="web_icon">lucide:file-text</field></record>

@@ -12,6 +12,7 @@ mod attainment;
 mod history;
 mod intake;
 mod lifecycle;
+mod overview;
 mod pipeline;
 mod qualification;
 mod reporting;

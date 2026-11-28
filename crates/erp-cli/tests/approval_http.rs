@@ -218,6 +218,18 @@ fn approval_queues_page_only_requests_visible_to_the_current_user() {
             "approvals.configuration"
         );
         assert_eq!(opened(Subject::A, window)["action"]["model"], VIEW);
+        let overview = fixture.xmlid("approvals", "overview_window");
+        let overview_list = fixture.xmlid("approvals", "overview_list");
+        let metadata = opened(Subject::A, overview);
+        assert!(metadata["action"]["context"].is_null());
+        let dashboard = metadata["views"]["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|view| view["type"] == "list")
+            .flat_map(|view| view["nodes"].as_array().unwrap())
+            .find(|node| node["kind"] == "dashboard")
+            .unwrap();
         let refused = bookmark(Subject::A, config_action);
         let missing = bookmark(Subject::A, i64::from(i32::MAX));
         assert_eq!(refused.status, 403);
@@ -233,6 +245,27 @@ fn approval_queues_page_only_requests_visible_to_the_current_user() {
                 orm(who, VIEW, "search", json!({"domain":[],"order":"id"})),
                 json!(expected)
             );
+            let counts = orm(
+                who,
+                VIEW,
+                "erp_read_dashboard",
+                json!({
+                    "action_id":overview, "view_id":overview_list, "revision":dashboard["revision"],
+                    "period":"", "domain_scope":[]
+                }),
+            );
+            assert_eq!(counts["hidden"], false);
+            for (value, filter) in counts["values"].as_array().unwrap().iter().zip([
+                "to_review",
+                "is_mine",
+                "is_reviewed",
+            ]) {
+                assert_eq!(value["name"], filter);
+                assert_eq!(value["domain"], json!([[filter, "=", true]]));
+                let visible = orm(who, VIEW, "search_count", json!({"domain":value["domain"]}));
+                assert_eq!(value["value"], visible.to_string());
+            }
+            assert_eq!(counts["values"].as_array().unwrap().len(), 3);
             assert_eq!(
                 orm(who, VIEW, "search_count", json!({"domain":[]})),
                 expected.len()

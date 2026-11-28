@@ -167,10 +167,10 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
   }
   const resources = document.createElement("nav");
   resources.setAttribute("aria-label", "Assistant tools");
-  if (env.openAction) {
+  if (env.openMenuAction) {
     const addLink = (label: string, xmlId: string) => resources.append(button(label, () =>
-      env.run(() => env.openAction!({ xmlId, viewMode: "list", domain: [], context: {} }))));
-    addLink("Saved reports and dashboards", "ai_base.insight_action");
+      env.run(() => env.openMenuAction!(xmlId))));
+    addLink("Saved Insights", "ai_base.insight_action");
     if (env.action.params["implementation_access"] === true) addLink("Implementation projects", "ai_base.implementation_projects");
   }
   resources.prepend(panels);

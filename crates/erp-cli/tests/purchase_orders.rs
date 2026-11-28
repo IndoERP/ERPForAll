@@ -296,7 +296,7 @@ fn purchase_installs_with_groups_access_sequence_and_settings() {
             .await,
             ["purchase.order/PO/5/shared"]
         );
-        // the screens: two order actions and the settings page under the Purchase app
+        // The purchase overview, operational screens, and settings are installed together.
         assert_eq!(
             strings(
                 &mut tx,
@@ -310,6 +310,7 @@ fn purchase_installs_with_groups_access_sequence_and_settings() {
                 "ir.actions.act_window:action_purchase_requisition",
                 "ir.actions.act_window:action_purchase_vendors",
                 "ir.actions.act_window:purchase_form_action",
+                "ir.actions.act_window:purchase_overview_action",
                 "ir.actions.act_window:purchase_rfq",
                 "ir.actions.act_window:purchase_settings_action",
                 "ir.ui.menu:menu_procurement_management",
@@ -320,6 +321,7 @@ fn purchase_installs_with_groups_access_sequence_and_settings() {
                 "ir.ui.menu:menu_purchase_dynamic_report",
                 "ir.ui.menu:menu_purchase_form_action",
                 "ir.ui.menu:menu_purchase_general_settings",
+                "ir.ui.menu:menu_purchase_overview",
                 "ir.ui.menu:menu_purchase_product_template",
                 "ir.ui.menu:menu_purchase_product_variant",
                 "ir.ui.menu:menu_purchase_products",

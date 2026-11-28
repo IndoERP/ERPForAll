@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { configureClientTemplates } from "../src/client/registry.js";
+import { configureClientTemplates, registerClientAction, type ClientActionEnvironment } from "../src/client/registry.js";
 import { ErrorDialog } from "../src/client/error-dialog.js";
 import { HumanApp } from "../src/client/app.js";
 
@@ -118,6 +118,49 @@ const wizardDescription = () => ({ ...descriptionOf([
   { kind: "footer", children: [3, 4] }, buttonNode({ name: "confirm_loan", label: "Confirm loan" }),
   { kind: "cancel_button", label: "Cancel wizard", variant: "secondary", modifiers: modifiers() }
 ]), model: "test.wizard", fields: { "test.wizard": { name: textField("Name", "char", { required: true }) } } });
+test("client action wizard returns the submit outcome, keeps its page, and restores focus", async () => {
+  let screen!: ClientActionEnvironment;
+  const opener = document.createElement("button");
+  const mount = vi.fn(async (env: ClientActionEnvironment) => {
+    screen = env; env.host.append(opener);
+    return { dispose() {} };
+  });
+  registerClientAction("test.intake_home", { create: mount });
+  const session = launch((path, body) => {
+    if (path.endsWith("erp_load_web_menus")) return json({ wire_major: 1, registry_version: "r1", roots: [10],
+      nodes: [{ module: "test", id: 10, parent_id: null, label: "Overview", action_id: 20, action_kind: "client", children: [], icon: null }] });
+    if (path.endsWith("erp_load_web_client_action")) return json({ wire_major: 1, result: {
+      kind: "client", id: 20, name: "Overview", tag: "test.intake_home", params: {} } });
+    if (path.endsWith("erp_load_web_action_ref")) {
+      expect(body["xml_id"]).toBe("test.intake_wizard");
+      return json({ wire_major: 1, id: 25, name: "Intake", model: "test.wizard", target: "new",
+        views: [{ id: 1, type: "form" }], domain: null, context: null });
+    }
+    if (path.endsWith("erp_normalize_action_result")) return json({ wire_major: 1, result: body["result"] === true
+      ? { kind: "notification", title: null, message: "Received", level: "success", then_close: true }
+      : wizard });
+    if (path.endsWith("test.wizard/get_views")) return json(wizardDescription());
+    if (path.endsWith("test.wizard/default_get")) return json({ name: "Enquiry" });
+    if (path.endsWith("test.wizard/web_save")) return json([{ id: 77, name: "Enquiry" }]);
+    if (path.endsWith("/confirm_loan")) return json(true);
+    return undefined;
+  });
+  await session.started;
+  const origin = location.href;
+  opener.focus();
+  for (const [label, completed] of [["Cancel wizard", false], ["Confirm loan", true]] as const) {
+    const outcome = screen.openWizard!("test.intake_wizard");
+    await vi.waitFor(() => expect(dialogButton(label)).toBeTruthy());
+    dialogButton(label).click();
+    await expect(outcome).resolves.toBe(completed);
+    expect(document.querySelector(".wizard-dialog")).toBeNull();
+    expect(location.href).toBe(origin);
+    expect(document.activeElement).toBe(opener);
+  }
+  expect(mount).toHaveBeenCalledOnce();
+  expect(session.calls.filter(call => call.path.endsWith("/confirm_loan"))).toHaveLength(1);
+});
+
 const setup = async (result: unknown = { kind: "close" }, failure?: string, custom?: (path: string, body: Record<string, unknown>) => Promise<Response> | Response | undefined) => {
   const session = await start((path, body) => {
     const override = custom?.(path, body); if (override) return override;
