@@ -352,10 +352,16 @@ fn upgrade_refuses_legacy_foreign_po_with_missing_rate_and_zero_company_total() 
             Box::pin(system.button_immediate_upgrade(&env, &[ModuleName::new("base").unwrap()]))
                 .await
                 .unwrap_err();
-        let msg = err.to_string();
+        let mut chain = vec![err.to_string()];
+        let mut current = std::error::Error::source(&err);
+        while let Some(source) = current {
+            chain.push(source.to_string());
+            current = source.source();
+        }
+        let full = chain.join(" -> ");
         assert!(
-            msg.contains("No exchange rate is defined for currency USD"),
-            "expected missing USD rate error, got: {msg}"
+            full.contains("No exchange rate is defined for currency USD"),
+            "expected missing USD rate error in source chain, got: {full}"
         );
     });
 }
