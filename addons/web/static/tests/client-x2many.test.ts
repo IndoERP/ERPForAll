@@ -148,7 +148,7 @@ test("editing a stored line records which fields changed; a read-only one2many o
   const view = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
   expect(view.querySelector('input[name="title"]')).toBeNull();
   expect(view.textContent).toContain("Foundation");
-  expect([...view.querySelectorAll("button")].map(b => b.textContent)).toEqual(["×", "Close"]);
+  expect([...view.querySelectorAll("button")].map(b => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Close", "Close"]);
 });
 
 test("a stored line saved through the form is written as one2many commands", async () => {

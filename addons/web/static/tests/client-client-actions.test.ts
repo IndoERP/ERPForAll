@@ -208,6 +208,8 @@ test("Discuss opens from the app menu without realtime and uses the active compa
   await app.start();
   const workspace = root.querySelector<HTMLElement>("[data-client-content] .discuss-workspace");
   expect(workspace?.hidden).toBe(false);
+  expect(root.querySelector<HTMLElement>("[data-control-panel]")?.hidden).toBe(true);
+  expect(workspace?.querySelector("h1")?.textContent).toBe("Discuss");
   await vi.waitFor(() => expect(workspace?.textContent).toContain("No conversations found."));
   for (const method of ["erp_load_web_client_action", "conversation_search"]) {
     expect(requested.find(request => request.path.endsWith(method))?.params["context"]).toMatchObject({ allowed_company_ids: [2] });
@@ -237,12 +239,17 @@ test("expanding quick chat navigates to the authorized Discuss menu and keeps th
   panel.querySelector<HTMLInputElement>('[aria-label="Search conversations"]')!.value = "Purchasing";
   panel.querySelector<HTMLButtonElement>('button[aria-label="Open workspace"]')!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-client-content] .discuss-workspace")).toBe(panel));
+  const trigger = root.querySelector<HTMLButtonElement>(".discuss-trigger")!;
+  expect(trigger.hidden).toBe(true);
   expect(location.pathname).toBe("/erp/action-45");
   expect(new URLSearchParams(location.search).get("menu")).toBe("12");
   expect(panel.querySelector<HTMLInputElement>('[aria-label="Search conversations"]')!.value).toBe("Purchasing");
   root.querySelector<HTMLButtonElement>("button.brand")!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-client-header] .discuss-panel")).toBe(panel));
   expect(panel.hidden).toBe(true);
+  expect(trigger.hidden).toBe(false);
+  expect(panel.querySelector("h2")?.textContent).toBe("Discuss");
+  expect(panel.querySelector("h1")).toBeNull();
 });
 
 test("an editable client action guards navigation while busy and saves a draft before leaving", async () => {

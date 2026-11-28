@@ -7,6 +7,7 @@ export const DISCUSS_ACTION = "mail.discuss";
 registerClientAction(DISCUSS_ACTION, {
   async create(environment) {
     if (!environment.mountDiscuss) throw new ClientError("unsupported", "The Discuss workspace is unavailable in this session.");
+    environment.panel.hidden = true;
     return { dispose: environment.mountDiscuss(environment.host) };
   },
 });

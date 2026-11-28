@@ -109,7 +109,7 @@ function host(): HTMLElement {
   return root;
 }
 
-function mockNoteFetch(savedLog?: unknown[]) {
+function mockNoteFetch(savedLog?: unknown[], description: unknown = noteDescription) {
   return vi.fn(async (path: string, init?: RequestInit) => {
     if (path.endsWith("erp_load_web_menus")) {
       return new Response(JSON.stringify({
@@ -129,10 +129,10 @@ function mockNoteFetch(savedLog?: unknown[]) {
         views: [{ id: 2, type: "list" }, { id: 1, type: "form" }],
         domain: null,
         context: null
-      }, noteDescription)), { headers: { "Content-Type": "application/json" } });
+      }, description)), { headers: { "Content-Type": "application/json" } });
     }
     if (path.endsWith("get_views")) {
-      return new Response(JSON.stringify(noteDescription), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(description), { headers: { "Content-Type": "application/json" } });
     }
     if (path.endsWith("web_search_read")) {
       return new Response(JSON.stringify({
@@ -358,6 +358,22 @@ test.each(["default", "office-blue"])("%s uses shared form hosts and record menu
   expect(root.querySelector('.form-record-commands, .form-record-tabs')).toBeNull();
 });
 
+
+test("a declared page heading announces the open record and leaves the title field labelled", async () => {
+  const view = noteDescription.views[0]!;
+  const description = { ...noteDescription, views: [{ ...view, nodes: [
+    { kind: "form", record_mode: "record", children: [1] }, { kind: "sheet", children: [2] },
+    { kind: "title", children: [3] }, { kind: "heading", level: 1, children: [4] }, view.nodes[1]
+  ] }, noteDescription.views[1]] };
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  vi.stubGlobal("fetch", mockNoteFetch(undefined, description));
+  const root = host(); app = new HumanApp(root, bootstrap);
+  await app.start();
+  const heading = root.querySelector("h1.form-title-heading");
+  expect(heading?.getAttribute("aria-label")).toBe("Meeting Agenda");
+  expect(heading?.querySelector("input[name=name]")).not.toBeNull();
+  expect(root.querySelectorAll("main h1, [data-client-content] h1")).toHaveLength(1);
+});
 
 test("service teardown follows committed and superseded navigation, preserving a failed destination's predecessor", async () => {
   const disposals = [vi.fn(), vi.fn(), vi.fn()];

@@ -1,11 +1,12 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { button, el } from "./dom.js";
+import { actionButton, button, el } from "./dom.js";
 import type { DialogHandle, DialogService } from "./dialog-service.js";
 import { exportRecordDialog } from "./export-dialog.js";
 import { decodeImpexFields, IMPEX_FORMATS, impexFormat } from "./impex-formats.js";
 import { importDialog } from "./import-dialog.js";
 import { saveFile } from "./file-save.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
+import { t } from "./translate.js";
 import { ClientError, type RpcClient } from "./transport.js";
 
 /** What the caller may do with a model's records as files (`erp_impex_rights`). */
@@ -29,6 +30,8 @@ export interface ListDataMenuOptions {
   readonly dialogs: DialogService;
   /** The list offers creating and changing records (its view's `create` and `edit`); Import also needs this. */
   readonly canImport: boolean;
+  readonly wrapRows: { active: boolean; change(active: boolean): void };
+  readonly deleteSelected?: () => void;
   /** Current list columns, in display order. */
   readonly visibleFields: () => readonly string[];
   readonly selectedIds: () => readonly number[];
@@ -39,50 +42,64 @@ export interface ListDataMenuOptions {
   readonly report: (error: unknown) => void;
 }
 
-/**
- * The Import / Export menu of a list's control row. The rights are read when the menu is first opened (not on every list
- * open) and kept; the menu then offers Import only to a caller who may create and change the records and the list allows
- * it, and Export only to a caller with the export right. A failed read is reported and tried again at the next opening.
- */
-export function listDataMenu(options: ListDataMenuOptions): { node: HTMLElement; dispose(): void } {
+/** The list Actions menu reads file-operation rights on first use. Local display controls
+ * and selected-record actions work independently of that request. */
+export function listDataMenu(options: ListDataMenuOptions): { node: HTMLElement; updateSelection(): void; dispose(): void } {
   const node = el("div", undefined, "nav-dropdown list-data-dropdown");
-  const toggle = button("Import / Export", () => {}, "list-data-toggle-btn");
+  const toggle = button("", () => {}, "list-data-toggle-btn action-toggle-btn icon-button");
+  toggle.setAttribute("aria-label", t("Actions")); toggle.title = t("Actions");
   toggle.setAttribute("aria-haspopup", "menu");
-  const menu = el("div", undefined, "nav-dropdown-menu list-data-menu");
-  menu.setAttribute("aria-label", "Import / Export");
+  toggle.append(el("span", undefined, "record-menu-dots"));
+  const menu = el("div", undefined, "nav-dropdown-menu action-menu list-data-menu");
+  menu.setAttribute("aria-label", t("Actions"));
   node.append(toggle, menu);
-  let live = true, rights: ImpexRights | undefined, loading = false;
+  let live = true, loaded = false, loading = false;
   let open: DialogHandle | undefined;
   const item = (label: string, action: () => void, className: string): HTMLButtonElement => {
     const entry = button(label, () => { dropdown.close(true); action(); }, `dropdown-item ${className}`);
     entry.setAttribute("role", "menuitem");
     return entry;
   };
+  const wrap = item(t("Wrap cell text"), () => {
+    const active = wrap.getAttribute("aria-checked") !== "true";
+    options.wrapRows.change(active);
+    wrap.setAttribute("aria-checked", String(active));
+  }, "list-wrap-toggle");
+  wrap.setAttribute("role", "menuitemcheckbox");
+  wrap.setAttribute("aria-checked", String(options.wrapRows.active));
+  menu.append(wrap);
+  const remove = options.deleteSelected && actionButton("Delete", () => {
+    if (!options.selectedIds().length) return;
+    dropdown.close(true);
+    options.deleteSelected?.();
+  }, "dropdown-item action-delete-btn danger");
+  if (remove) {
+    remove.setAttribute("role", "menuitem"); menu.append(remove);
+  }
+  const updateSelection = (): void => {
+    if (remove) remove.hidden = !options.selectedIds().length;
+  };
+  updateSelection();
   const fill = (granted: ImpexRights): void => {
-    menu.replaceChildren();
-    if (granted.import && options.canImport) menu.append(item("Import records", () => {
+    const files = [];
+    if (granted.import && options.canImport) files.push(item("Import records", () => {
       open = importDialog({ ...options, templateFields: options.visibleFields() });
-    }, "list-import-btn"));
-    if (granted.export) menu.append(item("Export", () => { open = openExport(options); }, "list-export-btn"));
-    if (!menu.childElementCount) {
-      const none = button("You may not import or export these records.", () => {}, "dropdown-item list-data-none");
-      none.disabled = true; none.setAttribute("role", "menuitem");
-      menu.append(none);
-    }
+    }, "list-import-btn list-file-action"));
+    if (granted.export) files.push(item("Export", () => { open = openExport(options); }, "list-export-btn list-file-action"));
+    for (const file of files) menu.insertBefore(file, remove ?? null);
     dropdown.refresh();
   };
   const load = (): void => {
-    if (rights) { fill(rights); return; }
-    if (loading) return;
+    if (loaded || loading) return;
     loading = true;
     void options.rpc.call(options.model, "erp_impex_rights", { context: options.context }).then(raw => {
       if (!live) return;
-      rights = decodeImpexRights(raw);
-      fill(rights);
-    }).catch((error: unknown) => { if (live) { dropdown.close(false); options.report(error); } }).finally(() => { loading = false; });
+      fill(decodeImpexRights(raw));
+      loaded = true;
+    }).catch((error: unknown) => { if (live) options.report(error); }).finally(() => { loading = false; });
   };
   const dropdown = attachMenuDropdown({ trigger: toggle, menu, mode: "class-open", onOpen: load });
-  return { node, dispose: () => { live = false; open?.dispose(); dropdown.dispose(); } };
+  return { node, updateSelection, dispose: () => { live = false; open?.dispose(); dropdown.dispose(); } };
 }
 
 function openExport(options: ListDataMenuOptions): DialogHandle {

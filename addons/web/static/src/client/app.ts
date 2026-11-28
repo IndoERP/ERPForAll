@@ -351,6 +351,10 @@ export class HumanApp {
   private kanbanResume?: { url: string; offset: number; scroll: number; id: number;
     /** On a grouped board: its own scroll offsets and how many cards each open column showed. */
     board?: { left: number; top: number; loaded: [KanbanColumnKey, number][] } };
+  /** Display state of the list that opened the current record, scoped by its complete route. */
+  private rememberList?: (id?: number) => void;
+  private listResume?: { url: string; offset: number; limit: number; order: string; id?: number;
+    scroll: number; left: number; top: number; widths: Map<string, number>; wrap: boolean };
   private listContext?: ListContext;
   private disposeWidgets: (() => void)[] = [];
   private disposeListeners: (() => void)[] = [];
@@ -992,7 +996,8 @@ export class HumanApp {
       companyTrigger.setAttribute("aria-haspopup", "dialog");
       companyTrigger.setAttribute("aria-expanded", "false");
       companyTrigger.setAttribute("aria-label", `Companies, current: ${currentCompanyName}`);
-      companyTrigger.append(el("span", currentCompanyName, "company-menu-name"), icon("chevron-down"));
+      companyTrigger.title = currentCompanyName;
+      companyTrigger.append(icon("building"), el("span", currentCompanyName, "company-menu-name"), icon("chevron-down"));
       companyMenu.append(companyTrigger, companySection);
       const closeCompanyMenu = (): void => { companySection.classList.remove("open"); companyTrigger.setAttribute("aria-expanded", "false"); };
       companyMenu.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -2537,6 +2542,7 @@ export class HumanApp {
           const list = await this.listView(staging, panel, actionTitle, description, view, route, generation, actionHelp, views as [number | null, string][], {baseDomain: actionDomain, context, hasForm, canCreate, searchDefaults});
           nextDispose = list.dispose;
           nextSettle = list.settle;
+          nextRestore = list.restore;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "kanban") {
           const hasForm = views.some(view => view[1] === "form");
@@ -2592,12 +2598,14 @@ export class HumanApp {
       }
       this.captureClientState();
       this.clientMounted = nextClient;
+      if (nextRecord && routeUrl(listRouteOf(this.current)) === routeUrl(listRouteOf(route))) this.rememberList?.(nextRecord.id);
       for (const dispose of this.disposeWidgets) dispose();
       this.disposeWidgets = [...(nextDispose ? [nextDispose] : []), ...(panelDispose ? [panelDispose] : [])];
       stagedDisposers.length = 0;
 
       this.record = nextRecord;
       this.service = nextService;
+      if (this.listResume && (!nextRecord || this.listResume.url !== routeUrl(listRouteOf(route)))) this.listResume = undefined;
       this.current = route;
       this.shownGeneration = generation;
       committed = true;
@@ -4097,13 +4105,14 @@ export class HumanApp {
     return restored;
   }
 
-  private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean; searchDefaults?: ReadonlyMap<string, unknown>}): Promise<{ dispose: () => void; settle: () => void }> {
+  private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean; searchDefaults?: ReadonlyMap<string, unknown>}): Promise<{ dispose: () => void; settle: () => void; restore: () => void }> {
     const context = scope?.context ?? this.context, baseDomain = scope?.baseDomain ?? [], hasForm = scope?.hasForm ?? true, canCreate = scope?.canCreate ?? hasForm;
     const cellNavigation = this.pageNavigation(generation, route, () => actionTitle);
     const fieldStops: (() => void)[] = [];
     let groupedModel: ListGroupModel | undefined;
     const currencies = new CurrencyDisplayCache();
-    let offset = 0, order = "id asc", request = 0, pageSize = view.pageLimit ?? 40;
+    const resume = this.listResume?.url === routeUrl(listRouteOf(route)) ? this.listResume : undefined;
+    let offset = resume?.offset ?? 0, order = resume?.order ?? "id asc", request = 0, pageSize = resume?.limit ?? view.pageLimit ?? 40;
     const officeBlue = officeShell();
     panel.classList.add("control-panel-list");
     const selectedIds = new Set<number>();
@@ -4112,7 +4121,7 @@ export class HumanApp {
     let redrawColumns: (() => void) | undefined;
     const choices = columnChoices(view.fields, JSON.stringify([this.userId, "list", description.model, view.id ?? route.action]),
       this.messages.popovers, () => redrawColumns?.(), error => this.reportError(error));
-    const columnWidths = new Map<string, number>();
+    const columnWidths = resume?.widths ?? new Map<string, number>();
     let settleColumns: (() => void) | undefined;
 
     const breadcrumbs = panel.querySelector<HTMLElement>("[data-control-breadcrumbs]") || panel.querySelector<HTMLElement>("h1");
@@ -4138,14 +4147,17 @@ export class HumanApp {
       title.setAttribute("aria-current", "page");
       breadcrumbs.replaceChildren(title);
       if (returning || stacked) {
+        // Refreshing a refused breadcrumb must leave the adjacent list menu and selection controls mounted.
+        const trail = el("div", undefined, "list-crumb-trail");
+        breadcrumbs.replaceChildren(trail);
         const draw = (): void => {
-          renderBreadcrumbs(breadcrumbs, this.breadcrumbs, {
+          renderBreadcrumbs(trail, this.breadcrumbs, {
             isSmall: document.documentElement.dataset["mobile"] === "true",
             onNavigate: async item => this.run(() => this.openCrumb(item, draw)),
             report: error => this.reportError(error)
           });
           // A list has no heading of its own: its crumb names the page, as on a list that starts the trail.
-          const current = breadcrumbs.querySelector<HTMLElement>(".breadcrumb-current");
+          const current = trail.querySelector<HTMLElement>(".breadcrumb-current");
           if (current) retagCrumb(current, "h1");
         };
         draw();
@@ -4291,6 +4303,7 @@ export class HumanApp {
 
     const results = el("div", undefined, "table-scroll list-results");
     results.id = `list-results-${generation}`;
+    results.classList.toggle("list-wrap", resume?.wrap === true);
     const categoriesArea = panel.querySelector("[data-control-categories]") || panel;
     const category = view.searchPanel?.kind === "selection" ? view.searchPanel : undefined;
     const panelMessage = view.searchPanel?.kind === "unsupported" ? view.searchPanel.message : category?.notice;
@@ -4362,47 +4375,32 @@ export class HumanApp {
     const selectionCount = el("span", "0 selected", "selection-count");
 
     const canDelete = view.canDelete !== false && !isFalsy(context["delete"]);
-    let disposeActionMenu = (): void => {};
-    {
-      const actionDropdown = el("div", undefined, "nav-dropdown action-dropdown");
-      const actionMenu = el("div", undefined, "nav-dropdown-menu action-menu");
-      const actionToggle = actionButton("Actions", () => {}, "action-toggle-btn");
-      // Print is its own button before Actions, as in the reference client; it prints the selected records.
-      const print = printDropdown(this.rpc, description.model, report => this.run(async () => {
-        if (!selectedIds.size) return;
-        await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, report, description.model, Array.from(selectedIds));
-      }), error => this.reportError(error), () => this.reportsOf(description.model));
-      const dropdown = attachMenuDropdown({ trigger: actionToggle, menu: actionMenu, mode: "class-open" });
-      disposeActionMenu = () => { print.dispose(); dropdown.dispose(); };
-      if (canDelete) {
-      const deleteBtn = actionButton("Delete", () => this.run(async () => {
-        dropdown.close(false);
-        if (!selectedIds.size) return;
-        if (await this.choose("Delete selected records?", `Are you sure you want to delete ${selectedIds.size} record(s)? This action cannot be undone.`, ["Delete", "Cancel"]) !== "Delete") return;
-        this.busy = true;
-        try {
-          await this.rpc.call(description.model, "unlink", { ids: Array.from(selectedIds), context: context }, { write: true });
-          selectedIds.clear();
-          this.notice("Record(s) deleted.");
-        } finally {
-          this.busy = false;
-        }
-        await load(true);
-      }), "dropdown-item action-delete-btn danger");
-      deleteBtn.setAttribute("role", "menuitem");
-      actionMenu.append(deleteBtn);
+    const removeSelection = (): void => this.run(async () => {
+      if (!selectedIds.size) return;
+      const ids = Array.from(selectedIds);
+      if (await this.choose("Delete selected records?", `Are you sure you want to delete ${ids.length} record(s)? This action cannot be undone.`, ["Delete", "Cancel"]) !== "Delete") return;
+      this.busy = true;
+      try {
+        await this.rpc.call(description.model, "unlink", { ids, context }, { write: true });
+        selectedIds.clear();
+        this.notice("Record(s) deleted.");
+      } finally {
+        this.busy = false;
       }
-      actionDropdown.append(actionToggle, actionMenu);
-      actionDropdown.hidden = !canDelete; // Delete is its only entry: no empty menu
-      selectionBox.append(selectionCount, print.node, actionDropdown);
-    }
-    // Beside the title, not before it: the summary appears without moving the title in every appearance.
-    (breadcrumbs ?? controls).append(selectionBox);
+      await load(true);
+    });
+    const print = printDropdown(this.rpc, description.model, report => this.run(async () => {
+      if (!selectedIds.size) return;
+      await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, report, description.model, Array.from(selectedIds));
+    }), error => this.reportError(error), () => this.reportsOf(description.model));
+    selectionCount.setAttribute("aria-live", "polite");
+    selectionBox.append(selectionCount, print.node);
 
-    // Import and Export beside New: the menu reads the caller's import and export rights when first opened.
     const dataMenu = listDataMenu({
       rpc: this.rpc, model: description.model, context, dialogs: this.messages.dialogs,
       canImport: canCreate && view.canEdit !== false && !isFalsy(context["edit"]),
+      ...(canDelete ? { deleteSelected: removeSelection } : {}),
+      wrapRows: { active: resume?.wrap === true, change: active => results.classList.toggle("list-wrap", active) },
       csrf: text(object(this.headerBootstrap["csrf"])["logout"], "session token"),
       visibleFields: () => choices.visible().filter(field => field.name !== "id").map(field => field.name),
       selectedIds: () => Array.from(selectedIds),
@@ -4417,9 +4415,8 @@ export class HumanApp {
       notice: message => this.notice(message),
       report: error => this.reportError(error),
     });
-    controls.append(dataMenu.node);
-    const disposeSelectionMenu = disposeActionMenu;
-    disposeActionMenu = () => { disposeSelectionMenu(); dataMenu.dispose(); };
+    (breadcrumbs ?? controls).append(dataMenu.node, selectionBox);
+    const disposeActionMenu = (): void => { print.dispose(); dataMenu.dispose(); };
 
     const pager = el("div", undefined, "pager");
     const count = el("span", "", "pager-count muted");
@@ -4553,7 +4550,7 @@ export class HumanApp {
     const markListUnavailable = (): void => {
       count.textContent = "Results unavailable";
       previous.disabled = true; next.disabled = true; pageNumbers.replaceChildren();
-      selectedIds.clear(); selectionBox.style.display = "none"; selectionCount.textContent = "0 selected";
+      selectedIds.clear(); dataMenu.updateSelection(); selectionBox.style.display = "none"; selectionCount.textContent = "0 selected";
       if (results.isConnected) this.listContext = undefined;
       const message = el("p", "Unable to load these records. Adjust the search or reload the page.", "list-load-error");
       message.setAttribute("role", "alert"); results.replaceChildren(message);
@@ -4599,19 +4596,23 @@ export class HumanApp {
       }
       // A new page, search, sort or reload shows other rows; a selection must never outlive what is on screen.
       selectedIds.clear();
-      let groups: ReturnType<typeof decodeGroups> | undefined;
-      if (grouping) {
-        try { groups = decodeGroups(response, grouping, pageSize, { spec: groupName!, aggregates: activeAggregates() }); }
-        catch (error) { tabs?.invalidate(); markListUnavailable(); throw error; }
-        // The groups shrank under an offset from the address, a reload or Back: show the last page, as a group's own pager does.
-        if (offset > 0 && offset >= groups.length) {
-          offset = groups.length ? Math.floor((groups.length - 1) / pageSize) * pageSize : 0;
-          try { response = await fetchMain(offset, base); groups = decodeGroups(response, grouping, pageSize, { spec: groupName!, aggregates: activeAggregates() }); }
-          catch (error) { if (mine !== request || generation !== this.generation || this.expired) return; tabs?.invalidate(); markListUnavailable(); throw error; }
+      const readGroups = () => grouping ? decodeGroups(response, grouping, pageSize, { spec: groupName!, aggregates: activeAggregates() }) : undefined;
+      let groups: ReturnType<typeof decodeGroups> | undefined, length: number;
+      try {
+        groups = readGroups();
+        length = groups?.length ?? integer(response["length"], "record count");
+        // A record or group may disappear while its form is open. Resume on the nearest available page.
+        if (offset > 0 && offset >= length) {
+          offset = length ? Math.floor((length - 1) / pageSize) * pageSize : 0;
+          response = await fetchMain(offset, base);
           if (mine !== request || generation !== this.generation || this.expired) return;
+          groups = readGroups();
+          length = groups?.length ?? integer(response["length"], "record count");
         }
+      } catch (error) {
+        if (mine !== request || generation !== this.generation || this.expired) return;
+        tabs?.invalidate(); markListUnavailable(); throw error;
       }
-      const length = groups ? groups.length : integer(response["length"], "record count");
       // Grouped: `rows` holds the records of the open groups, and the pager counts groups.
       let rows: unknown[] = groups ? [] : array(response["records"], "records");
       const shown = groups ? groups.groups.length : rows.length;
@@ -4652,6 +4653,7 @@ export class HumanApp {
       const body = el("tbody");
 
       const updateSelectionUI = (): void => {
+        dataMenu.updateSelection();
         selectionCount.textContent = `${selectedIds.size} selected`;
         selectionBox.style.display = selectedIds.size > 0 ? "inline-flex" : "none";
         headerCheckbox.checked = rows.length > 0 && selectedIds.size === rows.length;
@@ -4699,14 +4701,15 @@ export class HumanApp {
           const isSorted = order.startsWith(field.name + " ");
           const isAsc = isSorted && order.endsWith("asc");
           th.setAttribute("aria-sort", isSorted ? (isAsc ? "ascending" : "descending") : "none");
-          const sortBtn = button(field.label, () => this.run(async () => {
+          const sortBtn = button("", () => this.run(async () => {
             order = `${field.name} ${isSorted && isAsc ? "desc" : "asc"}`;
             // Back to the first page, or the groups themselves reordered: the open groups may not be on the page that follows.
             if (offset > 0 || field.name === searchModel.getGroupBy()[0]?.split(":")[0]) searchModel.clearListState();
             offset = 0;
             await load();
           }), "sort-button");
-          sortBtn.title = field.label; // a narrow column cuts its header; the full label stays one hover away
+          sortBtn.append(el("span", field.label, "sort-label"));
+          sortBtn.title = field.label;
           if (isSorted) {
             const arrow = icon("chevron-down"); // ascending rotates it in CSS; aria-sort carries the meaning
             arrow.classList.add("sort-indicator"); sortBtn.append(arrow);
@@ -4945,9 +4948,24 @@ export class HumanApp {
       }
       await load();
     } catch (error) { disposeHeaders(); listSidebar?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); throw error; }
+    const remember = (id?: number): void => {
+      this.listResume = { url: routeUrl(listRouteOf(route)), offset, limit: pageSize, order, id,
+        scroll: documentScroller().scrollTop, left: results.scrollLeft, top: results.scrollTop,
+        widths: columnWidths, wrap: results.classList.contains("list-wrap") };
+    };
     return {
-      dispose: () => { choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); disposeHeaders(); listSidebar?.dispose(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
-      settle: () => { settleColumns?.(); }
+      dispose: () => {
+        if (this.rememberList === remember) this.rememberList = undefined;
+        choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); disposeHeaders(); listSidebar?.dispose(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose();
+      },
+      settle: () => { this.rememberList = remember; settleColumns?.(); },
+      restore: () => {
+        if (!resume) return;
+        documentScroller().scrollTop = resume.scroll;
+        results.scrollLeft = resume.left;
+        results.scrollTop = resume.top;
+        if (resume.id !== undefined) results.querySelector<HTMLButtonElement>(`[data-record-open="${resume.id}"]`)?.focus({ preventScroll: true });
+      }
     };
   }
 
@@ -4997,7 +5015,7 @@ export class HumanApp {
     const handle = await factory.create({
       ...this.pageNavigation(generation, route, () => result.name),
       route: { ...route },
-      ...(result.tag === DISCUSS_ACTION ? { mountDiscuss: (host: HTMLElement) => this.getDiscuss().openWorkspace(host) } : {}),
+      ...(result.tag === DISCUSS_ACTION ? { mountDiscuss: (host: HTMLElement) => this.getDiscuss().openWorkspace(host, result.name) } : {}),
       host: staging, panel: mounted.panel, controls: mounted.actions, rpc: this.rpc, companies: this.companies, run: this.run,
       notice: this.notice, messages: this.messages, editorLocale: this.editorLocale,
       // ORM company context and the assistant dock both use the first selected company.
@@ -5645,7 +5663,11 @@ export class HumanApp {
     viewport.append(sheet);
     if (asideHost) viewport.append(asideHost);
     if (chatterHost) viewport.append(chatterHost);
-    staging.append(viewport);
+    if (hasChatter) {
+      const workspace = el("div", undefined, "record-form-workspace");
+      workspace.append(viewport);
+      staging.append(workspace);
+    } else staging.append(viewport);
 
     // A declared title keeps its XML placement. A legacy form instead names the page in its breadcrumb.
     syncPageHeading = (): void => {
@@ -5654,10 +5676,13 @@ export class HumanApp {
       if (contextLine && titleBlock && titleBlock.nextElementSibling !== contextLine) titleBlock.after(contextLine);
       // A render without a title block took the line away with it: it returns to the top of the sheet.
       else if (contextLine && !titleBlock && !sheet.contains(contextLine)) sheet.insertBefore(contextLine, form);
-      const current = breadcrumbs?.querySelector<HTMLElement>(".form-breadcrumb-record");
+      const current = breadcrumbs?.querySelector<HTMLElement>(".breadcrumb-current");
       if (!current) return;
-      const declared = [...form.querySelectorAll("h1")].some(heading => !heading.closest("[hidden]"));
-      retagCrumb(current, declared ? "span" : "h1");
+      const heading = [...form.querySelectorAll("h1")].find(candidate => !candidate.closest("[hidden]"));
+      if (heading?.classList.contains("form-title-heading") && current.textContent) {
+        heading.setAttribute("aria-label", current.textContent);
+      }
+      retagCrumb(current, heading ? "span" : "h1");
     };
     headingObserver = new MutationObserver(() => syncPageHeading?.());
     headingObserver.observe(form, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });

@@ -5,7 +5,7 @@ import type { DialogHandle } from "./dialog-service.js";
 import type { ActionResult } from "../generated/human-ui.js";
 import { buttonHidden, runObjectButton } from "./buttons.js";
 import { askButtonPrompt } from "./button-prompt.js";
-import { actionButton, button, confirmChoice, el } from "./dom.js";
+import { actionButton, confirmChoice, dialogCloseButton, el } from "./dom.js";
 import type { ButtonNode, ButtonPrompt, CancelNode, View } from "./metadata.js";
 import { passwordFormValues } from "./password-editor.js";
 import { t } from "./translate.js";
@@ -54,8 +54,7 @@ export class WizardDialog {
     this.dialog.setAttribute("aria-labelledby", heading.id);
     // Reload is a recovery step, so it is shown
     // only next to an uncertain outcome (see disable()).
-    const close = button("×", () => this.run(async () => { if (await this.canLeave(true)) await this.close(); }), "wizard-close");
-    close.setAttribute("aria-label", "Close"); close.title = "Close";
+    const close = dialogCloseButton(() => this.run(async () => { if (await this.canLeave(true)) await this.close(); }), "wizard-close");
     const reload = actionButton("Reload", () => this.reload(), "wizard-reload");
     reload.setAttribute("aria-label", "Reload wizard");
     const head = el("div", undefined, "wizard-heading"); head.append(heading, close);

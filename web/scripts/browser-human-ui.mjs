@@ -35,6 +35,21 @@ if (officeBaseline && !officeBlue) throw new Error("Office baseline requires Off
 const visualFindings = [];
 // Both appearances must satisfy the same component contracts.
 const themeCheck = (condition, message) => assert.ok(condition, message);
+async function assertAddonCardActions(evaluate) {
+  const outside = await evaluate(`(() => {
+    const issues = [];
+    for (const card of document.querySelectorAll('.addon-tile')) {
+      const tile = card.getBoundingClientRect();
+      for (const control of card.querySelectorAll('button, .addon-badge')) {
+        const b = control.getBoundingClientRect();
+        if (!b.width || !b.height || b.left < tile.left - 1 || b.right > tile.right + 1 || b.top < tile.top - 1 || b.bottom > tile.bottom + 1)
+          issues.push([card.dataset.addon, control.textContent, innerWidth]);
+      }
+    }
+    return issues;
+  })()`);
+  assert.deepEqual(outside, [], "every visible catalog card contains its status and actions");
+}
 // One dialog anatomy and one overlay scale, checked on the open `.choice-dialog` in either theme.
 const assertDialogAnatomy = async evaluate => {
   const anatomy = await evaluate(`(()=>{const d=document.querySelector('.choice-dialog'),cs=getComputedStyle(d),body=getComputedStyle(d.querySelector('.message-dialog-body')),last=[...d.querySelectorAll('.message-dialog-footer button')].at(-1),probe=document.createElement('div');probe.style.boxShadow='var(--shadow-dialog)';document.body.append(probe);const shadow=getComputedStyle(probe).boxShadow;probe.remove();return {width:d.getBoundingClientRect().width,radius:cs.borderTopLeftRadius,shadow:cs.boxShadow,expectedShadow:shadow,padding:body.padding,close:d.querySelector('.message-dialog-header .message-dialog-close')?.getAttribute('aria-label'),lastClass:last.className,lastText:last.textContent.trim(),lastBackground:getComputedStyle(last).backgroundColor,accent:(()=>{const p=document.createElement('button');p.className='primary';document.body.append(p);const c=getComputedStyle(p).backgroundColor;p.remove();return c})(),footerAlign:getComputedStyle(d.querySelector('.message-dialog-footer')).justifyContent,footerEndGap:(()=>{const footer=d.querySelector('.message-dialog-footer'),style=getComputedStyle(footer);return footer.getBoundingClientRect().right-last.getBoundingClientRect().right-parseFloat(style.paddingRight)-parseFloat(style.borderRightWidth)})(),buttonHeight:last.getBoundingClientRect().height}})()`);
@@ -114,7 +129,7 @@ const formBalanceGeometry = `(() => {
   const rowHeights = { control: [nw, pager, strip].filter(Boolean).map(b => b.h), action: [act, ...[...document.querySelectorAll('.form-statusbar .statusbar-step')].map(R), ...[...document.querySelectorAll('.erp-mail-chatter-header :is(.erp-mail-kinds, .erp-mail-activities-button, .erp-mail-chatter-attachment-btn, .erp-mail-followers-button)')].map(R)].filter(Boolean).map(b => b.h) };
   const controlBottom = Math.max(...[nw, pager, strip].filter(Boolean).map(b => b.b)), actionBottom = Math.max(...[act, bar].filter(Boolean).map(b => b.b));
   const actionTop = Math.min(...[act, bar].filter(Boolean).map(b => b.t));
-  return { width: innerWidth, newLeft: nw && nw.l, actionLeft: act && act.l, sheetLeft: sheet && sheet.l, barRight: bar && bar.r, sheetRight: sheet && sheet.r, sheetTop: sheet && sheet.t, actionTop, chatterButtonTop: kinds && kinds.t, rowHeights, gapControlToAction: +(actionTop - controlBottom).toFixed(1), gapActionToSheet: sheet ? +(sheet.t - actionBottom).toFixed(1) : null, strip, stripClipped: [...document.querySelectorAll('.form-record-smart .form-stat-content > *, .form-record-smart .form-stat-field > *')].some(e => e.scrollWidth > e.clientWidth + 1), overflow: document.documentElement.scrollWidth > innerWidth };
+  return { width: innerWidth, newLeft: nw && nw.l, actionLeft: act && act.l, sheetLeft: sheet && sheet.l, barRight: bar && bar.r, sheetRight: sheet && sheet.r, sheetTop: sheet && sheet.t, sheetBottom: sheet && sheet.b, workspace: R(q('.record-form-viewport')), actionTop, chatterButtonTop: kinds && kinds.t, rowHeights, gapControlToAction: +(actionTop - controlBottom).toFixed(1), gapActionToSheet: sheet ? +(sheet.t - actionBottom).toFixed(1) : null, strip, stripClipped: [...document.querySelectorAll('.form-record-smart .form-stat-content > *, .form-record-smart .form-stat-field > *')].some(e => e.scrollWidth > e.clientWidth + 1), overflow: document.documentElement.scrollWidth > innerWidth };
 })()`;
 // where the chatter column's content sits against the column, the sheet and the action row (every number is a getBoundingClientRect).
 const chatterColumnGeometry = `(() => {
@@ -132,8 +147,8 @@ const chatterColumnGeometry = `(() => {
   const kinds = all('.erp-mail-chatter-header .erp-mail-kind').map(R);
   return {
     width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth,
-    column: col, sheet, headerTop: header && header.t, headerBottom: header && header.b, actionTop: act ? Math.min(act.t, bar ? bar.t : act.t) : null,
-    buttons: btns, buttonHeights: [...new Set(btns.map(b => b.h))], buttonOverlap: sorted.some((b, i) => i && b.l < sorted[i - 1].r - 0.5),
+    column: col, sheet, workspace: R(q('.record-form-viewport')), headerTop: header && header.t, headerBottom: header && header.b, actionTop: act ? Math.min(act.t, bar ? bar.t : act.t) : null,
+    buttons: btns, buttonHeights: [...new Set(btns.map(b => b.h))], buttonOverlap: btns.some((b, i) => btns.slice(i + 1).some(o => b.l < o.r - 0.5 && o.l < b.r - 0.5 && b.t < o.b - 0.5 && o.t < b.b - 0.5)),
     firstButtonLeft: sorted[0] && sorted[0].l, lastButtonRight: sorted.length ? Math.max(...sorted.map(b => b.r)) : null,
     kindGap: kinds.length > 1 ? +(kinds[1].l - kinds[0].r).toFixed(1) : null,
     composer, avatar, input, avatarToInput: avatar && input ? +(input.l - avatar.r).toFixed(1) : null,
@@ -184,15 +199,14 @@ const chatterStateChecks = g => {
   return ok;
 };
 // The checks of the chatter column, as booleans (the Office Blue run records them, the default theme asserts them).
-const chatterColumnChecks = (g, width, theme = "default") => {
+const chatterColumnChecks = g => {
   const c = g.column, near = (a, b, d = 1) => a !== null && a !== undefined && b !== null && b !== undefined && Math.abs(a - b) <= d;
   return {
     noOverflow: g.overflow === false && g.horizontalScroll === false,
     buttonRowOneHeight: g.buttonHeights.length === 1 && g.buttonHeights[0] === 32,
     buttonsDoNotOverlap: g.buttonOverlap === false,
     buttonRowSpansColumn: near(g.firstButtonLeft, c.l) && near(g.lastButtonRight, c.r),
-    // The record form has one layout in every theme (the officeForm branch is gone): the button row shares the action row's top.
-    topEqualsSheetOrActionRow: width <= 1120 || near(g.headerTop, g.actionTop ?? g.sheet.t),
+    chatterFollowsDocumentActions: g.workspace.w >= 1056 ? near(g.headerTop, g.sheet.t) && c.l >= g.sheet.r && g.sheet.w >= 720 && c.w >= 320 : g.headerTop >= g.sheet.b - 1,
     composerAvatarOnLeftEdge: near(g.avatar && g.avatar.l, c.l) && g.avatarSizes.length === 1 && g.avatarSizes[0] === '36x36',
     composerInputFillsColumn: near(g.input && g.input.r, c.r) && near(g.avatarToInput, 8),
     threadSpansColumn: near(g.thread && g.thread.l, c.l) && near(g.thread && g.thread.r, c.r),
@@ -233,7 +247,7 @@ const assertFormActionGeometry = (fa, label = "default theme") => {
   assert.equal(fa.currentBg, fa.accentBg, `${label}: the current step is filled with the accent token: ${JSON.stringify(fa)}`);
   assert.ok(Math.abs(fa.trackRight - fa.headerRight) <= 1 || Math.abs(fa.trackRight - fa.right.chatter) <= 1, `${label}: the track ends on the header's right edge: ${JSON.stringify(fa)}`);
   assert.ok(Math.abs(fa.left.new - fa.left.sheet) <= 1 && Math.abs(fa.left.lend - fa.left.sheet) <= 1, `${label}: left edges of both rows sit on the sheet edge: ${JSON.stringify(fa)}`);
-  assert.ok(Math.abs(fa.right.switcher - fa.right.chatter) <= 1 && Math.abs(fa.right.statusbar - fa.right.sheet) <= 1, `${label}: the pager ends on the right column edge and the statusbar on the sheet's right edge: ${JSON.stringify(fa)}`);
+  assert.ok(Math.abs(fa.right.switcher - fa.right.chatter) <= 1 && Math.abs(fa.right.statusbar - fa.headerRight) <= 1, `${label}: the pager ends on the right column edge and the statusbar on the header's right edge: ${JSON.stringify(fa)}`);
   assert.equal(fa.archiveInHeader, false, `${label}: Archive is not a header button`);
   assert.ok(fa.breadcrumbLines && fa.breadcrumbLines.currentTop >= fa.breadcrumbLines.previousBottom - 1 && fa.breadcrumbLines.menuLeft >= fa.breadcrumbLines.currentRight - 1 && Math.abs(fa.breadcrumbLines.menuMid - fa.breadcrumbLines.currentMid) <= 2, `${label}: the breadcrumb is two lines (parent above, record below) with the menu beside the name: ${JSON.stringify(fa.breadcrumbLines)}`);
 };
@@ -250,13 +264,13 @@ const assertPhoneBarRow = async (evaluate, label, width) => {
 };
 // The same balance checks as booleans, so a theme that does not meet them yet can be recorded without failing the run.
 // Missing geometry fails explicitly, before arithmetic can coerce null into a valid coordinate.
-const formBalanceChecks = (g, width) => ({
+const formBalanceChecks = g => ({
   completeGeometry: [g.newLeft, g.actionLeft, g.sheetLeft, g.barRight, g.sheetRight, g.sheetTop, g.actionTop, g.chatterButtonTop, g.gapControlToAction, g.gapActionToSheet].every(Number.isFinite) && g.rowHeights.control.length === 3 && g.rowHeights.action.length >= 3 && [...g.rowHeights.control, ...g.rowHeights.action].every(h => Number.isFinite(h) && h > 0),
   leftEdgesShared: Math.abs(g.newLeft - g.actionLeft) <= 1 && Math.abs(g.actionLeft - g.sheetLeft) <= 1,
-  statusbarEndsOnSheetEdge: Math.abs(g.barRight - g.sheetRight) <= 1,
+  statusbarEndsOnWorkspaceEdge: Math.abs(g.barRight - g.workspace.r) <= 1,
   controlRowOneHeight: Math.max(...g.rowHeights.control) - Math.min(...g.rowHeights.control) <= 0.5,
   actionRowOneHeight: Math.max(...g.rowHeights.action) - Math.min(...g.rowHeights.action) <= 0.5,
-  chatterArrangement: width > 1120 ? Math.abs(g.actionTop - g.chatterButtonTop) <= 1 : g.chatterButtonTop > g.sheetTop,
+  chatterArrangement: g.workspace.r - g.workspace.l >= 1056 ? Math.abs(g.sheetTop - g.chatterButtonTop) <= 1 : g.chatterButtonTop >= g.sheetBottom - 1,
   unclippedStrip: !g.stripClipped,
   noOverflow: !g.overflow,
   rowGapsAlike: Math.abs(g.gapControlToAction - g.gapActionToSheet) <= 4,
@@ -460,6 +474,16 @@ const server = createServer(async (request, response) => {
       value = { wire_major: 1, scope: body.scope, revision: "2", values: [{ key: "theme_office_blue.appearance", value: officeChoice, source: "stored" }] };
     }
     else if (pathname.endsWith("/get_views") && body.views?.[0]?.[1] === "search") value = searchDescription;
+    else if (pathname === "/erp/json/2/ir.filters/erp_get_favorites") {
+      assert.equal(body.model, "acceptance_notes.note");
+      assert.ok([20, 25].includes(body.action_id));
+      value = [];
+    }
+    else if (pathname === "/erp/json/2/acceptance_notes.note/has_access") {
+      assert.deepEqual(body.ids, [41]);
+      assert.ok(["write", "unlink"].includes(body.operation));
+      value = false;
+    }
     else if (pathname === "/erp/json/2/acceptance_notes.note/fields_get") {
       // The list's group-by menu asks for four attributes; the pivot also asks which fields sum (`aggregator`).
       if (body.attributes.includes("currency_field")) { assert.deepEqual(body.attributes, ["string", "type", "groupable", "selection", "aggregator", "currency_field"]); value = {...groupableFields, print_run:pivotFieldList.print_run}; }
@@ -518,6 +542,7 @@ const server = createServer(async (request, response) => {
       const kept = kanbanRecords().filter(record => body.domain.every(([name, operator, text]) => name === "name" && operator === "ilike" && record.name.toLowerCase().includes(text.toLowerCase())));
       value = { length: kept.length, records: kept.slice(body.offset, body.offset + body.limit) };
     }
+    else if (pathname.endsWith("/erp_impex_rights")) value = { import: true, export: true };
     else if (pathname.endsWith("/web_search_read")) {
       if (readPause) await readPause;
       if (delayNextRead) { delayNextRead = false; await new Promise(resolve => setTimeout(resolve, 1800)); }
@@ -1053,6 +1078,7 @@ try {
     await evaluate('document.querySelector(".calendar-event.is-timed").click()');
     await wait('document.querySelector(".calendar-popover") !== null');
     assert.equal(await evaluate('document.querySelector(".calendar-popover h3").textContent'), "Planning review");
+    assert.equal(await evaluate('document.querySelector("dialog[open]") === null'), true, "the calendar fixture loads its record access without an error dialog");
     await shot(`${prefix}-calendar-popover-1440`, 1440, 900);
     await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
     await wait('document.querySelector(".calendar-popover") === null');
@@ -1135,9 +1161,18 @@ try {
     assert.equal(await evaluate('document.querySelector(".settings-app-tab").dataset.app'), "base");
     assert.equal(await evaluate('document.querySelector(".settings-app-name").textContent'), "Settings");
     assert.equal(await evaluate('Boolean(document.querySelector(".settings-app-tab .settings-app-icon [data-icon=settings]"))'), true);
-    for (const [width, height] of [[1440,900],[800,1024],[390,844]]) {
+    for (const [width, height] of [[1440,900],[1280,720],[800,1024],[768,1024],[390,844]]) {
       await shot(`settings-general-${width}`, width, height);
       assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `General settings fit ${width}`);
+      const navigation = await evaluate(`({
+        width: document.querySelector(".settings-sheet").clientWidth,
+        pickerVisible: document.querySelector(".settings-category-picker select").getClientRects().length > 0,
+        railVisible: document.querySelector(".settings-sidebar-list").getClientRects().length > 0,
+        category: document.querySelector(".settings-category-picker select").value
+      })`);
+      assert.equal(navigation.pickerVisible, navigation.width <= 768, `Category picker at ${width}`);
+      assert.equal(navigation.railVisible, !navigation.pickerVisible, `One category navigation at ${width}`);
+      assert.equal(navigation.category, "base");
       const links = await evaluate('([...document.querySelectorAll("[data-app-section=base] .settings-action-link")].map(node=>({type:node.type,label:node.textContent.trim(),height:node.getBoundingClientRect().height})))');
       assert.equal(links.length, 4); assert.ok(links.every(link => link.type === "button" && link.height >= (width < 700 ? 44 : 24)));
     }
@@ -1333,6 +1368,7 @@ try {
         await call("Emulation.setDeviceMetricsOverride", {width, height, deviceScaleFactor:1, mobile:!viewportOnly && width<700});
         await evaluate(scroll ? `document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})` : 'window.scrollTo(0,0)');
         await shot(`office-blue-${name}-${width}`, width, height, true);
+        if (name === "addons") await assertAddonCardActions(evaluate);
         visualCheck(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `${name} fits ${width}`);
       }
     };
@@ -1546,8 +1582,8 @@ try {
     for (const [width, height] of [[1536, 1024], [1440, 900], [800, 1024], [390, 844]]) {
       await shot(`office-blue-form-${width}`, width, height);
       assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `form fits ${width}: ` + await evaluate(`[...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1).slice(0, 6).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)).join(' | ')`));
-      const aside = await evaluate(`(() => { const side=document.querySelector('.record-form-aside').getBoundingClientRect(),sheet=document.querySelector('.record-form-viewport > .content-sheet').getBoundingClientRect(); return {side:side.toJSON(),sheet:sheet.toJSON()}; })()`);
-      assert.ok(width > 1120 ? aside.side.left >= aside.sheet.right : aside.side.top >= aside.sheet.bottom, `real record information rail has responsive placement ${width}`);
+      const aside = await evaluate(`(() => { const side=document.querySelector('.record-form-aside').getBoundingClientRect(),sheet=document.querySelector('.record-form-viewport > .content-sheet').getBoundingClientRect(); return {side:side.toJSON(),sheet:sheet.toJSON(),available:document.querySelector('.record-form-viewport').clientWidth}; })()`);
+      assert.ok(aside.available >= 1056 ? aside.side.left >= aside.sheet.right : aside.side.top >= aside.sheet.bottom, `real record information rail has responsive placement ${width}`);
       const smart = await evaluate(`(() => { const box=document.querySelector('.form-button-box').getBoundingClientRect(),sheet=document.querySelector('.form-sheet-layout').getBoundingClientRect(),button=document.querySelector('.form-stat-button');return {box:box.toJSON(),sheet:sheet.toJSON(),name:button.getAttribute('aria-label'),nested:button.querySelectorAll('input,select,textarea,button').length}; })()`);
       assert.ok(smart.box.bottom <= smart.sheet.top, `smart strip precedes the sheet ${width}: ${JSON.stringify(smart)}`);
       assert.equal(smart.name, "17 Lines"); assert.equal(smart.nested, 0, "smart statistic is not an editable nested control");
@@ -1599,6 +1635,18 @@ try {
         return { readonly:field.classList.contains('field-readonly'), value:field.querySelector('.field-read-value')?.textContent,
           label:field.querySelector('.field-read-value')?.getAttribute('aria-label'), editors:field.querySelectorAll('input,select,textarea,[contenteditable=true]').length };
       })()`), { readonly:true, value:"Readonly fixture reference", label:"Reference", editors:0 }, "readonly reference is labelled static text, never an editor");
+      if (width === 1440 || width === 390) {
+        await evaluate(`document.querySelector('input[name=owner_id]').closest('.many2one-control').querySelector('.many2one-clear-btn').click()`);
+        await wait(`document.querySelector('input[name=owner_id]').value === ""`);
+        await evaluate('document.activeElement.blur()');
+        const relation = await evaluate(`(() => {
+          const control = document.querySelector('input[name=owner_id]').closest('.many2one-control');
+          const more = control.querySelector('.relation-search-more').getBoundingClientRect();
+          const bounds = control.getBoundingClientRect();
+          return { left: more.left, right: more.right, fieldLeft: bounds.left, fieldRight: bounds.right };
+        })()`);
+        assert.ok(relation.left >= relation.fieldLeft - 1 && relation.right <= relation.fieldRight + 1, `an empty relation keeps Search more inside the field: ${JSON.stringify(relation)}`);
+      }
       const calendarControl = await evaluate(`(() => { const input=document.querySelector('input[name=scheduled_date]');
         const button=input.closest('.datetime-input-area').querySelector('.datetime-open');
         const calendar=button.querySelector('[data-icon=calendar]').getBoundingClientRect(), bounds=button.getBoundingClientRect();
@@ -1638,7 +1686,7 @@ try {
         await wait(`document.querySelectorAll('.record-form-chatter .erp-mail-message').length === 3`);
         const chatterColumn = await evaluate(chatterColumnGeometry);
         balances[width].chatterColumn = chatterColumn;
-        balances[width].chatterColumnFailing = Object.entries(chatterColumnChecks(chatterColumn, width, "office")).filter(([, ok]) => !ok).map(([name]) => name);
+        balances[width].chatterColumnFailing = Object.entries(chatterColumnChecks(chatterColumn)).filter(([, ok]) => !ok).map(([name]) => name);
         // Nothing is expected to fail in Office Blue: the same checks as the default theme, with the top compared to the sheet's top.
         assert.deepEqual(balances[width].chatterColumnFailing, [], `Office Blue's chatter column checks hold at ${width}: ${JSON.stringify(chatterColumn)}`);
         // One action area in both themes: the same probe and the same assertions as the default run.
@@ -1671,7 +1719,7 @@ try {
       }
       await writeFile(path.join(output, "form-balance-office-blue.json"), JSON.stringify({ ...balances, stacked: stackedColumns }, null, 1));
       for (const [width, geometry] of Object.entries(balances)) {
-        for (const [check, passed] of Object.entries(formBalanceChecks(geometry, Number(width)))) {
+        for (const [check, passed] of Object.entries(formBalanceChecks(geometry))) {
           assert.ok(passed, `Office Blue ${width}: ${check}: ${JSON.stringify(geometry)}`);
         }
       }
@@ -1737,7 +1785,7 @@ try {
     assert.equal(await evaluate('document.documentElement.hasAttribute("data-office-theme")'), false);
     officeInstalled = true; officeChoice = "office-blue"; missingOfficeCss = true;
     await call("Page.navigate", { url: base + "/erp" });
-    await wait('document.querySelector("#client-error-message")?.textContent.includes("Office Blue stylesheet could not be loaded")');
+    await wait('document.querySelector("#client-error-message")?.textContent === "The database appearance stylesheet could not be loaded. Reload the application."');
     assert.equal(await evaluate('document.documentElement.hasAttribute("data-office-theme")'), false);
     await shot("office-blue-missing-stylesheet", 1440, 900);
     }
@@ -1840,7 +1888,9 @@ try {
     const sb = sheet.getBoundingClientRect();
     const inner = { l: +(sb.left + px(sheet, 'borderLeftWidth') + px(sheet, 'paddingLeft')).toFixed(2), r: +(sb.right - px(sheet, 'borderRightWidth') - px(sheet, 'paddingRight')).toFixed(2) };
     const buttonBox = document.querySelector('.form-button-box');
-    const stats = buttonBox ? [...buttonBox.querySelectorAll('.form-stat-button')].map(b => ({ ...box(b), value: box(b.querySelector('.form-stat-value')), label: box(b.querySelector('.form-stat-label')), icon: !!b.querySelector(':scope > svg.erp-icon'), valueText: textLeft(b.querySelector('.form-stat-value')), labelText: textLeft(b.querySelector('.form-stat-label')) })) : [];
+    const stats = buttonBox ? [...buttonBox.querySelectorAll(':scope > .form-stat-button')].map(b => ({ ...box(b), value: box(b.querySelector('.form-stat-value')), label: box(b.querySelector('.form-stat-label')), icon: !!b.querySelector(':scope > svg.erp-icon'), valueText: textLeft(b.querySelector('.form-stat-value')), labelText: textLeft(b.querySelector('.form-stat-label')) })) : [];
+    const overflowStats = buttonBox?.querySelectorAll('.form-overflow-menu .form-stat-button').length ?? 0;
+    const moreStats = buttonBox?.querySelector(':scope > .form-overflow-toggle');
     const heading = document.querySelector('.form-title-block, .form-title-field, .acceptance-note-title');
     const titleInput = document.querySelector('.record-form input[name="name"]');
     const help = heading && heading.querySelector('small, .field-help');
@@ -1855,7 +1905,7 @@ try {
     const panel = document.querySelector('.form-tab-panel:not([hidden])');
     const panelField = panel && panel.querySelector('.field-label');
     const diag = [...document.querySelectorAll('.form-title-block, .form-title-block *, .form-title-field, .form-title-field *')].slice(0, 14).map(e => { const c = getComputedStyle(e); return { tag: e.tagName, cls: e.className, display: c.display, flex: c.flex, w: +e.getBoundingClientRect().width.toFixed(1), ta: c.textAlign, fw: c.fontWeight, ai: c.alignItems, fs: c.fontSize, pad: c.padding }; });
-    return { diag, sheet: box(sheet), inner, buttonBox: buttonBox ? box(buttonBox) : null, stats, title: heading ? box(heading) : null, titleInput: titleInput ? { ...box(titleInput), textLeft: +(titleInput.getBoundingClientRect().left + px(titleInput, 'borderLeftWidth') + px(titleInput, 'paddingLeft')).toFixed(2), fontSize: px(titleInput, 'fontSize') } : null, help: help ? { ...box(help), text: textLeft(help), align: getComputedStyle(help).textAlign } : null, groups, fields, tabs: tabs ? box(tabs.closest('.form-tabs-bar') ?? tabs) : null, panel: panel ? box(panel) : null, panelField: panelField ? box(panelField) : null };
+    return { diag, sheet: box(sheet), inner, buttonBox: buttonBox ? box(buttonBox) : null, stats, overflowStats, moreStats: moreStats ? box(moreStats) : null, title: heading ? box(heading) : null, titleInput: titleInput ? { ...box(titleInput), textLeft: +(titleInput.getBoundingClientRect().left + px(titleInput, 'borderLeftWidth') + px(titleInput, 'paddingLeft')).toFixed(2), fontSize: px(titleInput, 'fontSize') } : null, help: help ? { ...box(help), text: textLeft(help), align: getComputedStyle(help).textAlign } : null, groups, fields, tabs: tabs ? box(tabs.closest('.form-tabs-bar') ?? tabs) : null, panel: panel ? box(panel) : null, panelField: panelField ? box(panelField) : null };
   })()`;
   for (const [width,height] of [[1440,900],[800,900],[390,844]]) {
     await shot(`default-form-rail-${width}`,width,height);
@@ -1863,10 +1913,17 @@ try {
     {
       // measurable symmetry of the sheet. Tolerance is sub-pixel layout rounding only.
       const g=sheetGeometry, near=(x,y,what)=>assert.ok(Math.abs(x-y)<=0.6,`${what} at ${width}: ${x} vs ${y}`);
-      const tiles=g.stats; assert.ok(tiles.length>=3,`the fixture shows its smart buttons directly at ${width}`);
+      const tiles=g.stats;
+      assert.equal(tiles.length + g.overflowStats, 3, `each fixture smart button is reachable at ${width}`);
+      assert.ok(tiles.length >= (width <= 640 ? 1 : 3), `smart buttons fit directly on the strip at ${width}`);
+      if (g.overflowStats) {
+        assert.ok(g.moreStats && g.moreStats.w > 0, `overflow smart buttons are accessible through More at ${width}`);
+        near(g.moreStats.h, tiles[0].h, "More matches the direct buttons' height");
+        near(g.moreStats.l, tiles.at(-1).r, "More remains joined to the last direct button");
+      }
       // Smart buttons are one joined strip in the control row (never tiles in the sheet): one height, shared borders, an icon and two short lines each.
       assert.ok(g.buttonBox.b<=g.sheet.t,`the smart-button strip sits above the sheet at ${width}: ${JSON.stringify(g.buttonBox)}`);
-      for (const tile of tiles) { near(tile.h,tiles[0].h,"smart buttons share one height"); near(tile.t,tiles[0].t,"smart buttons share one top"); assert.ok((width<=640?tile.h>=44&&tile.h<=56:tile.h>=30&&tile.h<=34),`smart button height at ${width}: ${tile.h}`); assert.equal(tile.icon,true,"each smart button carries an icon"); assert.ok(tile.label.t>=tile.value.b-1,"value and label are two short lines"); }
+      for (const tile of tiles) { near(tile.h,tiles[0].h,"smart buttons share one height"); near(tile.t,tiles[0].t,"smart buttons share one top"); assert.ok((width<=640?tile.h>=44&&tile.h<=56:tile.h>=30&&tile.h<=34),`smart button height at ${width}: ${tile.h}`); assert.equal(tile.icon,true,"each smart button carries an icon"); assert.ok(tile.value.t>=tile.label.b-1,"the label sits above the count on two distinct lines"); }
       for (const [index,tile] of tiles.slice(1).entries()) assert.ok(tile.l-tiles[index].r<=1&&tile.l-tiles[index].r>=-1,`smart buttons are joined at ${width}`);
       assert.ok(g.title.t>=g.sheet.t,`the title opens the sheet at ${width}`);
       assert.ok(g.titleInput.l>=g.inner.l&&g.titleInput.l-g.inner.l<=48,`the title rule starts after the favourite star at ${width}: ${g.titleInput.l} vs ${g.inner.l}`); near(g.titleInput.r,g.inner.r,"title rule ends on the sheet edge");
@@ -1892,8 +1949,8 @@ try {
       assert.ok(g.fields.some(field=>field.readonly)&&g.fields.some(field=>!field.readonly),"the fixture covers read-only and editable values");
       near(g.tabs.l,g.inner.l,"notebook tabs start on the sheet edge"); near(g.tabs.r,g.inner.r,"notebook tabs end on the sheet edge"); near(g.panelField.l,g.inner.l,"tab content starts on the sheet edge");
     }
-    const layout=await evaluate(`(() => { const side=document.querySelector('.record-form-aside').getBoundingClientRect(), sheet=document.querySelector('.record-form-viewport > .content-sheet').getBoundingClientRect(); return {side:side.toJSON(),sheet:sheet.toJSON(),overflow:document.documentElement.scrollWidth>innerWidth}; })()`);
-    assert.ok(width>1120 ? layout.side.left>=layout.sheet.right : layout.side.top>=layout.sheet.bottom, `declared aside placement at ${width}`);
+    const layout=await evaluate(`(() => { const side=document.querySelector('.record-form-aside').getBoundingClientRect(), sheet=document.querySelector('.record-form-viewport > .content-sheet').getBoundingClientRect(); return {side:side.toJSON(),sheet:sheet.toJSON(),available:document.querySelector('.record-form-viewport').clientWidth,overflow:document.documentElement.scrollWidth>innerWidth}; })()`);
+    assert.ok(layout.available>=1056 ? layout.side.left>=layout.sheet.right : layout.side.top>=layout.sheet.bottom, `declared aside placement at ${width}`);
     assert.equal(layout.overflow,false,`form fits ${width}`);
     // leads the side column and the aside rail follows it, elsewhere it follows the sheet. It adds no overflow.
     const chatter=await evaluate(`(() => { const slot=document.querySelector('.record-form-viewport > .record-form-chatter'), sheet=document.querySelector('.record-form-viewport > .content-sheet').getBoundingClientRect(), side=document.querySelector('.record-form-aside').getBoundingClientRect(); if(!slot) return null; const r=slot.getBoundingClientRect(); return {rect:r.toJSON(),sheet:sheet.toJSON(),side:side.toJSON(),data:{...slot.firstElementChild.dataset},label:slot.getAttribute('aria-label'),count:document.querySelectorAll('.record-form-chatter').length}; })()`);
@@ -1902,8 +1959,8 @@ try {
     assert.equal(chatter.label,"Chatter");
     assert.deepEqual(chatter.data,{reloadOnPost:"true",reloadOnAttachment:"false",reloadOnActivity:"false",reloadOnFollower:"false",openAttachments:"false",hasActivities:"true"});
     assert.ok(chatter.rect.top>=chatter.side.bottom-1 || chatter.side.top>=chatter.rect.bottom-1,`chatter does not overlap the aside at ${width}`);
-    // Chatter panel layout (any theme): own column of 360-440px on wide viewports, under the sheet and never wider than it below.
-    if (width>1120) { assert.ok(chatter.rect.left>=chatter.sheet.right && chatter.side.top>=chatter.rect.bottom-1,`chatter leads the side column and the aside rail follows it at ${width}`); assert.ok(chatter.rect.width>=360 && chatter.rect.width<=440,`chatter column width at ${width}: ${chatter.rect.width}`); }
+    // Chatter panel layout (any theme): own column of 320-440px when there is room for the sheet, under the sheet and never wider than it below.
+    if (layout.available>=1056) { assert.ok(chatter.sheet.width>=720 && chatter.rect.left>=chatter.sheet.right && chatter.side.top>=chatter.rect.bottom-1,`chatter leads the side column and the aside rail follows it at ${width}`); assert.ok(chatter.rect.width>=320 && chatter.rect.width<=440,`chatter column width at ${width}: ${chatter.rect.width}`); }
     else { assert.ok(chatter.rect.top>=chatter.sheet.bottom-1,`chatter follows the sheet at ${width}`); assert.ok(chatter.rect.width<=chatter.sheet.width+1,`chatter is never wider than the sheet at ${width}`); }
     await wait('document.querySelectorAll(".record-form-chatter .erp-mail-message").length === 3 && document.querySelectorAll(".record-form-chatter .erp-mail-activity").length === 2');
     assert.equal(await evaluate('document.querySelectorAll(".record-form-chatter .erp-mail-message.is-note").length'),1,`the internal-subtype comment is styled as a note at ${width}`);
@@ -1974,12 +2031,11 @@ try {
     const g = balances[width] = await evaluate(formBalanceGeometry), note = `${width}: ${JSON.stringify(g)}`;
     assert.equal(g.overflow, false, `the header band does not overflow at ${note}`);
     assert.ok(Math.abs(g.newLeft - g.actionLeft) <= 1 && Math.abs(g.actionLeft - g.sheetLeft) <= 1, `New, the first action button and the sheet share one left edge at ${note}`);
-    assert.ok(Math.abs(g.barRight - g.sheetRight) <= 1, `the statusbar ends on the sheet's right edge at ${note}`);
+    assert.ok(Math.abs(g.barRight - g.workspace.r) <= 1, `the statusbar ends on the action row's right edge at ${note}`);
     for (const group of ["control", "action"]) assert.ok(Math.max(...g.rowHeights[group]) - Math.min(...g.rowHeights[group]) <= 0.5, `every control of the ${group} row has one height at ${note}`);
-    if (width > 1120) assert.ok(Math.abs(g.actionTop - g.chatterButtonTop) <= 1, `the action row and the chatter's button row share a top at ${note}`);
     assert.equal(g.stripClipped, false, `no smart button is truncated (the rest are in More) at ${note}`);
     assert.ok(Math.abs(g.gapControlToAction - g.gapActionToSheet) <= 4, `the gaps between the three rows are alike at ${note}`);
-    for (const [name, ok] of Object.entries(formBalanceChecks(g, width))) assert.ok(ok, `balance check ${name} holds at ${note}`);
+    for (const [name, ok] of Object.entries(formBalanceChecks(g))) assert.ok(ok, `balance check ${name} holds at ${note}`);
   }
   await writeFile(path.join(output, "form-balance-default.json"), JSON.stringify(balances, null, 1));
   {
@@ -1988,8 +2044,11 @@ try {
     for (const [width, height] of [[1440, 900], [1280, 900], [1024, 900], [800, 900], [390, 844]]) {
       await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width < 500 });
       await wait(`document.querySelectorAll('.record-form-chatter .erp-mail-message').length === 3`);
+      // The existing thread survives a resize. Read the painted layout after the container query
+      // and ResizeObserver have both received the new viewport.
+      await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       const g = columns[width] = await evaluate(chatterColumnGeometry), note = `${width}: ${JSON.stringify(g)}`;
-      for (const [name, ok] of Object.entries(chatterColumnChecks(g, width))) assert.ok(ok, `chatter column check ${name} holds at ${note}`);
+      for (const [name, ok] of Object.entries(chatterColumnChecks(g))) assert.ok(ok, `chatter column check ${name} holds at ${note}`);
       // The error line, drawn as the chatter draws it, sits between the composer and the thread and has the column's width.
       await evaluate(`(() => { const a = document.createElement('div'); a.className = 'erp-mail-thread-error erp-mail-chatter-error'; a.dataset.probe = '1'; a.textContent = 'Unable to connect'; document.querySelector('.erp-mail-chatter-status').append(a); })()`);
       const err = await evaluate(`(() => { const e = document.querySelector('[data-probe]'), c = document.querySelector('.record-form-chatter').getBoundingClientRect(), k = document.querySelector('.erp-chatter-composer').getBoundingClientRect(), t = document.querySelector('.erp-mail-chatter .erp-mail-thread').getBoundingClientRect(), act = document.querySelector('.erp-mail-chatter-activities'), r = e.getBoundingClientRect(); const after = act && !act.hidden ? act.getBoundingClientRect().top - r.bottom : null; e.remove(); return { l: r.left - c.left, r: c.right - r.right, belowComposer: r.top >= k.bottom - 0.5, aboveThread: r.bottom <= t.top + 0.5, activitiesPresent: after !== null, gapToActivities: after === null ? null : +after.toFixed(1) }; })()`);
@@ -2347,6 +2406,7 @@ try {
   await wait('document.querySelector(".addon-tile") !== null');
   for (const [width,height] of [[1440,900],[768,1024],[375,812]]) {
     await shot(`fixture-addons-${width}`,width,height);
+    await assertAddonCardActions(evaluate);
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `addons fit ${width}px`);
   }
   await evaluate('document.querySelector(".addon-tile").click()');
@@ -2354,7 +2414,11 @@ try {
   for (const [width,height] of [[1440,900],[1280,800],[768,1024],[390,1400]]) {
     await shot(`fixture-addon-detail-${width}`,width,height);
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `addon detail fits ${width}px`);
-    assert.equal(await evaluate('document.querySelector(".addon-detail").textContent.includes("a later release")'), false, "no task id on the addon detail page");
+    const refusal = await evaluate(`(() => {
+      const uninstall = document.querySelector('.addon-detail .addon-uninstall');
+      return { disabled: uninstall.disabled, reason: document.getElementById(uninstall.getAttribute('aria-describedby'))?.textContent };
+    })()`);
+    assert.deepEqual(refusal, { disabled: true, reason: "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release" }, "unavailable uninstall shows its declared reason");
   }
   await evaluate('document.querySelector(".addon-detail-back").click()');
   await wait('document.querySelector(".addon-tile") !== null');
@@ -2393,5 +2457,8 @@ try {
     finally { clearTimeout(timer); }
     if (chrome.exitCode === null && chrome.signalCode === null) { chrome.kill("SIGKILL"); await exited; }
   }
+  // macOS Crashpad can inherit the browser's stderr after Chrome exits. The fixture has
+  // finished consuming that stream and can release its own end without waiting for the helper.
+  chrome?.stderr.destroy();
   await new Promise(resolve => server.close(resolve)); await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

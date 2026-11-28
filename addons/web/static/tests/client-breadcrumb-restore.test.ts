@@ -312,6 +312,17 @@ async function relatedList(): Promise<string> {
   return new URLSearchParams(location.search).get("method_action")!;
 }
 
+test("a related list retains selection and Actions when a refused breadcrumb is removed", async () => {
+  await relatedList();
+  root.querySelector<HTMLInputElement>(".list-row-select")!.click();
+  const actions = root.querySelector<HTMLButtonElement>(".list-data-toggle-btn");
+  refused.add(5);
+  back();
+  await vi.waitFor(() => expect(trail()).toEqual(["Notes", "Note companies"]));
+  expect(root.querySelector(".list-data-toggle-btn")).toBe(actions);
+  expect(root.querySelector(".selection-count")?.textContent).toBe("1 selected");
+});
+
 test("a related list a button opened comes back after a reload, admitted again by the server", async () => {
   const related = await relatedList();
   calls.length = 0;

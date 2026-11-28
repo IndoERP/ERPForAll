@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { createFocusTrap, createHotkeyController } from "@erpforall/elang";
-import { button, el } from "./dom.js";
+import { button, dialogCloseButton, el } from "./dom.js";
 import { ClientError } from "./transport.js";
 
 export type DialogCallback = () => void | boolean | Promise<void | boolean>;
@@ -68,7 +68,7 @@ export class DialogService {
     const header = el("header", undefined, "message-dialog-header");
     const heading = el("h2", options.title ?? "Details"); heading.id = `message-dialog-heading-${++nextHeading}`;
     dialog.setAttribute("aria-labelledby", heading.id);
-    const close = button("×", () => dismiss(), "message-dialog-close"); close.setAttribute("aria-label", "Close");
+    const close = dialogCloseButton(() => dismiss());
     header.append(heading, close);
     const body = el("div", undefined, "message-dialog-body"); body.tabIndex = 0; body.append(options.body);
     if (options.header !== false) dialog.append(header);
@@ -118,7 +118,7 @@ export class DialogService {
       if (dialog.open) dialog.close();
       dialog.remove(); trap?.dispose(); this.publishActive();
       // Focus returns to the opener (the native dialog does it too; this covers a removed-before-closed shell).
-      if (!this.active() && opener?.isConnected) opener.focus();
+      if (opener?.isConnected && (!active || active.contains(opener))) opener.focus();
       document.body.classList.toggle("message-modal-open", document.querySelector("dialog[data-message-dialog]") !== null);
       try { options.onClose?.(); } catch (error) { this.report(error); }
     };

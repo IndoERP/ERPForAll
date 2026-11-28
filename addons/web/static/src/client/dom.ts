@@ -25,6 +25,13 @@ export function button(label: string, action: () => void, className?: string): H
   const node = el("button", label, className);
   node.type = "button"; node.addEventListener("click", action); return node;
 }
+export function dialogCloseButton(action: () => void, className = "message-dialog-close"): HTMLButtonElement {
+  const node = button("", action, className);
+  node.title = t("Close");
+  node.setAttribute("aria-label", node.title);
+  node.append(icon("x"));
+  return node;
+}
 export function actionButton(label: ActionLabel, action: () => void, className?: string): HTMLButtonElement {
   const node = button(actionTexts[label](), action, className);
   node.classList.add("has-action-icon");

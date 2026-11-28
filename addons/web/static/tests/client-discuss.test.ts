@@ -99,7 +99,10 @@ test("two tabs receive only wakes, reconcile duplicate deliveries, reconnect and
       policy: { company: 1, csrf: "test", retry: [1, 4] },
     });
     document.body.append(handle.node);
-    find(handle.node, "Discuss").click();
+    const trigger = find(handle.node, "Discuss");
+    expect(trigger.querySelector("svg[aria-hidden=true]")?.getAttribute("data-icon")).toBe("messages-square");
+    expect(trigger.getAttribute("aria-label")).toBe("Discuss");
+    trigger.click();
     return { ...handle, store };
   }
   const first = tab(),

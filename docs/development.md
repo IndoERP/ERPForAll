@@ -508,7 +508,8 @@ a refusal on those fields, with the server's message, instead of an error dialog
 no shown field gets a dialog with its message only, without the Error ID and technical details (kept when the server
 granted debug details).
 
-A list's control row has an Import / Export menu beside New. When first opened it asks the model's
+A list's **Actions** menu sits beside the list title. **Wrap cell text** expands long headings and values while
+preserving column widths. Open this menu for **Import records** or **Export**. On first opening it asks the model's
 `erp_impex_rights` (`{export, import}`): export needs the read right and the export right `export_data` checks (a member
 of `base.group_allow_export` (Export Records, defined by base) or `base.group_erp_manager`), import needs the create and write rights. Import is also
 offered only when the list allows creating and editing. The export dialog starts with the visible columns in list order.

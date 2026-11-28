@@ -23,6 +23,8 @@ test("addon confirmation owns the install operation and prevents refresh or dupl
   expect(controller.busy()).toBe(true);
   expect(document.querySelectorAll("dialog")).toHaveLength(1);
   expect(install.disabled).toBe(true); expect(refresh.disabled).toBe(true); expect(reads).toBe(1);
+  const pickers = [...host.querySelectorAll<HTMLSelectElement>(".addons-category-pickers select")];
+  expect(pickers.map(picker => picker.disabled)).toEqual([true, true]);
   [...document.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")].find(button => button.textContent === "Install")!.click();
   await vi.waitFor(() => expect(writes).toBe(1));
   refresh.click(); expect(reads).toBe(1); expect(controller.busy()).toBe(true);
@@ -32,6 +34,7 @@ test("addon confirmation owns the install operation and prevents refresh or dupl
   nextInstall.click(); [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(item => item.textContent === "Cancel")!.click();
   await Promise.all(jobs); expect(controller.busy()).toBe(false); expect(writes).toBe(1);
   expect([...host.querySelectorAll("button")].every(item => !item.disabled)).toBe(true);
+  expect(pickers.map(picker => picker.disabled)).toEqual([false, false]);
 });
 
 test("addons screen renders app-tile grid with name, summary, state badge, and Install/Uninstall buttons", async () => {
@@ -59,7 +62,8 @@ test("addons screen renders app-tile grid with name, summary, state badge, and I
   expect(baseTile.querySelector(".addon-icon")?.getAttribute("data-letter")).toBe("B");
   expect(baseTile.querySelector(".addon-name")?.textContent).toBe("Base");
   expect(baseTile.querySelector(".addon-technical-name")?.textContent).toBe("base");
-  expect(baseTile.querySelector(".addon-badge-installed")?.textContent).toBe("Installed");
+  expect(baseTile.querySelector(":scope > .addon-badge-installed")?.textContent).toBe("Installed");
+  expect([...baseTile.querySelectorAll(".addon-actions button")].map(button => button.textContent)).toEqual(["Module info", "Upgrade", "Uninstall"]);
   expect(baseTile.querySelector(".addon-summary")?.textContent).toBe("Core framework and base models");
   expect(baseTile.querySelector(".addon-uninstall")?.textContent).toBe("Uninstall");
   expect(baseTile.querySelector(".addon-install")).toBeNull();
@@ -611,6 +615,23 @@ test("search panel: Apps filter on by default, Official/Industries sections and 
   expect(tiles(host)).toEqual(["bakery"]);
   expect(host.querySelector(".addons-results .addon-category")?.textContent).toBe("Industries / Food / Bakery");
   expect([...host.querySelectorAll(".addons-panel-item")].map(item => item.firstChild?.textContent)).toEqual(["Official Apps", "Industries", "All", "Food"]);
+});
+
+test("compact catalog selectors and the category rail share the same section and nested path", async () => {
+  const host = document.createElement("div");
+  await addonsView(host, panelCatalog(), job => { void job(); }, () => {}, {});
+  const [section, category] = host.querySelectorAll<HTMLSelectElement>(".addons-category-pickers select");
+  category!.value = "Sales/CRM";
+  category!.dispatchEvent(new Event("change"));
+  expect(tiles(host)).toEqual(["crm"]);
+  expect(panelButton(host, "CRM").getAttribute("aria-pressed")).toBe("true");
+  section!.value = "industries";
+  section!.dispatchEvent(new Event("change"));
+  expect(category!.value).toBe("");
+  expect(tiles(host)).toEqual(["bakery"]);
+  panelButton(host, "Official Apps").click();
+  expect(section!.value).toBe("official");
+  expect([...category!.options].map(option => option.text)).toContain("Sales / CRM");
 });
 
 test("filters combine OR within a group and AND across groups; search matches label, name and summary", async () => {

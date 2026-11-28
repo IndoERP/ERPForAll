@@ -22,7 +22,7 @@ interface Options {
 export interface DiscussControl {
   node: HTMLElement;
   notifications: DiscussNotifications;
-  openWorkspace(host: HTMLElement): () => void;
+  openWorkspace(host: HTMLElement, title?: string): () => void;
   dispose(): void;
 }
 interface Entry {
@@ -85,7 +85,8 @@ export function renderDiscuss(options: Options): DiscussControl {
   const newMessage = iconButton("New message", "plus", () => pick(null));
   const expand = iconButton("Open workspace", "external-link", () => options.openWorkspace?.());
   const close = iconButton("Close", "x", closeQuick);
-  top.append(el("h2", "Discuss"), newMessage);
+  const quickTitle = el("h2", "Discuss"), pageTitle = el("h1");
+  top.append(quickTitle, newMessage);
   if (options.openWorkspace) top.append(expand);
   top.append(close);
   const search = el("input");
@@ -123,11 +124,13 @@ export function renderDiscuss(options: Options): DiscussControl {
   side.append(top, searchRow, nav, list, pages);
   panel.append(side, thread, status);
   const dock = el("div", undefined, "discuss-dock");
-  const trigger = button("Discuss", () => {
+  const trigger = iconButton("Discuss", "messages-square", () => {
     if (workspace) { search.focus(); return; }
     if (panel.hidden) show(); else closeQuick();
   });
-  trigger.setAttribute("aria-expanded", "false"); trigger.setAttribute("aria-label", "Discuss");
+  trigger.classList.add("discuss-trigger");
+  trigger.append(el("span", "Discuss"));
+  trigger.setAttribute("aria-expanded", "false");
   node.append(trigger, panel, dock);
   const visited = new Set<number>();
   const windows = new Map<number, { element: HTMLElement; chatter: Chatter; latest: number | null }>();
@@ -460,10 +463,14 @@ export function renderDiscuss(options: Options): DiscussControl {
         };
       },
     },
-    openWorkspace(host) {
+    openWorkspace(host, title = "Discuss") {
+      pageTitle.textContent = title;
+      quickTitle.remove(); top.prepend(pageTitle);
+      trigger.hidden = true;
       workspace = host; host.append(panel); panel.classList.add("discuss-workspace"); expand.hidden = true; close.hidden = true; show();
       return () => {
         if (workspace !== host || dead) return;
+        pageTitle.replaceWith(quickTitle); trigger.hidden = false;
         workspace = null; panel.classList.remove("discuss-workspace"); expand.hidden = false; close.hidden = false;
         node.insertBefore(panel, dock); closeQuick();
       };

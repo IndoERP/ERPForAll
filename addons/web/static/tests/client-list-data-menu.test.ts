@@ -43,7 +43,7 @@ const fields = [
 
 function menu(rpc: RpcClient, extra: Partial<ListDataMenuOptions> = {}): { node: HTMLElement; dispose(): void; options: ListDataMenuOptions } {
   const options: ListDataMenuOptions = {
-    rpc, model: "test.note", context: { lang: "en_US" }, csrf: "test-token", dialogs, canImport: true,
+    rpc, model: "test.note", context: { lang: "en_US" }, csrf: "test-token", dialogs, canImport: true, wrapRows: { active: false, change: vi.fn() },
     visibleFields: () => [], selectedIds: () => [5], filteredIds: vi.fn(async () => [5, 6]),
     imported: vi.fn(async () => {}), notice: vi.fn(), report: vi.fn(), ...extra,
   };
@@ -53,7 +53,7 @@ function menu(rpc: RpcClient, extra: Partial<ListDataMenuOptions> = {}): { node:
 }
 
 const open = (node: HTMLElement): void => node.querySelector<HTMLButtonElement>(".list-data-toggle-btn")!.click();
-const entries = (node: HTMLElement): string[] => [...node.querySelectorAll(".list-data-menu button")].map(item => item.textContent ?? "");
+const entries = (node: HTMLElement): string[] => [...node.querySelectorAll(".list-file-action")].map(item => item.textContent ?? "");
 
 test("import guesses unique labels and technical names, reserving exact names first", () => {
   const repeatedLabels = [...fields, { name: "customer_reference", label: "Customer", required: false }];
@@ -84,7 +84,7 @@ test.each<[{ export: boolean; import: boolean }, boolean, string[]]>([
   [{ export: true, import: false }, true, ["Export"]],
   [{ export: false, import: true }, true, ["Import records"]],
   [{ export: true, import: true }, false, ["Export"]],
-  [{ export: false, import: false }, true, ["You may not import or export these records."]],
+  [{ export: false, import: false }, true, []],
 ])("rights %j with a list that %s allows importing offer %j", async (rights, canImport, expected) => {
   const { rpc } = fakeRpc(() => rights);
   const { node } = menu(rpc, { canImport });
@@ -98,8 +98,9 @@ test("a failed rights read is reported and read again at the next opening", asyn
   const { node, options } = menu(rpc);
   open(node);
   await vi.waitFor(() => expect(options.report).toHaveBeenCalledTimes(1));
+  expect(node.querySelector(".list-data-toggle-btn")?.getAttribute("aria-expanded")).toBe("true");
   fail = false;
-  open(node);
+  open(node); open(node);
   await vi.waitFor(() => expect(entries(node)).toEqual(["Export"]));
   expect(calls).toHaveLength(2);
 });

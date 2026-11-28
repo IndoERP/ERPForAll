@@ -1,7 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { passwordResetRows } from "./password-editor.js";
 import { t } from "./translate.js";
-import { actionButton, button, el } from "./dom.js";
+import { actionButton, button, dialogCloseButton, el } from "./dom.js";
 import { renderFormLayout } from "./form-layout.js";
 import { icon } from "./icons.js";
 import { array, integer, object, type Description, type Field, type Node, type Subview, type View } from "./metadata.js";
@@ -445,7 +445,7 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
   const actions = el("div", undefined, "actions");
   // The shared dialog anatomy (dialog-service.ts): header with the title and a close button, body, footer.
   const header = el("header", undefined, "message-dialog-header");
-  const headerClose = button("×", () => close(), "message-dialog-close"); headerClose.setAttribute("aria-label", "Close");
+  const headerClose = dialogCloseButton(() => close());
   header.append(heading, headerClose);
   const bodyWrap = el("div", undefined, "message-dialog-body"); bodyWrap.append(body);
   const footer = el("footer", undefined, "message-dialog-footer"); footer.append(actions);
