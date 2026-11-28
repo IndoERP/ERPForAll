@@ -1559,7 +1559,7 @@ export class HumanApp {
   /** Checks an action and its views as one answer, then shares the views with plain view requests of the same views. */
   private admitBundle(bundle: Record<string, unknown>, id: number, generation: object): Record<string, unknown> {
     const action = object(bundle["action"]);
-    if (action["wire_major"] !== 1 || action["target"] !== "current" || action["id"] !== id) {
+    if (action["wire_major"] !== 1 || (action["target"] !== "current" && action["target"] !== "new") || action["id"] !== id) {
       throw new ClientError("unsupported", "Unsupported or mismatched window action.");
     }
     const model = text(action["model"], "action model"), views = actionViews(action);
@@ -1597,6 +1597,7 @@ export class HumanApp {
     }
     const action = integer(object(found["action"])["id"], "related action"), menu = integer(found["menu"], "related menu");
     const bundle = this.admitBundle({ action: found["action"], views: found["views"] }, action, generation);
+    if (object(bundle["action"])["target"] !== "current") throw new ClientError("unsupported", "Unsupported or mismatched window action.");
     if (object(bundle["action"])["model"] !== model) throw new ClientError("validation", "The related action opens another model.");
     this.metadata.seed(this.bundleKey(action), bundle, generation);
     if (found["any_record"]) this.metadata.seed(modelKey, { action, menu }, generation);
@@ -2375,6 +2376,7 @@ export class HumanApp {
     // commit puts it back for the page that stays.
     const previousGeneration = this.generation, previousList = this.listContext, previousTrail = [...this.breadcrumbs.items];
     let committed = false;
+    let pendingDialog: Extract<ActionResult, { kind: "window" }> | undefined;
     if (options?.target === "main" || !route.action) {
       this.breadcrumbs.clear();
     }
@@ -2457,7 +2459,39 @@ export class HumanApp {
         const action: Record<string, unknown> = entry
           ? { ...entry.result, wire_major: 1, target: "current", id: rpcId(route.action) }
           : persistedWindow ?? await loadWindow(actionId);
-        if (action["wire_major"] !== 1 || action["target"] !== "current" || action["id"] !== rpcId(route.action)) {
+        if (action["wire_major"] !== 1 || action["id"] !== rpcId(route.action)) {
+          throw new ClientError("unsupported", "Unsupported or mismatched window action.");
+        }
+        if (action["target"] === "new") {
+          if (entry || route.id || route.method_action) {
+            throw new ClientError("unsupported", "Unsupported or mismatched window action.");
+          }
+          const actionDefaults = this.actionContext(action);
+          const { context: dialogContext } = splitSearchDefaults({ ...this.context, ...actionDefaults });
+          if (this.actionDomain(action, dialogContext).length) {
+            throw new ClientError("unsupported", "A dialog action cannot carry a domain.");
+          }
+          const model = text(action["model"], "action model");
+          const normalized = actionResult(await this.rpc.call(model, "erp_normalize_action_result", {
+            wire_major: 1,
+            result: {
+              type: "ir.actions.act_window",
+              name: text(action["name"], "action name"),
+              res_model: model,
+              target: "new",
+              views: actionViews(action),
+              context: actionDefaults,
+            },
+            context: this.context,
+          }));
+          if (generation !== this.generation || this.expired) return;
+          if (normalized.kind !== "window") {
+            throw new ClientError("unsupported", "Unsupported or mismatched window action.");
+          }
+          pendingDialog = normalized;
+          return;
+        }
+        if (action["target"] !== "current") {
           throw new ClientError("unsupported", "Unsupported or mismatched window action.");
         }
         // `search_default_<name>` keys only choose the search the view opens with; they never travel with its requests.
@@ -2650,6 +2684,22 @@ export class HumanApp {
       this.busy = false;
       if (this.navigationInFlight === inFlight) this.navigationInFlight = undefined;
       settle();
+    }
+    if (pendingDialog && !this.expired && this.generation === previousGeneration) {
+      const origin = { ...this.current };
+      await this.openWindowDialog(
+        pendingDialog,
+        undefined,
+        previousGeneration,
+        async () => {
+          if (origin.action) {
+            this.captureClientState();
+            await this.navigate(origin, true, true);
+          }
+        },
+        undefined,
+        this.context,
+      );
     }
   }
 

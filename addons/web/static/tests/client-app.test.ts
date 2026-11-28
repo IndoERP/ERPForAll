@@ -4081,3 +4081,48 @@ test("a list-only action has no open cell, no New button and no row navigation",
   expect(window.location.search).toBe("");
   expect(root.querySelector(".notification-danger, .client-notification[data-level=danger]")).toBeNull();
 });
+
+test("a sidebar menu pointing to a target=new window action opens its wizard dialog without leaving the current page", async () => {
+  history.replaceState(null, "", "/erp/action-20?menu=11");
+  const wizardDescription = {
+    ...description,
+    model: "test.wizard",
+    views: description.views.filter(view => view.type === "form"),
+  };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    const value = path.endsWith("get_res_users_settings") ? { homemenu_config: null }
+      : path.endsWith("erp_load_web_menus") ? {
+          wire_major: 1, registry_version: "r1", roots: [10],
+          nodes: [
+            { module: null, id: 10, parent_id: null, label: "CRM", action_id: null, children: [11, 12], icon: null },
+            { module: null, id: 11, parent_id: 10, label: "Leads", action_id: 20, children: [], icon: null },
+            { module: null, id: 12, parent_id: 10, label: "Submit Lead", action_id: 25, children: [], icon: null },
+          ],
+        }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views"))
+        ? (Array.isArray(body["ids"]) && body["ids"][0] === 25
+            ? actionMetadata(path, { wire_major: 1, id: 25, name: "Submit Lead", model: "test.wizard", target: "new", views: [{ id: 1, type: "form" }], domain: null, context: null }, wizardDescription)
+            : actionMetadata(path, { wire_major: 1, id: 20, name: "Leads", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null }, description))
+      : path.endsWith("get_views") ? wizardDescription
+      : path.endsWith("erp_normalize_action_result")
+        ? { wire_major: 1, result: { kind: "window", name: "Submit Lead", model: "test.wizard", res_id: null, views: [{ id: 1, type: "form" }], context: {} } }
+      : path.endsWith("default_get") ? { name: "" }
+      : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Existing Lead" }] }
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector("table[aria-label=Records] tbody tr")).not.toBeNull());
+  const submitItem = [...root.querySelectorAll<HTMLElement>("button, a")].find(node => node.textContent?.trim() === "Submit Lead");
+  expect(submitItem).toBeDefined();
+  submitItem!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Submit Lead");
+  expect(window.location.pathname).toBe("/erp/action-20");
+  expect(root.querySelector("table[aria-label=Records] tbody tr")?.textContent).toContain("Existing Lead");
+  expect(root.querySelector(".notification-danger, .client-notification[data-level=danger]")).toBeNull();
+  await new Promise(resolve => setTimeout(resolve, 20));
+});
