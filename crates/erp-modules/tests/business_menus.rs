@@ -75,11 +75,6 @@ fn shipped_business_apps_have_operational_homes_and_active_menus_have_icons() {
                                         }
                                     }
                                 }
-                                ("action", FieldValue::Eval { expr, .. })
-                                    if expr.as_str() == "False" =>
-                                {
-                                    menu.action = None
-                                }
                                 (
                                     name @ ("action" | "active" | "parent_id" | "web_icon"
                                     | "sequence"),
