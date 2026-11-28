@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 use super::*;
-use erp_addon_ai_base::conversation::{begin, finish, transcript};
+use erp_addon_ai_base::conversation::{begin, finish, previous_read, transcript};
 use erp_fields::Uuid;
 
 #[test]
@@ -16,9 +16,10 @@ fn saved_transcripts_bind_owner_request_and_source_visibility() {
         let id = begin(&mut tx, None, first, "Help me set up purchasing")
             .await
             .unwrap();
-        finish(&mut tx, id, first, "Start with suppliers", 1, 0)
+        finish(&mut tx, id, first, "Start with suppliers", 1, 0, None)
             .await
             .unwrap();
+        assert_eq!(previous_read(&mut tx, id).await.unwrap(), None);
         tx.commit().await.unwrap();
 
         let mut tx = retail.orm.begin(owner).await.unwrap();
@@ -32,9 +33,19 @@ fn saved_transcripts_bind_owner_request_and_source_visibility() {
                 .unwrap(),
             id
         );
-        finish(&mut tx, id, next, "Sensitive business figures", 2, 1)
-            .await
-            .unwrap();
+        let query = serde_json::json!({"model": "purchase.order", "fields": ["amount_total"]});
+        finish(
+            &mut tx,
+            id,
+            next,
+            "Sensitive business figures",
+            2,
+            1,
+            Some(&query),
+        )
+        .await
+        .unwrap();
+        assert_eq!(previous_read(&mut tx, id).await.unwrap(), Some(query));
         let rows = transcript(&mut tx, id, true).await.unwrap();
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[1]["text"], "Start with suppliers");
@@ -42,6 +53,7 @@ fn saved_transcripts_bind_owner_request_and_source_visibility() {
         tx.commit().await.unwrap();
 
         let mut tx = retail.orm.begin(other).await.unwrap();
+        assert!(previous_read(&mut tx, id).await.is_err());
         assert!(transcript(&mut tx, id, true).await.is_err());
         tx.rollback().await.unwrap();
         let mut tx = retail.orm.begin(owner).await.unwrap();
