@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { expect, test } from "vitest";
-import { attachmentLimitHint, attachmentPolicy, checkAttachmentFile, checkAttachmentRequest, initializeAttachmentPolicy } from "../src/client/attachment-policy.js";
+import { attachmentLimitHint, attachmentPolicy, attachmentUploadCsrf, checkAttachmentFile, checkAttachmentRequest, initializeAttachmentPolicy } from "../src/client/attachment-policy.js";
 import { RpcClient } from "../src/client/transport.js";
 
 /// (partial: live policy increases/decreases override stale bootstrap preflight)
@@ -48,4 +48,28 @@ test("the limit hint states the limit in user words", () => {
   expect(attachmentLimitHint(rpc)).toBeUndefined();
   initializeAttachmentPolicy(rpc, { max_file_bytes: 2048, inline_max_bytes: 2048 });
   expect(attachmentLimitHint(rpc)).toBe("Each file can be up to 2 KiB.");
+});
+
+test("streaming HTTP upload mode enforces max_file_bytes rather than inline_max_bytes", async () => {
+  const rpc = new RpcClient(async () => new Response(JSON.stringify({ max_file_bytes: 134217728, inline_max_bytes: 2048 }), { headers: { "Content-Type": "application/json" } }), () => {});
+  expect(attachmentUploadCsrf(rpc)).toBeUndefined();
+  // Without a CSRF token, inline_max_bytes still bounds uploads even when max_file_bytes is larger.
+  initializeAttachmentPolicy(rpc, { max_file_bytes: 134217728, inline_max_bytes: 2048 });
+  expect(attachmentLimitHint(rpc)).toBe("Each file can be up to 2 KiB.");
+  const photo = new File([new Uint8Array(16 * 1024)], "IMG_8068.JPG", { type: "image/jpeg" });
+  await expect(checkAttachmentFile(rpc, photo)).rejects.toMatchObject({ kind: "validation", message: '"IMG_8068.JPG" exceeds the current browser upload limit of 2 KiB.' });
+
+  // Invalid CSRF tokens fail explicitly.
+  for (const badCsrf of ["", 123, {}]) {
+    expect(() => initializeAttachmentPolicy(rpc, undefined, undefined, badCsrf)).toThrow("invalid upload token");
+  }
+
+  // With a valid session CSRF token, max_file_bytes is enforced instead.
+  initializeAttachmentPolicy(rpc, { max_file_bytes: 134217728, inline_max_bytes: 2048 }, undefined, "csrf-token");
+  expect(attachmentUploadCsrf(rpc)).toBe("csrf-token");
+  expect(attachmentLimitHint(rpc)).toBe("Each file can be up to 128 MiB.");
+  await checkAttachmentFile(rpc, photo);
+  const oversized = new File(["x"], "huge.bin");
+  Object.defineProperty(oversized, "size", { value: 134217729 });
+  await expect(checkAttachmentFile(rpc, oversized)).rejects.toMatchObject({ kind: "validation", message: '"huge.bin" exceeds the current browser upload limit of 128 MiB.' });
 });

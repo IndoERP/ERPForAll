@@ -257,6 +257,39 @@ impl Uploader {
         drain_outcomes().await;
     }
 
+    /// Mark a ready staged upload owned by `env` as failed (`state = 3`) so maintenance sweeps it
+    /// immediately rather than waiting for its TTL (for example, when an HTTP request fails after
+    /// staging the file part).
+    pub async fn discard(&self, env: &Env, upload: &UploadId, reason: &str) {
+        let uid = env.principal().subject().get();
+        let actor = actor_text(env);
+        let updated = async {
+            let mut tx = self
+                .orm
+                .begin_opts(BeginOptions::for_principal(env.principal().clone()).on_primary())
+                .await?;
+            tx.execute(
+                "UPDATE ir_blob_upload \
+                 SET state = 3, \
+                     reserved_bytes = CASE WHEN inline_data IS NOT NULL THEN 0 ELSE reserved_bytes END, \
+                     cleanup_error = $4 \
+                 WHERE id = $1::text::uuid AND subject_user = $2 AND actor = $3 AND state = 1",
+                &[&upload.as_str(), &uid, &actor, &reason],
+            )
+            .await?;
+            tx.commit().await
+        }
+        .await;
+        if let Err(error) = updated {
+            tracing::warn!(
+                target: "erp::attachments",
+                upload_id = upload.as_str(),
+                %error,
+                "Could not mark rejected staged upload for immediate cleanup; it expires at its TTL"
+            );
+        }
+    }
+
     /// Stream `body` into the write store and return the id of the staged upload.
     ///
     /// Content up to the inline threshold stays in the upload row; anything larger streams into

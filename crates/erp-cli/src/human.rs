@@ -1566,6 +1566,7 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
                 .with_asset_authority(lifecycle.clone())
                 .with_lifecycle(lifecycle)
                 .with_attachment_content(Arc::new(crate::attachment_content::BaseAttachmentContent))
+                .with_attachment_upload(Arc::new(crate::attachment_content::BaseAttachmentContent))
                 .with_attachment_policy(Arc::new(crate::attachment_content::BaseAttachmentContent))
                 .with_data_exchange(Arc::new(crate::impex::DataExchange))
                 .with_pivot_export(Arc::new(crate::pivot_export::WebAddonPivotExport))

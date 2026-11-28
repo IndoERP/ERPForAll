@@ -76,6 +76,8 @@ pub const JSON2_PREFIX: &str = "/erp/json/2/";
 pub const CALLBACK_PREFIX: &str = "/erp/callback/";
 /// Prefix of the authenticated attachment content route (`/erp/content/<id>`).
 pub const CONTENT_PREFIX: &str = "/erp/content/";
+/// Authenticated streaming attachment upload route (`POST`, multipart/form-data).
+pub const ATTACHMENT_UPLOAD: &str = "/erp/attachments/upload";
 /// Prefix of the printed reports (`/erp/report/<pdf|html>/<report>/<ids>`).
 pub const REPORT_PREFIX: &str = "/erp/report/";
 /// List data exchange (preview).
@@ -116,6 +118,7 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/session/api-key"),
     RouteMatch::Exact("/erp/health/ready"),
     RouteMatch::Exact("/erp/client-error"),
+    RouteMatch::Exact("/erp/attachments/upload"),
     RouteMatch::Exact("/erp/impex/preview"),
     RouteMatch::Exact("/erp/impex/test"),
     RouteMatch::Exact("/erp/impex/import"),
@@ -194,6 +197,7 @@ mod tests {
         SESSION_API_KEY,
         HEALTH_READY,
         CLIENT_ERROR,
+        ATTACHMENT_UPLOAD,
         IMPEX_PREVIEW,
         IMPEX_TEST,
         IMPEX_IMPORT,

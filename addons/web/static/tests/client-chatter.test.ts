@@ -1265,7 +1265,161 @@ test("a refused composer upload shows the server message inline and adds no chip
   // had not finished the read after 20 ms)
   await vi.waitFor(() => expect(composerEl.textContent).toContain(refusal));
   expect(composerEl.querySelectorAll(".erp-mail-attachment-chip")).toHaveLength(0);
+  // Error appears once in composer's own alert and is not duplicated in chatter's status area.
+  expect(composerEl.querySelector(".erp-mail-composer-error")?.textContent).toBe(refusal);
+  expect(host.querySelectorAll(".erp-mail-chatter-error")).toHaveLength(0);
   chatter.dispose();
+});
+
+test("composer streams files above inline_max_bytes through /erp/attachments/upload and links upload_id", async () => {
+  const calls: { path: string; csrf?: string | null; formFile?: File; body?: Record<string, unknown> }[] = [];
+  const reader = vi.spyOn(FileReader.prototype, "readAsDataURL");
+  const rpc = new RpcClient(async (path, init) => {
+    const url = String(path);
+    if (url === "/erp/attachments/upload") {
+      const form = init?.body as FormData;
+      const headers = init?.headers as Record<string, string> | undefined;
+      const uploaded = form.get("file") as File;
+      calls.push({ path: url, csrf: headers?.["X-CSRF-Token"] ?? null, formFile: uploaded });
+      return jsonResponse({
+        upload_id: "01950000-0000-7000-8000-000000000099",
+        size: uploaded.size,
+        checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+        mimetype: "image/jpeg",
+      });
+    }
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    calls.push({ path: url, body });
+    if (url.endsWith("/mail.store/store_fetch")) {
+      return jsonResponse({
+        store: answerPayload(10, {}),
+        topics: [
+          { topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) },
+          {
+            topic: "thread",
+            ok: true,
+            data: {
+              thread: { model: "res.partner", id: 42, can_post: true, attachment_count: 0 },
+              messages: { model: "res.partner", id: 42, message_ids: [], has_more_before: false, has_more_after: false },
+              attachments: { attachment_ids: [], has_more: false },
+            },
+          },
+        ],
+      });
+    }
+    if (url.endsWith("/ir.attachment/erp_upload_limits")) return jsonResponse({ max_file_bytes: 134217728, inline_max_bytes: 2048 });
+    if (url.endsWith("/res.partner/thread_upload")) {
+      expect(body["upload_id"]).toBe("01950000-0000-7000-8000-000000000099");
+      expect(body["data"]).toBeUndefined();
+      return jsonResponse({
+        attachment_id: 901,
+        name: "IMG_8068.JPG",
+        mimetype: "image/jpeg",
+        file_size: 16384,
+        checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+      });
+    }
+    throw new Error(`Unexpected path: ${url}`);
+  }, () => {});
+  initializeAttachmentPolicy(rpc, { max_file_bytes: 134217728, inline_max_bytes: 2048 }, undefined, "session-csrf");
+
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc });
+  await flushAsync();
+  const composerEl = host.querySelector<HTMLElement>(".erp-mail-composer")!;
+  const fileInput = composerEl.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  const photo = new File([new Uint8Array(16384)], "IMG_8068.JPG", { type: "image/jpeg" });
+  Object.defineProperty(fileInput, "files", { value: [photo], configurable: true });
+  fileInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(composerEl.querySelectorAll(".erp-mail-attachment-chip")).toHaveLength(1));
+
+  const uploadCall = calls.find((c) => c.path === "/erp/attachments/upload");
+  expect(uploadCall?.csrf).toBe("session-csrf");
+  expect(uploadCall?.formFile?.name).toBe("IMG_8068.JPG");
+  expect(uploadCall?.formFile?.size).toBe(16384);
+  expect(reader).not.toHaveBeenCalled();
+  reader.mockRestore();
+  chatter.dispose();
+});
+
+test("attachments panel streams via /erp/attachments/upload, handles 413 cleanly, and aborts on dispose", async () => {
+  const linked: Record<string, unknown>[] = [];
+  let attached = false;
+  let uploadSignal: AbortSignal | null | undefined;
+  let mode: "ok" | "too_large" | "hang" = "ok";
+  const rpc = new RpcClient(async (path, init) => {
+    const url = String(path);
+    if (url === "/erp/attachments/upload") {
+      uploadSignal = init?.signal;
+      if (mode === "too_large") {
+        return new Response("The uploaded file exceeds the maximum allowed size.", { status: 413, headers: { "Content-Type": "text/plain" } });
+      }
+      if (mode === "hang") {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        });
+      }
+      return jsonResponse({
+        upload_id: "01950000-0000-7000-8000-000000000101",
+        size: 8192,
+        checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+        mimetype: "image/jpeg",
+      });
+    }
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    if (url.endsWith("/mail.store/store_fetch")) {
+      return jsonResponse({
+        store: answerPayload(10, attached ? { "ir.attachment": [{ id: 902, name: "panel.jpg", mimetype: "image/jpeg", file_size: 8192 }] } : {}),
+        topics: [
+          { topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) },
+          {
+            topic: "thread",
+            ok: true,
+            data: {
+              thread: { model: "res.partner", id: 42, can_post: true, attachment_count: attached ? 1 : 0 },
+              messages: { model: "res.partner", id: 42, message_ids: [], has_more_before: false, has_more_after: false },
+              attachments: { attachment_ids: attached ? [902] : [], has_more: false },
+            },
+          },
+        ],
+      });
+    }
+    if (url.endsWith("/ir.attachment/erp_upload_limits")) return jsonResponse({ max_file_bytes: 134217728, inline_max_bytes: 2048 });
+    if (url.endsWith("/res.partner/thread_attach")) {
+      linked.push(body);
+      attached = true;
+      return jsonResponse({ attachment_id: 902, name: "panel.jpg", mimetype: "image/jpeg", file_size: 8192, checksum: "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed" });
+    }
+    throw new Error(`Unexpected path: ${url}`);
+  }, () => {});
+  initializeAttachmentPolicy(rpc, { max_file_bytes: 134217728, inline_max_bytes: 2048 }, undefined, "session-csrf");
+
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc });
+  await flushAsync();
+  const panelInput = host.querySelector<HTMLInputElement>(".erp-mail-chatter-file-input")!;
+  Object.defineProperty(panelInput, "files", { value: [new File([new Uint8Array(8192)], "panel.jpg", { type: "image/jpeg" })], configurable: true });
+  panelInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(linked).toHaveLength(1));
+  expect(linked[0]?.["upload_id"]).toBe("01950000-0000-7000-8000-000000000101");
+  expect(linked[0]?.["data"]).toBeUndefined();
+
+  // 413 refusal surfaces once in composer without invoking thread_upload.
+  mode = "too_large";
+  const composerEl = host.querySelector<HTMLElement>(".erp-mail-composer")!;
+  const composerInput = composerEl.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  Object.defineProperty(composerInput, "files", { value: [new File([new Uint8Array(4096)], "large.jpg", { type: "image/jpeg" })], configurable: true });
+  composerInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(composerEl.querySelector(".erp-mail-composer-error")?.textContent).toContain("exceeds the maximum allowed size"));
+  expect(host.querySelectorAll(".erp-mail-chatter-error")).toHaveLength(0);
+
+  // Disposing while upload is in flight aborts the fetch signal and skips thread_attach.
+  mode = "hang";
+  Object.defineProperty(panelInput, "files", { value: [new File([new Uint8Array(4096)], "slow.jpg", { type: "image/jpeg" })], configurable: true });
+  panelInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(uploadSignal).toBeDefined());
+  chatter.dispose();
+  expect(uploadSignal?.aborted).toBe(true);
+  await flushAsync();
+  expect(linked).toHaveLength(1);
 });
 
 /// (partial: the attachments panel attaches a file to the record with thread_attach and reloads the list)
