@@ -197,3 +197,21 @@ export async function exportSession(rpc: RpcLike, sessionId: number): Promise<Se
   }
   return { format: "json", filename: result["filename"], content: result["content"] };
 }
+
+/** The authenticated transcript for the active company. */
+export async function conversationHistory(rpc: RpcLike, sessionId: number, companyId: number) {
+  const result = await rpc.call("ai.session", "conversation_history", {id:sessionId, context:{allowed_company_ids:[companyId]}});
+  if (!record(result) || result["id"] !== sessionId || !Array.isArray(result["messages"])) {
+    throw new Error("Invalid saved conversation.");
+  }
+  return result["messages"] as unknown[];
+}
+
+export async function locateSubmission(rpc: RpcLike, request: string, company: number): Promise<number | null> {
+  const result = await rpc.call("ai.session", "locate_submission", {request, context:{allowed_company_ids:[company]}});
+  if (!record(result)) throw new Error("Invalid submission receipt.");
+  const id = result["session_id"];
+  if (id === null) return null;
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid submission receipt.");
+  return id;
+}

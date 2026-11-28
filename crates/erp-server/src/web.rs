@@ -289,7 +289,7 @@ mod report;
 mod reporting_export;
 mod session_api_key;
 mod upload;
-pub use assistant::{HistoryEntry, HistoryRole, WebAssistant};
+pub use assistant::{ConversationTurn, HistoryEntry, HistoryRole, WebAssistant};
 pub use content::{
     ContentHandoff, ContentHandoffRequest, ContentLookup, ContentOpenFailure, ContentOpener,
     ContentRange, ContentReader, FoundContent, WebAttachmentContent,
@@ -1147,9 +1147,12 @@ impl WebApp {
         if path == routes::THREAD_SOCKET {
             return self.thread_socket(parts, auth).await;
         }
-        if matches!(path, routes::ASSISTANT_TURN | routes::ASSISTANT_STATUS) {
+        if matches!(
+            path,
+            routes::ASSISTANT_TURN | routes::ASSISTANT_STATUS | routes::ASSISTANT_RESUME
+        ) {
             return self
-                .assistant(&parts, body, &auth, path == routes::ASSISTANT_STATUS)
+                .assistant(&parts, body, &auth, path, services.rpc.as_ref())
                 .await;
         }
         if let Some(action) = impex::Action::from_path(path) {

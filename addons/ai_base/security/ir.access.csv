@@ -10,3 +10,8 @@ access_ai_memory_user,Own assistant memory,model_ai_memory,base.group_user,crud,
 access_ai_memory_company_user,Read company assistant memory,model_ai_memory,base.group_user,r,"[('scope', '=', 'company'), ('company_id', 'in', company_ids)]"
 access_ai_memory_addon_user,Read addon assistant memory,model_ai_memory,base.group_user,r,"[('scope', '=', 'addon')]"
 access_ai_memory_company_admin,Manage company assistant memory,model_ai_memory,base.group_system,crud,"[('scope', '=', 'company')]"
+access_ai_implementation_project,Manage implementation projects,model_ai_implementation_project,ai_base.group_implementation,crud,"[('company_id', '=', company_id)]"
+access_ai_implementation_step,Manage implementation steps,model_ai_implementation_step,ai_base.group_implementation,crud,"[('project_id.company_id', '=', company_id)]"
+access_ai_insight_own,Own reports and dashboards in the active company,model_ai_insight,base.group_user,crud,"[('company_id', '=', company_id), ('create_uid', '=', user.id)]"
+access_ai_insight_shared,Reports published to my groups in the active company,model_ai_insight,base.group_user,r,"[('company_id', '=', company_id), ('group_member', '=', True)]"
+access_ai_implementation_import,Read implementation import receipts,model_ai_implementation_import,ai_base.group_implementation,r,"[('step_id.project_id.company_id', '=', company_id)]"

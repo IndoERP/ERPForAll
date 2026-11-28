@@ -195,7 +195,7 @@ impl SaleQuotationSend {
 
     /// Logs the email in the order chatter, marks a draft quotation as Sent, and closes the modal.
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_send_mail(
         this: &RecordSet<SaleQuotationSend>,
         tx: &mut Transaction,
@@ -287,6 +287,7 @@ impl SaleQuotationSend {
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",
+            "source_record":{"res_model":"sale.order","res_id":order_id},
             "params": {
                 "message": format!("{doc_kind} queued for {email_to}."),
                 "type": "success",
@@ -435,6 +436,45 @@ impl SaleOrderSignWizard {
 
 #[methods(SaleOrder, addon = "sale")]
 impl SaleOrder {
+    /// Create the standard quotation composer with its customer, template and PDF defaults.
+    /// The returned draft can be reviewed, or submitted through the ordinary send action.
+    #[method]
+    #[rpc(effect = write, assistant = offer)]
+    pub async fn action_prepare_quotation_email(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        let order = this.ensure_one()?;
+        order
+            .as_records()
+            .check_access(tx, Operation::Write)
+            .await?;
+        let id = order.as_records().ids()[0];
+        let env =
+            strip_default_context(order.env()).with_context([("default_order_id", Value::Int(id))]);
+        let wizard = env
+            .records("sale.quotation.send")?
+            .create(tx, vec![RawVals::new()])
+            .await?;
+        let draft = wizard.ensure_one()?;
+        Ok(Value::Json(Arc::new(json!({
+            "type": "ir.actions.act_window", "res_model": "sale.quotation.send",
+            "res_id": draft.ids()[0], "name": "Send Quotation by Email",
+            "target": "new", "views": [[false,"form"]],
+        }))))
+    }
+
+    /// Return relay states for the caller's quotation messages. No recipient or email content
+    /// is exposed; accepted means accepted by the configured relay.
+    #[method]
+    #[rpc(effect = read, assistant = offer)]
+    pub async fn action_quotation_email_status(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        erp_addon_mail::outgoing::own_delivery_status(tx, this.ensure_one()?.as_records()).await
+    }
+
     /// Opens the Send Quotation by Email wizard.
     #[method]
     #[rpc(effect = read)]

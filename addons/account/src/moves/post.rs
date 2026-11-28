@@ -73,7 +73,7 @@ impl AccountMove {
     /// statement and unnamed entries take the next numbers of their journals (
     /// -044, -048, -054).
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_post(this: &RecordSet<AccountMove>, tx: &mut Transaction) -> Result<()> {
         post_moves(tx, this.as_records()).await
     }

@@ -47,7 +47,9 @@ fn check<'a>(
             }
         }
         let limit = erp_sdk::params::get_int(tx, &crate::ADDON, "ai_base.search_rows").await?;
+        let implementation_access = tx.has_group(env, "ai_base.group_implementation").await?;
         Ok(Map::from_iter([
+            ("implementation_access".into(), json!(implementation_access)),
             ("history".into(), crate::ledger::tab_history(tx).await?),
             ("sources".into(), json!(sources)),
             ("limit".into(), json!(limit)),

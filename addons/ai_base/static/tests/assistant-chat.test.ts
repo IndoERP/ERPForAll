@@ -110,3 +110,17 @@ test("the dock restores a workspace draft proposal as readable fields", async ()
     expect(log.querySelector("button")).toBeNull();
   } finally { chat.dispose();sessionStorage.removeItem(key); }
 });
+
+test("the dock adds only the selected record reference to the editable draft", async () => {
+  const context = {active_model:"sale.order",active_id:18,private_payload:"not for the assistant"};
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(json({available:true,history:{turns:4,bytes:4096,message_bytes:4096}}));
+  const chat = assistantChat({...environment,assistantContext:context},request);
+  document.body.append(chat.node);
+  await vi.waitFor(() => expect(chat.node.hidden).toBe(false));
+  chat.node.click();
+  const include = document.querySelector<HTMLButtonElement>('[aria-label="Include current record"]')!;
+  include.click();
+  expect(document.querySelector("textarea")?.value).toBe("sale.order #18 ");
+  expect(request).toHaveBeenCalledTimes(1);
+  chat.dispose();
+});

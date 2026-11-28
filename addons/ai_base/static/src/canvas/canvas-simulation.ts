@@ -18,6 +18,8 @@ export type SimulationSpec = {
   baseMarginPct: number;
 };
 
+let nextControl = 0;
+
 export function renderSimulation(spec: SimulationSpec): HTMLElement {
   const container = document.createElement("div");
   container.className = "canvas-simulation-container";
@@ -76,14 +78,14 @@ export function renderSimulation(spec: SimulationSpec): HTMLElement {
     const profitDelta = projectedProfit - baseProfit;
 
     const fmt = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
-    revVal.textContent = `Rp ${fmt.format(projectedRevenue)}`;
-    marginVal.textContent = `${projectedMarginRate.toFixed(1)}% (Rp ${fmt.format(projectedProfit)})`;
+    revVal.textContent = fmt.format(projectedRevenue);
+    marginVal.textContent = `${projectedMarginRate.toFixed(1)}% (${fmt.format(projectedProfit)})`;
 
     if (profitDelta >= 0) {
-      deltaVal.textContent = `+Rp ${fmt.format(profitDelta)}`;
+      deltaVal.textContent = `+${fmt.format(profitDelta)}`;
       deltaVal.style.color = "var(--success)";
     } else {
-      deltaVal.textContent = `-Rp ${fmt.format(Math.abs(profitDelta))}`;
+      deltaVal.textContent = `-${fmt.format(Math.abs(profitDelta))}`;
       deltaVal.style.color = "var(--danger)";
     }
   }
@@ -108,15 +110,19 @@ export function renderSimulation(spec: SimulationSpec): HTMLElement {
 
     const slider = document.createElement("input");
     slider.type = "range";
+    slider.id = `scenario-input-${++nextControl}`;
+    title.htmlFor = slider.id;
     slider.min = String(v.min);
     slider.max = String(v.max);
     slider.step = String(v.step || 1);
     slider.value = String(v.initial);
     slider.className = "canvas-sim-slider";
+    slider.setAttribute("aria-valuetext", readout.textContent);
 
     slider.addEventListener("input", () => {
       values[v.key] = Number(slider.value);
       readout.textContent = `${slider.value}${v.unit || ""}`;
+      slider.setAttribute("aria-valuetext", readout.textContent);
       recalculate();
     });
 

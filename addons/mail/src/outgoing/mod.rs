@@ -15,7 +15,7 @@ pub const KIND: &str = "mail.send_external";
 #[model(name = "mail.outgoing", description = "Outgoing Email", addon = "mail",
     company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
     keys = [key(name = "_message_recipient_unique", fields = ["message_id", "recipient"], message = "An email is queued once per recipient.")],
-    indexes = [("_queue", "(company_id,state,id)")])]
+    indexes = [("_queue", "(company_id,state,id)"), ("_document", "(company_id,source_model,source_id)")])]
 pub struct MailOutgoing {
     #[field(
         many2one,
@@ -100,6 +100,40 @@ pub struct MailOutgoingAttachment {
     pub mime_type: Option<Arc<str>>,
     #[field(binary, required = true, groups = ".")]
     pub content: Option<Blob>,
+}
+
+/// Summarize the caller's own outbound messages for one readable source document. This
+/// record-scoped projection discloses only counts by relay state; envelope/body and job
+/// diagnostics continue to require their native outbox access.
+pub async fn own_delivery_status(tx: &mut Transaction, source: &erp_sdk::Records) -> Result<Value> {
+    let source = source.ensure_one()?;
+    source.check_access(tx, Operation::Read).await?;
+    let env = source.env();
+    if !tx.has_group(env, "base.group_user").await? {
+        return Err(Error::access("An internal user is required."));
+    }
+    let company = env
+        .company_id()?
+        .ok_or_else(|| Error::validation("Select a company first."))?;
+    let model = source.model_name();
+    let id = source.ids()[0];
+    let uid = env.user_id().get();
+    let rows = tx
+        .query(
+            "SELECT o.state::text,count(*)::bigint FROM mail_outgoing o
+        JOIN mail_message m ON m.id=o.message_id JOIN res_users u ON u.partner_id=m.author_id
+        WHERE o.company_id=$1 AND o.source_model=$2 AND o.source_id=$3 AND u.id=$4
+        GROUP BY o.state ORDER BY o.state",
+            &[&company, &model, &id, &uid],
+        )
+        .await?;
+    let mut states = std::collections::BTreeMap::new();
+    for row in rows {
+        let state: String = row.try_get(0).map_err(|_| invalid_row())?;
+        let count: i64 = row.try_get(1).map_err(|_| invalid_row())?;
+        states.insert(state, count);
+    }
+    Ok(Value::Json(Arc::new(json!({"states":states}))))
 }
 
 pub struct OutgoingRequest<'a> {

@@ -99,3 +99,63 @@ test("a proposed reference resolves inside the current company only after a clic
   }
   expect(open).toHaveBeenCalledTimes(1);
 });
+
+test("the workspace shows a usable conversation and shares the draft without opening the dock", async () => {
+  const env = { currentCompanyId: 7, userId: 42, companies: [], csrfToken: "fixture", host: document.body, rpc: {},
+    action: { params: { company_id: 7, sources: [], limit: 2, history: { turns: 4, bytes: 4096, message_bytes: 2048 } } },
+    run: (job: () => Promise<void>) => { void job(); },
+  } as unknown as ClientActionEnvironment;
+  const chat = assistantSession(env.rpc, 7, "fixture", { userId: 42, request: async () => Response.json({ text: "Draft ready" }),
+    history: readHistoryPolicy(env.action.params["history"]) });
+  chat.updateDock({ draft: "Prepare a draft" });
+  const view = await workspace(env);
+  try {
+    expect(chat.readDock().mode).toBe("closed");
+    const input = document.querySelector("textarea")!;
+    expect(input.value).toBe("Prepare a draft");
+    input.form!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("[role=log]")?.textContent).toContain("Draft ready"));
+    expect(document.querySelector<HTMLElement>("[role=log]")?.style.display).not.toBe("none");
+    expect(chat.readDock().draft).toBe("");
+  } finally { view.dispose(); }
+});
+
+test("opening Canvas transfers an expanded dock, its pending response and draft into a single composer", async () => {
+  const {assistantChat, assistantCommands} = await import("../src/assistant-chat.js");
+  const rpc = {}, host = document.createElement("main");
+  document.body.append(host);
+  const limits = {turns:8,bytes:16384,message_bytes:2048,saved_sessions:true,workspace_action_id:23};
+  let answer!: (value: Response) => void;
+  const request = vi.fn<typeof fetch>(async url => url === "/erp/ai/assistant/status"
+    ? Response.json({available:true,history:limits})
+    : new Promise(resolve => { answer = resolve; }));
+  const chat = assistantChat({userId:133,csrfToken:"fixture",context:{allowed_company_ids:[7]},rpc} as Parameters<typeof assistantChat>[0],request);
+  document.body.append(chat.node);
+  await vi.waitFor(() => expect(chat.node.hidden).toBe(false));
+  chat.node.click();
+  const dock = document.querySelector<HTMLElement>("#ai-assistant-dock")!;
+  const input = dock.querySelector("textarea")!;
+  input.value = "Review this order";
+  input.form!.requestSubmit();
+  input.value = "Follow up on the receipt";
+  input.dispatchEvent(new Event("input"));
+  const view = await workspace({currentCompanyId:7,userId:133,csrfToken:"fixture",rpc,host,
+    action:{params:{company_id:7,sources:[],history:limits}},run:(job:()=>Promise<void>)=>void job()} as unknown as ClientActionEnvironment);
+  try {
+    expect(dock.isConnected).toBe(false);
+    expect(chat.node.hidden).toBe(true);
+    const composer = host.querySelector("textarea")!;
+    expect(composer.value).toBe("Follow up on the receipt");
+    assistantCommands({searchValue:"Assistant"})[0]!.action!();
+    expect(document.activeElement).toBe(composer);
+    answer(Response.json({text:"Order reviewed",session_id:35}));
+    await vi.waitFor(() => expect(host.querySelector('[role="log"]')?.textContent).toContain("Order reviewed"));
+    expect(request.mock.calls.filter(([url])=>url === "/erp/ai/assistant/turn")).toHaveLength(1);
+  } finally { view.dispose(); }
+  expect(chat.node.hidden).toBe(false);
+  expect(dock.isConnected).toBe(false);
+  chat.node.click();
+  expect(input.value).toBe("Follow up on the receipt");
+  expect(dock.querySelector('[role="log"]')?.textContent).toContain("Order reviewed");
+  chat.dispose();
+});

@@ -1,6 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { renderBarChart, renderDonutChart, renderLineChart } from "../src/canvas/canvas-chart.js";
+import { csvCell } from "../src/canvas/csv.js";
 import { renderRichTable } from "../src/canvas/canvas-table.js";
 import { renderWorkflowFlow } from "../src/canvas/canvas-flow.js";
 import { renderSimulation } from "../src/canvas/canvas-simulation.js";
@@ -129,12 +130,14 @@ describe("Canvas Visual Components", () => {
     expect(readout.textContent).toBe("10%");
 
     const slider = el.querySelector<HTMLInputElement>("input[type=range]")!;
+    expect(slider.labels?.[0]?.textContent).toBe("Diskon Promosi");
     slider.value = "20";
     slider.dispatchEvent(new Event("input"));
 
     expect(readout.textContent).toBe("20%");
     const kpis = el.querySelectorAll(".canvas-kpi-val");
     expect(kpis.length).toBe(3);
+    expect(el.textContent).not.toContain("Rp");
   });
 
   test("createCanvasStage renders artifact and detects fenced erp-view JSON", () => {
@@ -177,7 +180,7 @@ describe("Canvas Visual Components", () => {
     const invalidText = "Berikut adalah chart:\n```erp-view\n{invalid_json:\n```";
     const detectedErr = stage.detectAndRender(invalidText);
     expect(detectedErr).toBe(false);
-    expect(stage.node.textContent).toContain("Format Visualisasi Tidak Valid");
+    expect(stage.node.querySelector("[role=alert]")?.textContent).toContain("Unable to read");
 
     stage.dispose();
   });
@@ -292,21 +295,64 @@ describe("Canvas Visual Components", () => {
     stage.dispose();
   });
 
-  test("createCanvasStage renders the suggestion launchpad with status text and actionable chips", () => {
+  test("createCanvasStage offers suggestions without claiming a company data connection", () => {
     let triggeredPrompt = "";
     const stage = createCanvasStage(p => { triggeredPrompt = p; });
     document.body.append(stage.node);
 
-    expect(stage.node.querySelector(".canvas-stage-status")?.textContent).toContain("Terhubung");
+    expect(stage.node.textContent).not.toContain("Terhubung ke data perusahaan");
     const chips = stage.node.querySelectorAll(".canvas-suggestion-chip");
     expect(chips.length).toBeGreaterThanOrEqual(4);
 
     // Click on a suggestion chip to verify the callback
-    const pivotChip = Array.from(chips).find(c => c.textContent?.includes("Pivot")) as HTMLButtonElement;
+    const pivotChip = Array.from(chips).find(c => c.textContent?.includes("pivot")) as HTMLButtonElement;
     expect(pivotChip).toBeDefined();
     pivotChip.click();
     expect(triggeredPrompt).toContain("pivot");
 
+    stage.dispose();
+  });
+
+  test("charts show losses below zero and zero-height bars for zero", () => {
+    const series = [{label:"Loss",value:-3},{label:"Zero",value:0},{label:"Gain",value:6}];
+    const chart = renderBarChart({series});
+    const bars = chart.querySelectorAll("rect");
+    const zero = Number(chart.querySelector("line")!.getAttribute("y1"));
+    expect(Number(bars[0]!.getAttribute("y"))).toBe(zero);
+    expect(Number(bars[1]!.getAttribute("height"))).toBe(0);
+    expect(Number(bars[2]!.getAttribute("y"))).toBeLessThan(zero);
+    const points = renderLineChart({series}).querySelectorAll("circle");
+    expect(Number(points[0]!.getAttribute("cy"))).toBeGreaterThan(Number(points[1]!.getAttribute("cy")));
+    expect(Number(points[2]!.getAttribute("cy"))).toBeLessThan(Number(points[1]!.getAttribute("cy")));
+    expect(renderDonutChart({series:[{label:"Zero",value:0}]}).textContent).toContain("0");
+  });
+
+  test("CSV cells preserve numeric values and export user-provided text as literal data", () => {
+    expect(csvCell(-12)).toBe('"-12"');
+    expect(csvCell(" =total")).toBe(`"' =total"`);
+    expect(csvCell('a,"b"')).toBe('"a,""b"""');
+    expect(csvCell("\ttext")).toBe(`"'\ttext"`);
+  });
+
+  test("live pivots keep returned measures and save the query without aggregating averages again", () => {
+    const save = vi.fn();
+    const openSource = vi.fn();
+    const stage = createCanvasStage(undefined, save, openSource);
+    const definition = { panels: [{ model: "sale.order", groupby: ["state"], aggregates: ["amount:avg"] }] };
+    stage.renderArtifact({ canvas_type: "pivot", title: "Order values", data: {
+      source_model: "sale.order", source_domain:[["state","=","sale"]], analysis_definition: definition,
+      columns: ["state", "amount:avg"], records: [{ state: "sale", "amount:avg": 260 }],
+      dimensions: ["state"], measures: [{key:"amount:avg",label:"Average"}], truncated:true,
+    } });
+    expect(stage.node.textContent).toContain("sale.order");
+    expect(stage.node.querySelector(".canvas-pivot-grandtotal-val")).toBeNull();
+    expect(stage.node.querySelector(".canvas-table-export")).toBeNull();
+    expect(stage.node.querySelector("tbody")?.textContent).toContain("260");
+    const button = Array.from(stage.node.querySelectorAll("button")).find(node => node.textContent === "Save report")!;
+    button.click();
+    expect(save).toHaveBeenCalledWith("Order values", JSON.stringify(definition));
+    Array.from(stage.node.querySelectorAll("button")).find(node => node.textContent === "Open source records")!.click();
+    expect(openSource).toHaveBeenCalledWith("Order values", "sale.order", [["state","=","sale"]]);
     stage.dispose();
   });
 
@@ -416,7 +462,7 @@ describe("Canvas Visual Components", () => {
     stage.dispose();
   });
 
-  test("createCanvasStage card supports HTML5 drag-and-drop attributes and close button", () => {
+  test("createCanvasStage outline supports HTML5 drag-and-drop and closes the active artifact", () => {
     const stage = createCanvasStage();
     document.body.append(stage.node);
 
@@ -427,8 +473,8 @@ describe("Canvas Visual Components", () => {
     });
 
     const card = stage.node.querySelector(".canvas-card-item")!;
-    expect(card.getAttribute("draggable")).toBe("true");
-    expect(card.querySelector(".canvas-drag-handle")).not.toBeNull();
+    expect(stage.node.querySelector(".studio-tab")?.getAttribute("draggable")).toBe("true");
+    expect(card.getAttribute("aria-labelledby")).toBe(stage.node.querySelector(".studio-tab")?.id);
 
     // Close button removes card and restores blank state
     const closeBtn = card.querySelector<HTMLButtonElement>(".canvas-card-btn-close")!;

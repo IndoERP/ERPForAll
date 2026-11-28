@@ -93,6 +93,88 @@ async fn check_lock_group(tx: &mut Transaction, records: &Records) -> Result<()>
 
 #[methods(SaleOrder, addon = "sale")]
 impl SaleOrder {
+    /// Draft an ordinary quotation for a readable customer using the selected company's defaults.
+    #[method]
+    #[rpc(effect = write, model, assistant = offer)]
+    pub async fn action_draft_quotation(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+        partner_id: i64,
+    ) -> Result<Value> {
+        let env = this.env().without_default_overrides();
+        let company = env
+            .company_id()?
+            .ok_or_else(|| Error::validation("Select a sales company."))?;
+        let partner = env.records("res.partner")?.browse([partner_id])?;
+        partner.check_access(tx, Operation::Read).await?;
+        if partner.exists(tx).await?.is_empty() {
+            return Err(Error::validation("Choose an existing customer."));
+        }
+        let order = env
+            .records("sale.order")?
+            .create(
+                tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("partner_id", Cell::Id(partner_id))
+                        .set_cell("company_id", Cell::Id(company)),
+                ],
+            )
+            .await?;
+        Ok(Value::Json(Arc::new(
+            erp_sdk::serde_json::json!({"type":"ir.actions.act_window","name":"Quotation",
+            "res_model":"sale.order","res_id":order.ensure_one()?.int()?,"views":[[false,"form"]],"target":"current"}),
+        )))
+    }
+
+    /// Add a catalog product in its native sales unit. The sales model computes the
+    /// price, taxes and description for this customer and its selected pricelist.
+    #[method]
+    #[rpc(effect = write, assistant = offer)]
+    pub async fn action_add_quotation_product(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+        product_id: i64,
+        quantity: String,
+    ) -> Result<Value> {
+        let qty = quantity
+            .parse::<Decimal>()
+            .map_err(|_| Error::validation("Enter a valid decimal quantity."))?;
+        if qty <= Decimal::ZERO {
+            return Err(Error::validation(
+                "The quotation quantity must be positive.",
+            ));
+        }
+        let order = this.ensure_one()?.as_records();
+        order.check_access(tx, Operation::Write).await?;
+        order.lock_for_update(tx, true).await?;
+        if order.cell(tx, "state").await? != Cell::Str("draft".into()) {
+            return Err(Error::validation("Add products to a draft quotation."));
+        }
+        let env = this.env().without_default_overrides();
+        let product = env.records("product.product")?.browse([product_id])?;
+        product.check_access(tx, Operation::Read).await?;
+        if product.cell(tx, "active").await? != Cell::Bool(true) {
+            return Err(Error::validation("Choose a product available for sale."));
+        }
+        let line = env
+            .records("sale.order.line")?
+            .create(
+                tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("order_id", Cell::Id(order.int()?))
+                        .set_cell("product_id", Cell::Id(product_id))
+                        .set_cell("product_uom_qty", Cell::Decimal(qty)),
+                ],
+            )
+            .await?;
+        Ok(Value::Json(Arc::new(
+            erp_sdk::serde_json::json!({"type":"ir.actions.act_window","name":"Quotation Line",
+            "res_model":"sale.order.line","res_id":line.ensure_one()?.int()?,"views":[[false,"form"]],"target":"current"}),
+        )))
+    }
+
     /// Marks draft quotations as sent.
     #[method]
     #[rpc(effect = write)]
@@ -114,7 +196,7 @@ impl SaleOrder {
     /// the lock of the orders `_should_be_locked` returns ("The confirm chain";
     /// ORM caller can handle a late refusal without committing partial confirmation.
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_confirm(this: &RecordSet<SaleOrder>, tx: &mut Transaction) -> Result<()> {
         let records = this.as_records();
         tx.savepoint(async move |tx| {

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp noupdate="1">
+  <record id="group_implementation" model="res.groups">
+    <field name="name">Implementation Consultant</field>
+    <field name="implied_ids" eval="[Command.link(ref('base.group_user'))]"/>
+    <field name="implied_by_ids" eval="[Command.link(ref('base.group_system'))]"/>
+    <field name="comment">Manages implementation plans and fit-gap decisions in accessible companies.</field>
+  </record>
+</erp>

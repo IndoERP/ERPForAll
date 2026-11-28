@@ -22,12 +22,18 @@ fn addons() -> PathBuf {
 }
 #[path = "ai_config_install/aggregate_turn.rs"]
 mod aggregate_turn;
+#[path = "ai_config_install/conversation.rs"]
+mod conversation;
 #[path = "ai_config_install/correction_turn.rs"]
 mod correction_turn;
 #[path = "ai_config_install/find_models.rs"]
 mod find_models;
 #[path = "ai_config_install/history_turn.rs"]
 mod history_turn;
+#[path = "ai_config_install/implementation.rs"]
+mod implementation;
+#[path = "ai_config_install/insights.rs"]
+mod insights;
 #[allow(
     clippy::panic,
     reason = "the shared test HTTP harness asserts native process failures"

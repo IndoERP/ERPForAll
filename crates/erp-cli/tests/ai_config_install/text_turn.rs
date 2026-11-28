@@ -84,9 +84,13 @@ fn browser_text_turn_requires_csrf_and_budget_then_returns_metered_provider_text
         };
         let yes = invoke("GET", status, None, None);
         assert_eq!(yes.status, 200, "{}", yes.body);
+        let status = serde_json::from_str::<Value>(&yes.body).unwrap();
+        let workspace = status["history"]["workspace_action_id"].as_i64().unwrap();
+        assert!(workspace > 0);
         assert_eq!(
-            serde_json::from_str::<Value>(&yes.body).unwrap(),
-            json!({"available":true, "history":{"turns":32,"bytes":262144,"message_bytes":4096}})
+            status,
+            json!({"available":true, "history":{"turns":32,"bytes":262144,"message_bytes":4096,
+            "saved_sessions":true,"workspace_action_id":workspace}})
         );
         assert_eq!(invoke("POST", turn, None, None).status, 403);
         assert_eq!(
@@ -246,7 +250,7 @@ fn browser_text_turn_requires_csrf_and_budget_then_returns_metered_provider_text
         assert_eq!(ok.status, 200, "{}", ok.body);
         assert_eq!(
             serde_json::from_str::<Value>(&ok.body).unwrap(),
-            json!({"text":"Synthetic pong.","model":"local-model","usage":{"input_tokens":11000,"output_tokens":3}})
+            json!({"text":"Synthetic pong.","model":"local-model","usage":{"input_tokens":11000,"output_tokens":3,"round_trips":1,"tool_calls":0}})
         );
         let (mut stale, route) = upstream.await.unwrap();
         let refused = erp_addon_ai_base::ledger::reserve(

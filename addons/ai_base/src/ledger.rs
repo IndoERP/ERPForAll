@@ -293,6 +293,27 @@ impl Reservation {
     /// # Errors
     /// Fails when the settlement is unknown or a response's arithmetic cannot be represented.
     pub async fn settle(&self, tx: &mut Transaction, usage: Option<(i64, i64)>) -> Result<()> {
+        self.settle_lease(tx, usage, false).await
+    }
+
+    /// Release a live lease when replacing it or publishing a completed reply. An expired
+    /// lease can still be charged by the accounting finalizer, but cannot publish stale work.
+    /// # Errors
+    /// Refuses completion if another turn could have taken over or the charge cannot be stored.
+    pub async fn settle_active(
+        &self,
+        tx: &mut Transaction,
+        usage: Option<(i64, i64)>,
+    ) -> Result<()> {
+        self.settle_lease(tx, usage, true).await
+    }
+
+    async fn settle_lease(
+        &self,
+        tx: &mut Transaction,
+        usage: Option<(i64, i64)>,
+        require_active: bool,
+    ) -> Result<()> {
         let uid = tx.env().user_id().get();
         let (input, output) = usage.unzip();
         let tokens = usage
@@ -315,9 +336,19 @@ impl Reservation {
         )
         .await?;
         let state = if usage.is_some() { "settled" } else { "failed" };
-        let n=tx.execute("UPDATE ai_usage SET state=$3,active_session=NULL,active_slot=NULL,input_tokens=$4,output_tokens=$5,tokens=COALESCE($6,tokens),cost=COALESCE($7,cost),elapsed_ms=(extract(epoch FROM ((clock_timestamp() AT TIME ZONE 'UTC')-started_at))*1000)::bigint WHERE id=$1 AND user_id=$2 AND state IN ('reserved','expired')",&[&self.id,&uid,&state,&input,&output,&tokens,&spent]).await?;
+        let n=tx.execute("UPDATE ai_usage SET state=$3,active_session=NULL,active_slot=NULL,input_tokens=$4,output_tokens=$5,tokens=COALESCE($6,tokens),cost=COALESCE($7,cost),elapsed_ms=(extract(epoch FROM ((clock_timestamp() AT TIME ZONE 'UTC')-started_at))*1000)::bigint WHERE id=$1 AND user_id=$2 AND state IN ('reserved','expired') AND (NOT $8::boolean OR (state='reserved' AND expires_at > clock_timestamp() AT TIME ZONE 'UTC'))",&[&self.id,&uid,&state,&input,&output,&tokens,&spent,&require_active]).await?;
         if n != 1 {
-            return Err(Error::internal("Assistant metering could not be settled."));
+            if require_active {
+                return Err(Error::user(
+                    "erp.ai.lease_expired: the active turn expired. Reopen the conversation to check its result.",
+                ));
+            }
+            // The final commit can have reached PostgreSQL even if the connection did not
+            // deliver its confirmation. A repeat of the identical charge is already settled.
+            let same = tx.query("SELECT 1 FROM ai_usage WHERE id=$1 AND user_id=$2 AND state=$3 AND input_tokens IS NOT DISTINCT FROM $4 AND output_tokens IS NOT DISTINCT FROM $5", &[&self.id,&uid,&state,&input,&output]).await?;
+            if same.is_empty() {
+                return Err(Error::internal("Assistant metering could not be settled."));
+            }
         }
         Ok(())
     }

@@ -746,6 +746,14 @@ pub async fn open_session(tx: &mut Transaction, new: &NewSession) -> Result<i64>
 /// `erp.ai.session_company_changed`, `erp.ai.session_full` or `erp.ai.busy` for the three
 /// refusals.
 pub async fn admit_turn(tx: &mut Transaction, session: i64) -> Result<()> {
+    admit_turn_with_capacity(tx, session, 1).await
+}
+
+pub(crate) async fn admit_turn_with_capacity(
+    tx: &mut Transaction,
+    session: i64,
+    required_events: i64,
+) -> Result<()> {
     let uid = require_user(tx)?;
     let locked = tx
         .query(
@@ -781,7 +789,8 @@ pub async fn admit_turn(tx: &mut Transaction, session: i64) -> Result<()> {
         .map_err(|_| Error::validation("Invalid assistant event limit."))?;
     let max_turns = i64::try_from(crate::catalog::limit(tx, SESSION_MAX_TURNS).await?)
         .map_err(|_| Error::validation("Invalid assistant turn limit."))?;
-    if i64::from(row.get::<_, i32>(1)) >= max_events || i64::from(row.get::<_, i32>(2)) >= max_turns
+    if i64::from(row.get::<_, i32>(1)) + required_events > max_events
+        || i64::from(row.get::<_, i32>(2)) >= max_turns
     {
         return Err(Error::user(
             "erp.ai.session_full: the session reached its event or turn limit; fork from the latest summary.",

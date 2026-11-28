@@ -175,6 +175,39 @@ An optional `expires_at` inside this object takes a UTC timestamp such as
 `2027-01-15T08:00:00Z`. The server validates the date against issuance policy.
 Omitting the access object retains the existing delegated tool and approval behavior.
 
+### AI Assistant and implementation projects
+
+After upgrading the server and client assets, upgrade the installed `ai_base` addon
+to 0.5.0 using the module upgrade procedure below. In **Settings → Technical → AI**,
+configure the provider, company route and budget before sending the first question.
+
+The workspace and header chat share a conversation for the signed-in user and active
+company. Opening Canvas Studio moves the draft and any pending reply into the workspace.
+Leaving it makes the header launcher available again. A user can include the open record in a question, follow an operation to
+the native document, or open a pending approval. After approval, **Check approval**
+resumes the original operation with the caller's current rights. Outgoing mail
+uses the ERP mail queue. Delivery progress is available on the outgoing message.
+
+Give an implementer the **Implementation Consultant** group and the business roles
+needed for the project. Open **AI Assistant → Implementation Projects**, select the
+company, and use **Add installed domains**. Each step has an owner, prerequisites,
+acceptance criteria and space for evidence. **Open records** opens the native view
+for setup and guided import. A receipt identifies the completed import and its row
+count. Capture an unmet requirement, example and acceptance criteria in the fit-gap
+tab. Company settings updates check the revision loaded by the implementer.
+
+In **Canvas Studio**, one answer can contain several outputs, such as a rollout
+brief, a live cost chart and a checklist. Open a result from its message, switch
+between results, or enter focus mode. On small screens the Chat and Canvas buttons
+switch panes. Quantitative ERP cards identify their source and can open its records.
+Documents can include comparison tables, labelled values and literal code. Session
+history retains questions and operation receipts. Save a live analysis to reopen it
+after reloading the page.
+
+**Saved reports and dashboards** keeps the query definition. The owner can share it
+with an internal group. Each reader refreshes and opens its source with their own
+ERP permissions. Use the native list export action to export source records.
+
 ### Signed provider callbacks
 
 A server can accept provider deliveries at `POST /erp/callback/<binding>`. Configure each

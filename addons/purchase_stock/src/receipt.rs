@@ -520,6 +520,7 @@ impl PurchaseOrderReceipt {
 
     /// Authorize the entire order before the base confirmation validates its lines.
     #[method(override)]
+    #[rpc(effect = write, assistant = offer)]
     async fn button_confirm(
         this: &RecordSet<PurchaseOrder>,
         tx: &mut Transaction,

@@ -1,15 +1,32 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { conversationHistory, locateSubmission, type RpcLike } from "./session-contract.js";
+import { operations, type Operation } from "./operations.js";
+
 export interface AssistantMessage {
+  readonly operations?: readonly Operation[];
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly state: "ready" | "pending" | "error";
   readonly canvas?: unknown;
+  readonly canvases?: readonly unknown[];
+}
+
+export function messageCanvases(message: AssistantMessage): readonly unknown[] {
+  return message.canvases ?? (message.canvas ? [message.canvas] : []);
 }
 
 export interface AssistantSession {
+  readonly workspaceActive: boolean;
+  attachWorkspace(focusChat: () => void, showArtifact: (artifact: unknown) => void): () => void;
+  focusWorkspaceChat(): boolean;
+  showCanvas(artifact: unknown): void;
   readonly messages: readonly AssistantMessage[];
   readonly busy: boolean;
   readonly persistenceWarning: string;
+  readonly conversationId: number | undefined;
+  resume(id: number): Promise<void>;
+  startNew(): void;
+  resumeOperation(approval: number): Promise<Operation>;
   send(prompt: string, providerText?: string): Promise<void>;
   subscribe(changed: () => void): () => void;
   subscribeDraft(changed: (text: string) => void): () => void;
@@ -18,7 +35,7 @@ export interface AssistantSession {
 }
 
 interface DockState { mode: "closed" | "expanded" | "minimized"; draft: string; scroll: number }
-interface HistoryPolicy { turns: number; bytes: number; messageBytes: number }
+interface HistoryPolicy { savedSessions?: boolean; turns: number; bytes: number; messageBytes: number }
 interface Options { userId?: number; request?: typeof fetch; history: HistoryPolicy }
 const encoder = new TextEncoder();
 
@@ -31,6 +48,7 @@ export function readHistoryPolicy(raw: unknown): HistoryPolicy {
     return value;
   }
   return {
+    ...(raw["saved_sessions"] === true && { savedSessions: true }),
     turns: bound(raw["turns"], 1, 200),
     bytes: bound(raw["bytes"], 4096, 2097152),
     messageBytes: bound(raw["message_bytes"], 1, 32768),
@@ -83,7 +101,14 @@ export function assistantSession(rpcKey: object, company: number, token: string,
     catch { warning = "This browser cannot save the chat for a page reload."; }
   }
 
-  const rawMessages = read("messages");
+  const savedId = read("conversation");
+  let conversationId = typeof savedId === "number" && Number.isSafeInteger(savedId) && savedId > 0 ? savedId : undefined;
+  const storedSubmission = read("submission");
+  let submission = typeof storedSubmission === "string" && /^[a-f0-9-]{36}$/.test(storedSubmission) ? storedSubmission : undefined;
+  let retryText: string | undefined;
+  let loading = false;
+  const rpc = "call" in rpcKey && typeof rpcKey.call === "function" ? rpcKey as RpcLike : undefined;
+  const rawMessages = conversationId || policy.savedSessions ? null : read("messages");
   let entries: AssistantMessage[] = [];
   if (Array.isArray(rawMessages) && rawMessages.every(message)) {
     entries = rawMessages.map(item => item.state === "pending"
@@ -94,6 +119,9 @@ export function assistantSession(rpcKey: object, company: number, token: string,
   const subscribers = new Set<() => void>();
   const draftSubscribers = new Set<(text: string) => void>();
   let pending: AbortController | undefined;
+  let requestedCanvas: unknown;
+  // A staged action can mount before the shell disposes the previous workspace.
+  const workspaces: {focusChat: () => void; showArtifact: (artifact:unknown) => void}[] = [];
   let trimmed = read("truncated") === true;
   let currentExchangeTooLarge = false;
   function retainRecent(): void {
@@ -121,7 +149,7 @@ export function assistantSession(rpcKey: object, company: number, token: string,
       }
       entries = entries.slice(start);
     }
-    save("messages", entries);
+    save("messages", conversationId || policy.savedSessions ? [] : entries);
   }
   retainRecent();
   const publish = () => {
@@ -130,7 +158,81 @@ export function assistantSession(rpcKey: object, company: number, token: string,
   };
   const session: AssistantSession = {
     get messages() { return entries; },
-    get busy() { return Boolean(pending); },
+    get workspaceActive() { return workspaces.length > 0; },
+    attachWorkspace(focusChat, showArtifact) {
+      const view = {focusChat, showArtifact};
+      workspaces.push(view);
+      session.updateDock({mode:"closed"});
+      for (const notify of subscribers) notify();
+      if (requestedCanvas !== undefined) {
+        showArtifact(requestedCanvas);
+        requestedCanvas = undefined;
+      }
+      return () => {
+        const index = workspaces.indexOf(view);
+        if (index < 0) return;
+        workspaces.splice(index, 1);
+        for (const notify of subscribers) notify();
+      };
+    },
+    focusWorkspaceChat() {
+      const workspace = workspaces.at(-1);
+      if (!workspace) return false;
+      workspace.focusChat();
+      return true;
+    },
+    showCanvas(artifact) {
+      if (ended) return;
+      const workspace = workspaces.at(-1);
+      if (workspace) workspace.showArtifact(artifact);
+      else requestedCanvas = artifact;
+    },
+    get busy() { return Boolean(pending) || loading; },
+    get conversationId() { return conversationId; },
+    startNew() {
+      if (pending || loading || ended) return;
+      submission = retryText = undefined; save("submission", null);
+      requestedCanvas = undefined; conversationId = undefined; save("conversation", null);
+      trimmed = false; save("truncated", false); warning = ""; entries = [];
+      session.updateDock({draft:""}); publish();
+    },
+    async resume(id) {
+      if (pending || loading || ended) throw new Error("Wait for the current request to finish.");
+      if (!rpc || !Number.isSafeInteger(id) || id <= 0) throw new Error("Saved conversation unavailable.");
+      loading = true; publish();
+      try {
+        const rows = await conversationHistory(rpc,id,company);
+        const restored = rows.map((row): AssistantMessage => {
+          if (!record(row) || (row["role"] !== "user" && row["role"] !== "assistant") || typeof row["text"] !== "string")
+            throw new Error("Invalid saved message.");
+          return {role:row["role"],text:row["text"],state:"ready", ...(row["operations"] !== undefined && {operations:operations(row["operations"])})};
+        });
+        if (!ended) {
+          const switching = conversationId !== id;
+          entries = restored; conversationId = id; save("conversation",id); warning = "";
+          trimmed = false; save("truncated",false); if (switching) session.updateDock({draft:""});
+        }
+      } finally { loading = false; if (!ended) publish(); }
+    },
+    async resumeOperation(approval) {
+      if (ended) throw new Error("This session has ended.");
+      const active = conversationId;
+      const response = await (options.request ?? globalThis.fetch)("/erp/ai/assistant/resume", {
+        method:"POST", credentials:"same-origin", redirect:"error", cache:"no-store",
+        headers:{"Content-Type":"application/json","X-CSRF-Token":token},
+        body:JSON.stringify({company_id:company,approval_request_id:approval}),
+      });
+      const value:unknown = response.headers.get("content-type")?.includes("application/json") ? await response.json() : null;
+      if (!response.ok) throw new Error(record(value) && typeof value["message"] === "string" ? value["message"] : "Could not check approval.");
+      const updated = { ...operations([value])[0]!, approval_request_id: approval };
+      if (!ended && active === conversationId) {
+        entries = entries.map(message => message.operations?.some(item => item.approval_request_id === approval)
+          ? {...message, operations:message.operations.map(item => item.approval_request_id === approval ? updated : item)}
+          : message);
+        publish();
+      }
+      return updated;
+    },
     get persistenceWarning() {
       if (warning) return warning;
       if (currentExchangeTooLarge) return "This exchange is too large to restore after a reload.";
@@ -157,14 +259,14 @@ export function assistantSession(rpcKey: object, company: number, token: string,
     },
     async send(value, providerText) {
       const prompt = value.trim();
-      if (!prompt || pending || ended || !token || !Number.isSafeInteger(company) || company <= 0) return;
+      if (!prompt || pending || loading || ended || !token || !Number.isSafeInteger(company) || company <= 0) return;
       pending = new AbortController();
       // The transcript the tab already trimmed to the server policy, without pending or failed
       // exchanges: a completed question is resent only together with its completed, resendable
       // reply, so the history stays strictly alternating (the Anthropic family refuses adjacent
       // same-role messages) and never leaks a question the provider never answered.
       const history: { role: "user" | "assistant"; text: string }[] = [];
-      for (let i = 0; i < entries.length; i++) {
+      for (let i = 0; !policy.savedSessions && !conversationId && i < entries.length; i++) {
         const item = entries[i]!;
         if (item.state !== "ready" || encoder.encode(item.text).length > policy.messageBytes) continue;
         if (item.role === "user") {
@@ -177,11 +279,22 @@ export function assistantSession(rpcKey: object, company: number, token: string,
       entries.push({ role: "user", text: prompt, state: "ready" }, { role: "assistant", text: "Waiting for reply…", state: "pending" });
       publish();
       let reply: AssistantMessage;
+      const text = providerText ?? prompt;
+      const durable = Boolean(policy.savedSessions && options.userId);
+      let requestId = (conversationId || ((policy.savedSessions || !history.length) && options.userId)) ? crypto.randomUUID().toString() : undefined;
+      if (durable && requestId) {
+        if (retryText === text && submission) requestId = submission;
+        retryText = text;
+        submission = requestId;
+        save("submission", requestId);
+      }
       try {
         const response = await (options.request ?? globalThis.fetch)("/erp/ai/assistant/turn", {
           method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
           headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
-          body: JSON.stringify({ message: providerText ?? prompt, company_id: company, history }), signal: pending.signal,
+          body: JSON.stringify({ message: text, company_id: company,
+            ...(conversationId ? {session_id:conversationId} : {history:policy.savedSessions ? [] : history}),
+            ...(requestId && {request_id:requestId}) }), signal: pending.signal,
         });
         const data: unknown = response.headers.get("content-type")?.includes("application/json") ? await response.json() : null;
         if (!response.ok) {
@@ -189,8 +302,20 @@ export function assistantSession(rpcKey: object, company: number, token: string,
           throw new Error(reason ? reason[0]!.toUpperCase() + reason.slice(1) : "The assistant could not return a reply.");
         }
         if (!record(data) || typeof data["text"] !== "string" || !data["text"].trim()) throw new Error("The provider returned an empty or invalid reply.");
-        const canvas = record(data) && data["canvas"] !== undefined ? data["canvas"] : undefined;
-        reply = { role: "assistant", text: data["text"], state: "ready", canvas };
+        const canvases = data["canvases"];
+        if (canvases !== undefined && (!Array.isArray(canvases) || !canvases.length || canvases.length > 12 ||
+            !canvases.every(value => record(value) && typeof value["canvas_type"] === "string"))) {
+          throw new Error("Invalid Canvas outputs.");
+        }
+        if (data["session_id"] !== undefined) {
+          const id = data["session_id"];
+          if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0 || (conversationId && conversationId !== id))
+            throw new Error("Invalid conversation receipt.");
+          if (!ended) { conversationId = id; save("conversation",id); }
+        }
+        if (durable && !ended) { submission = retryText = undefined; save("submission", null); }
+        reply = { role: "assistant", text: data["text"], state: "ready", ...(Array.isArray(canvases) ? {canvases} : {canvas:data["canvas"]}),
+          ...(data["operations"] !== undefined && {operations:operations(data["operations"])}) };
       } catch (error) {
         reply = { role: "assistant", state: "error", text: error instanceof TypeError ? "Connection lost. The provider may already have processed this question."
           : error instanceof Error ? error.message : "The assistant could not return a reply." };
@@ -199,8 +324,29 @@ export function assistantSession(rpcKey: object, company: number, token: string,
     },
   };
   cache.set(id, session);
+  if ((conversationId || submission) && rpc) {
+    const restore = async () => {
+      let id = conversationId;
+      if (submission) {
+        loading = true;
+        try { id = await locateSubmission(rpc,submission,company) ?? conversationId; }
+        finally { loading = false; }
+      }
+      if (ended) return;
+      if (id) {
+        await session.resume(id);
+        submission = retryText = undefined; save("submission", null);
+      } else {
+        warning = "No saved receipt was found for the interrupted request. Check History before repeating it.";
+        publish();
+      }
+    };
+    void restore().catch(() => {
+      if (!ended) { warning = "This conversation could not be restored. Open History to retry."; publish(); }
+    });
+  }
   window.addEventListener("erp:session-ended", () => {
-    ended = true; pending?.abort(); pending = undefined; entries = []; dock = emptyDock();
+    ended = true; workspaces.length = 0; requestedCanvas = undefined; pending?.abort(); pending = undefined; entries = []; dock = emptyDock();
     cache.delete(id);
     for (const notify of draftSubscribers) notify("");
     draftSubscribers.clear();

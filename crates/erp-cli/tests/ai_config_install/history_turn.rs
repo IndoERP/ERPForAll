@@ -154,7 +154,7 @@ fn resent_history_reaches_the_provider_and_oversized_history_is_refused() {
         assert_eq!(first.status, 200, "{}", first.body);
         assert_eq!(
             serde_json::from_str::<Value>(&first.body).unwrap(),
-            json!({"text":"First answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3}})
+            json!({"text":"First answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3,"round_trips":1,"tool_calls":0}})
         );
         first_provider.await.unwrap();
 
@@ -185,7 +185,7 @@ fn resent_history_reaches_the_provider_and_oversized_history_is_refused() {
         assert_eq!(second.status, 200, "{}", second.body);
         assert_eq!(
             serde_json::from_str::<Value>(&second.body).unwrap(),
-            json!({"text":"Second answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3}})
+            json!({"text":"Second answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3,"round_trips":1,"tool_calls":0}})
         );
         second_provider.await.unwrap();
 

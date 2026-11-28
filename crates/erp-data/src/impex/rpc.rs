@@ -10,6 +10,28 @@ use erp_orm::{Env, Operation, Records, Transaction};
 
 use super::{ExportRights, MAX_ROWS};
 
+/// Handle validated JSON-2 input in the transaction admitted for the native load.
+pub type RpcImportFn = for<'a> fn(
+    &'a mut Transaction,
+    &'a Records,
+    &'a [&'a str],
+    super::ValueRows<'a>,
+) -> BoxFuture<'a, Result<super::LoadResult>>;
+
+/// Optional scoped behavior for an admitted native load. Only a call explicitly carrying
+/// the registered context key enters the adapter, in the caller's transaction and environment.
+pub struct RpcImportAdapter {
+    /// RPC context key activating this implementation.
+    pub context_key: &'static str,
+    /// Delegate to the shared row loader, with any required transaction-bound tracking.
+    pub load: RpcImportFn,
+}
+
+/// Optional native import hooks contributed by the server composition.
+#[erp_orm::linkme::distributed_slice]
+#[linkme(crate = erp_orm::linkme)]
+pub static RPC_IMPORT_ADAPTERS: [RpcImportAdapter];
+
 const MAX_COLUMNS: usize = 1_000;
 const MAX_EXPORT_FIELDS: usize = 1_000;
 
@@ -65,7 +87,18 @@ fn bind_load<'a>(
         let rows = super::ValueRows::validate(&data, MAX_ROWS)?;
 
         let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
-        let result = super::load_rows(&records, tx, &field_refs, rows).await?;
+        let mut matching = RPC_IMPORT_ADAPTERS
+            .iter()
+            .filter(|adapter| records.env().context().contains(adapter.context_key));
+        let result = match (matching.next(), matching.next()) {
+            (None, _) => super::load_rows(&records, tx, &field_refs, rows).await?,
+            (Some(adapter), None) => (adapter.load)(tx, &records, &field_refs, rows).await?,
+            _ => {
+                return Err(
+                    Error::validation("This import requested conflicting workflows.").into(),
+                );
+            }
+        };
         Ok(result.to_value())
     })
 }

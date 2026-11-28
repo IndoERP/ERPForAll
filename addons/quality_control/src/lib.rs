@@ -839,7 +839,7 @@ impl QualityAlert {
     }
 
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_confirm(
         this: &RecordSet<QualityAlert>,
         tx: &mut Transaction,
@@ -873,7 +873,7 @@ impl QualityAlert {
     }
 
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_solve(this: &RecordSet<QualityAlert>, tx: &mut Transaction) -> Result<()> {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
@@ -1147,6 +1147,7 @@ impl StockPickingQuality {
 
     /// Generate matching `quality.check` records whenever a transfer is confirmed.
     #[method(override)]
+    #[rpc(effect = write, assistant = offer)]
     async fn action_confirm(
         this: &RecordSet<StockPicking>,
         tx: &mut Transaction,

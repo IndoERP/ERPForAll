@@ -117,6 +117,7 @@ impl DirectBill {
     /// share-locked, so a cancel of one of them at the same time waits for the posting or fails.
     /// Nothing about the order is named: the poster may not read it.
     #[method(override)]
+    #[rpc(effect = write, assistant = offer)]
     async fn action_post(
         this: &RecordSet<AccountMove>,
         tx: &mut Transaction,

@@ -262,7 +262,7 @@ impl StockPicking {
     /// Transfers with
     /// no draft move are refused by name.
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn action_confirm(
         this: &RecordSet<StockPicking>,
         tx: &mut Transaction,

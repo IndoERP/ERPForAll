@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { csvCell } from "./csv.js";
 
 export type PivotMeasure = {
   key: string;
@@ -179,11 +180,11 @@ export function renderPivotTable(spec: PivotSpec): HTMLElement {
   function exportToCsv() {
     const groups = computeGroups();
     const headers = [activeDimension, ...measures.map(m => m.label)];
-    const csvLines = [headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",")];
+    const csvLines = [headers.map(csvCell).join(",")];
 
     for (const g of groups) {
       const row = [g.groupKey, ...measures.map(m => g.subtotals[m.key] ?? 0)];
-      csvLines.push(row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","));
+      csvLines.push(row.map(csvCell).join(","));
     }
 
     const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="implementation_import_list" model="ir.ui.view">
+    <field name="name">ai.implementation.import.list</field><field name="model">ai.implementation.import</field>
+    <field name="arch" type="xml">
+      <list string="Import receipts" create="0" edit="0" delete="0">
+        <field name="create_date"/><field name="model_name"/><field name="record_count"/><field name="create_uid"/>
+      </list>
+    </field>
+  </record>
+  <record id="implementation_step_list" model="ir.ui.view">
+    <field name="name">ai.implementation.step.list</field>
+    <field name="model">ai.implementation.step</field>
+    <field name="arch" type="xml">
+      <list string="Implementation steps">
+        <field name="sequence"/><field name="name"/><field name="project_id"/>
+        <field name="owner_id"/><field name="state" widget="badge"/>
+      </list>
+    </field>
+  </record>
+  <record id="implementation_step_form" model="ir.ui.view">
+    <field name="name">ai.implementation.step.form</field>
+    <field name="model">ai.implementation.step</field>
+    <field name="arch" type="xml">
+      <form string="Implementation step">
+        <header>
+          <button name="action_open_data" type="object" string="Open records" invisible="not has_records"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name"/></h1></div>
+          <group>
+            <group string="Assignment"><field name="project_id"/><field name="owner_id"/><field name="state"/></group>
+            <group string="Dependencies"><field name="addon" readonly="1"/><field name="has_records" invisible="1"/><field name="prerequisites" readonly="1"/></group>
+          </group>
+          <notebook>
+            <page string="Setup and acceptance" name="setup">
+              <group><field name="setup"/><field name="acceptance"/><field name="evidence"/></group>
+            </page>
+            <page string="Import receipts" name="imports">
+              <field name="import_ids" readonly="1"/>
+            </page>
+            <page string="Fit-gap blueprint" name="blueprint">
+              <group><field name="requirement"/><field name="standard_feature"/><field name="gap"/><field name="example"/></group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="implementation_step_search" model="ir.ui.view">
+    <field name="name">ai.implementation.step.search</field><field name="model">ai.implementation.step</field>
+    <field name="arch" type="xml"><search>
+      <field name="name"/><field name="project_id"/><field name="owner_id"/><field name="addon"/>
+      <filter name="waiting" string="Awaiting decision" domain="[('state','=','waiting')]"/>
+      <filter name="gaps" string="Fit-gap" domain="[('state','=','gap')]"/>
+    </search></field>
+  </record>
+  <record id="implementation_project_list" model="ir.ui.view">
+    <field name="name">ai.implementation.project.list</field><field name="model">ai.implementation.project</field>
+    <field name="arch" type="xml">
+      <list string="Implementation projects"><field name="name"/><field name="owner_id"/><field name="company_id"/></list>
+    </field>
+  </record>
+  <record id="implementation_project_form" model="ir.ui.view">
+    <field name="name">ai.implementation.project.form</field><field name="model">ai.implementation.project</field>
+    <field name="arch" type="xml">
+      <form string="Implementation project">
+        <header><button name="action_refresh_steps" type="object" string="Add installed domains" class="oe_highlight"/><button name="action_open_settings" type="object" string="Settings" groups="base.group_system"/></header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name"/></h1></div>
+          <group><field name="company_id"/><field name="owner_id"/></group>
+          <notebook>
+            <page string="Implementation steps" name="steps"><field name="step_ids"/></page>
+            <page string="Requirements" name="requirements"><group><field name="requirements"/></group></page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="implementation_projects" model="ir.actions.act_window">
+    <field name="name">Implementation Projects</field><field name="res_model">ai.implementation.project</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="implementation_project_list"/>
+  </record>
+  <record id="implementation_steps" model="ir.actions.act_window">
+    <field name="name">Implementation Steps</field><field name="res_model">ai.implementation.step</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="implementation_step_list"/>
+    <field name="search_view_id" ref="implementation_step_search"/>
+  </record>
+  <menuitem id="chat_menu" name="Assistant" parent="workspace_menu" action="workspace_action" groups="base.group_user" sequence="10"/>
+  <menuitem id="implementation_menu" name="Implementation Projects" parent="workspace_menu" action="implementation_projects" groups="ai_base.group_implementation" sequence="20"/>
+  <menuitem id="implementation_steps_menu" name="Implementation Steps" parent="workspace_menu" action="implementation_steps" groups="ai_base.group_implementation" sequence="30"/>
+</erp>

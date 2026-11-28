@@ -287,7 +287,7 @@ impl HrDepartment {
     }
 
     #[method]
-    #[rpc(effect = read)]
+    #[rpc(effect = read, assistant = offer)]
     async fn action_open_employees(
         this: &RecordSet<HrDepartment>,
         tx: &mut Transaction,

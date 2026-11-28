@@ -29,11 +29,10 @@ pub use file::{
     MAX_FILE_COLUMNS, MAX_FILE_ROWS, MAX_TOTAL_TEXT_BYTES, import_sheet_names, read_import_file,
     read_import_file_with_positions,
 };
-pub(crate) use load::load_rows;
-pub use load::{DEFAULT_BATCH_SIZE, MAX_ROWS, load};
+pub use load::{DEFAULT_BATCH_SIZE, MAX_ROWS, load, load_rows};
 pub use message::{ImportMessage, LoadResult, MessageType, RowSpan};
-pub(crate) use row::ValueRows;
-pub use rpc::GroupExportRights;
+pub use row::{RowSource, ValueRows};
+pub use rpc::{GroupExportRights, RPC_IMPORT_ADAPTERS, RpcImportAdapter, RpcImportFn};
 
 use erp_fields::Result;
 use erp_orm::{Records, Transaction};

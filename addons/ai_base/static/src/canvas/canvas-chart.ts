@@ -50,6 +50,19 @@ export function normalizeSeries(input: unknown): ChartPoint[] {
   return [];
 }
 
+/** Scale signed values onto the available plot while keeping a visible zero baseline. */
+function verticalScale(series: ChartPoint[], height: number): (value: number) => number {
+  let minimum = 0, maximum = 0;
+  for (const point of series) {
+    minimum = Math.min(minimum, point.value);
+    maximum = Math.max(maximum, point.value);
+  }
+  // Normalize before subtracting the extremes to avoid overflow in wide signed ranges.
+  const magnitude = Math.max(-minimum, maximum, 1);
+  const low = minimum / magnitude, high = maximum / magnitude;
+  return value => height - 12 - ((value / magnitude - low) / (high - low || 1)) * (height - 42);
+}
+
 /**
  * Render an interactive SVG bar chart with animated transitions and tooltips.
  */
@@ -64,14 +77,16 @@ export function renderBarChart(spec: ChartSpec): HTMLElement {
     return container;
   }
 
-  const maxValue =
-    Math.max(...series.map(s => (Number.isFinite(s.value) ? Math.abs(s.value) : 0))) || 1;
   const height = 240;
-  const barWidth = Math.max(24, Math.min(60, Math.floor(480 / series.length) - 12));
-  const svgWidth = Math.max(500, series.length * (barWidth + 16) + 60);
+  const yAt = verticalScale(series, height);
+  const baseline = yAt(0);
+  const svgWidth = Math.max(338, series.length * 90 + 24);
+  const stepX = (svgWidth - 24) / series.length;
+  const barWidth = Math.min(60, stepX * 0.6);
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${svgWidth} ${height + 60}`);
+  svg.setAttribute("viewBox", `0 0 ${svgWidth} ${height + 40}`);
+  if (series.length > 3) svg.style.minWidth = `${svgWidth}px`;
   svg.setAttribute("width", "100%");
   svg.setAttribute("height", "100%");
   svg.setAttribute("role", "img");
@@ -80,18 +95,18 @@ export function renderBarChart(spec: ChartSpec): HTMLElement {
   // Grid line at 0
   const baseLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
   baseLine.setAttribute("x1", "40");
-  baseLine.setAttribute("y1", String(height));
+  baseLine.setAttribute("y1", String(baseline));
   baseLine.setAttribute("x2", String(svgWidth - 20));
-  baseLine.setAttribute("y2", String(height));
+  baseLine.setAttribute("y2", String(baseline));
   baseLine.setAttribute("stroke", "var(--line)");
   baseLine.setAttribute("stroke-width", "1");
   svg.append(baseLine);
 
   series.forEach((point, i) => {
-    const x = 50 + i * (barWidth + 16);
-    const val = Number.isFinite(point.value) ? Math.abs(point.value) : 0;
-    const barHeight = Math.max(4, Math.round((val / maxValue) * (height - 30)));
-    const y = height - barHeight;
+    const x = 12 + (i + 0.5) * stepX - barWidth / 2;
+    const valueY = yAt(point.value);
+    const barHeight = Math.abs(valueY - baseline);
+    const y = Math.min(valueY, baseline);
     const color = point.color || COLORS[i % COLORS.length] || "var(--accent)";
 
     // Bar rectangle
@@ -107,7 +122,7 @@ export function renderBarChart(spec: ChartSpec): HTMLElement {
     // Value label on top
     const textVal = document.createElementNS("http://www.w3.org/2000/svg", "text");
     textVal.setAttribute("x", String(x + barWidth / 2));
-    textVal.setAttribute("y", String(y - 6));
+    textVal.setAttribute("y", String(point.value < 0 ? valueY + 12 : valueY - 6));
     textVal.setAttribute("text-anchor", "middle");
     textVal.setAttribute("font-size", "11");
     textVal.setAttribute("font-weight", "600");
@@ -149,14 +164,15 @@ export function renderLineChart(spec: ChartSpec): HTMLElement {
     return container;
   }
 
-  const maxValue =
-    Math.max(...series.map(s => (Number.isFinite(s.value) ? Math.abs(s.value) : 0))) || 1;
   const height = 240;
-  const stepX = Math.max(64, Math.floor(480 / Math.max(1, series.length - 1)));
-  const svgWidth = Math.max(500, (series.length - 1) * stepX + 120);
+  const yAt = verticalScale(series, height);
+  const baseline = yAt(0);
+  const svgWidth = Math.max(338, series.length * 90 + 24);
+  const stepX = (svgWidth - 24) / series.length;
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${svgWidth} ${height + 60}`);
+  svg.setAttribute("viewBox", `0 0 ${svgWidth} ${height + 40}`);
+  if (series.length > 3) svg.style.minWidth = `${svgWidth}px`;
   svg.setAttribute("width", "100%");
   svg.setAttribute("height", "100%");
   svg.setAttribute("role", "img");
@@ -165,18 +181,16 @@ export function renderLineChart(spec: ChartSpec): HTMLElement {
   // Grid line at 0
   const baseLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
   baseLine.setAttribute("x1", "40");
-  baseLine.setAttribute("y1", String(height));
+  baseLine.setAttribute("y1", String(baseline));
   baseLine.setAttribute("x2", String(svgWidth - 20));
-  baseLine.setAttribute("y2", String(height));
+  baseLine.setAttribute("y2", String(baseline));
   baseLine.setAttribute("stroke", "var(--line)");
   baseLine.setAttribute("stroke-width", "1");
   svg.append(baseLine);
 
   const points = series.map((point, i) => {
-    const x = 60 + i * stepX;
-    const val = Number.isFinite(point.value) ? Math.abs(point.value) : 0;
-    const pointHeight = Math.max(4, Math.round((val / maxValue) * (height - 40)));
-    const y = height - pointHeight;
+    const x = 12 + (i + 0.5) * stepX;
+    const y = yAt(point.value);
     return { x, y, point };
   });
 
@@ -246,7 +260,7 @@ export function renderDonutChart(spec: ChartSpec): HTMLElement {
     return container;
   }
 
-  const total = series.reduce((acc, p) => acc + Math.max(0, p.value), 0) || 1;
+  const total = series.reduce((acc, p) => acc + Math.max(0, p.value), 0);
   const size = 260;
   const radius = 90;
   const circumference = 2 * Math.PI * radius;
@@ -261,7 +275,7 @@ export function renderDonutChart(spec: ChartSpec): HTMLElement {
   let accumulated = 0;
   series.forEach((point, i) => {
     const val = Math.max(0, point.value);
-    const fraction = val / total;
+    const fraction = total > 0 ? val / total : 0;
     const strokeDash = fraction * circumference;
     const offset = -accumulated * circumference;
     const color = point.color || COLORS[i % COLORS.length] || "var(--accent)";

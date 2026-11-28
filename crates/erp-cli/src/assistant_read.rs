@@ -147,7 +147,7 @@ impl RpcCredential for AggregateCredential {
 }
 
 /// Compute group-by aggregates across retail records with an existing browser session and selected company.
-/// Dispatches audited `web_read_group` RPC and returns bounded, labelled result data.
+/// Dispatches the audited grouped-read RPC and returns bounded, labelled result data.
 ///
 /// # Errors
 /// Reports an invalid/expired session, refused model/field, invalid query, or failed audited RPC.
@@ -175,7 +175,7 @@ pub async fn aggregate_records(
     let principal = tx.env().principal().clone();
     tx.rollback().await?;
     drop(tx);
-    let path = format!("/json/2/{}/web_read_group", plan.model());
+    let path = format!("/json/2/{}/{}", plan.model(), plan.rpc_method());
     let bytes = serde_json::to_vec(&plan.rpc_arguments())
         .map_err(|_| Error::internal("Could not encode assistant aggregation."))?;
     let auth = Arc::new(AggregateCredential {
@@ -201,7 +201,7 @@ pub async fn aggregate_records(
         }
         status => {
             return Err(Error::internal(format!(
-                "Audited web_read_group failed with status {status}."
+                "Audited grouped read failed with status {status}."
             )));
         }
     }

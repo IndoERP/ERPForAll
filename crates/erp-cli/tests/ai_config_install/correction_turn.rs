@@ -89,7 +89,7 @@ fn empty_final_reply_is_corrected_before_it_reaches_the_user() {
             )
             .await
             .unwrap();
-        setup.execute("INSERT INTO ai_budget(name,company_id,provider_id,model,period,token_limit,cost_limit,input_rate,output_rate) SELECT 'Company',$1,id,'local-model','day',10000,10000,1000,2000 FROM ai_provider WHERE name='local'",&[&retail.company]).await.unwrap();
+        setup.execute("INSERT INTO ai_budget(name,company_id,provider_id,model,period,token_limit,cost_limit,input_rate,output_rate) SELECT 'Company',$1,id,'local-model','day',50000,50000,1000,2000 FROM ai_provider WHERE name='local'",&[&retail.company]).await.unwrap();
         setup.commit().await.unwrap();
         drop(setup);
         let dbname = db.name().to_owned();
@@ -120,7 +120,7 @@ fn empty_final_reply_is_corrected_before_it_reaches_the_user() {
                 .await;
             })
         };
-        let body = json!({"company_id": retail.company, "message": "Question."}).to_string();
+        let body = json!({"company_id": retail.company, "message": "Question.", "request_id": "23df7958-5ec6-470e-a3e1-15ea67553a39"}).to_string();
         let (cookies, csrf, origin) = (cookies.clone(), csrf.clone(), origin.clone());
         let response = tokio::task::spawn_blocking(move || {
             http::request(
@@ -140,11 +140,37 @@ fn empty_final_reply_is_corrected_before_it_reaches_the_user() {
         .await
         .unwrap();
         assert_eq!(response.status, 200, "{}", response.body);
+        let reply = serde_json::from_str::<Value>(&response.body).unwrap();
+        let session = reply["session_id"].as_i64().unwrap();
+        assert!(session > 0);
         assert_eq!(
-            serde_json::from_str::<Value>(&response.body).unwrap(),
-            json!({"text":"Corrected answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3}})
+            reply,
+            json!({"session_id":session,"text":"Corrected answer.","model":"local-model","usage":{"input_tokens":100,"output_tokens":3,"round_trips":2,"tool_calls":0}})
         );
         first_provider.await.unwrap();
+        let mut tx = retail.installed.begin(SUPERUSER_ID).await.unwrap();
+        let rows=tx.query("SELECT state::text,active_session IS NULL FROM ai_usage WHERE company_id=$1 ORDER BY id",&[&retail.company]).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "Every provider exchange consumes a separate allowance"
+        );
+        assert_eq!(rows[0].get::<_, String>(0), "failed");
+        assert_eq!(rows[1].get::<_, String>(0), "settled");
+        assert!(rows.iter().all(|r| r.get::<_, bool>(1)));
+        // A new request must never observe the lease released with the old transcript.
+        let same_commit = tx
+            .query(
+                "SELECT u.xmin = e.xmin FROM ai_usage u JOIN ai_session_event e ON e.session_id=$1
+             WHERE e.kind='turn_end' AND u.company_id=$2 AND u.state='settled'",
+                &[&session, &retail.company],
+            )
+            .await
+            .unwrap();
+        assert_eq!(same_commit.len(), 1);
+        assert!(same_commit[0].get::<_, bool>(0));
+        tx.rollback().await.unwrap();
+        drop(tx);
         serving.abort();
         let _cancel = serving.await;
         drop(retail);
@@ -192,7 +218,7 @@ fn a_provider_that_keeps_replying_empty_is_refused_after_the_correction_rounds()
             )
             .await
             .unwrap();
-        setup.execute("INSERT INTO ai_budget(name,company_id,provider_id,model,period,token_limit,cost_limit,input_rate,output_rate) SELECT 'Company',$1,id,'local-model','day',10000,10000,1000,2000 FROM ai_provider WHERE name='local'",&[&retail.company]).await.unwrap();
+        setup.execute("INSERT INTO ai_budget(name,company_id,provider_id,model,period,token_limit,cost_limit,input_rate,output_rate) SELECT 'Company',$1,id,'local-model','day',50000,50000,1000,2000 FROM ai_provider WHERE name='local'",&[&retail.company]).await.unwrap();
         setup.commit().await.unwrap();
         drop(setup);
         let dbname = db.name().to_owned();

@@ -706,6 +706,7 @@ export class HumanApp {
       rpc: this.rpc,
       context: this.context,
       assistantContext: this.systrayContext,
+      openRecord: async (model, id) => { if (this.disposeHeader === headerStops) await this.openRelatedRecord(model, id); },
       run: job => this.run(job),
       report: err => this.reportError(err),
       messages: this.messages,

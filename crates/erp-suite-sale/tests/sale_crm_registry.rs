@@ -248,3 +248,27 @@ fn crm_combined_layouts_render_with_the_native_view_contract()
     );
     Ok(())
 }
+
+#[test]
+fn assistant_offers_the_native_quotation_workflow_without_customer_signature() {
+    let registry = std::sync::Arc::new(crm_and_sales(true).build().expect("CRM/Sales composition"));
+    let pool = erp_orm::pool::create_pool(erp_testkit::tokio_postgres::Config::new(), 1)
+        .expect("lazy pool");
+    let orm = erp_orm::Orm::builder(registry, pool)
+        .build()
+        .expect("dispatch");
+    let offered = |model: &str, method: &str| {
+        let id = orm.registry().model_id(model).expect("installed model");
+        orm.exposure().assistant_offered(id, method).is_ok()
+    };
+    assert!(offered("crm.lead", "action_create_quotation"));
+    assert!(offered("sale.order", "action_draft_quotation"));
+    assert!(offered("sale.order", "action_add_quotation_product"));
+    assert!(offered("sale.order", "action_prepare_quotation_email"));
+    assert!(offered("sale.quotation.send", "action_send_mail"));
+    assert!(offered("sale.order", "action_quotation_email_status"));
+    assert!(!offered(
+        "sale.order.sign.wizard",
+        "action_sign_and_confirm"
+    ));
+}

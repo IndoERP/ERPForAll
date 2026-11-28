@@ -30,6 +30,7 @@ export interface SystrayEnvironment {
   /** Opens a checked activity window action as a list; `null` opens the user's own "My Activities" list. */
   openActivities?: (action: ActivityWindowAction | null) => Promise<void>;
   /** Opens the current user's approval review queue. */
+  openRecord?: (model: string, id: number) => Promise<void>;
   openApprovals?: () => void | Promise<void>;
   /** Personal Discuss notifications, available when Discuss is installed. */
   discussNotifications?: DiscussNotifications;

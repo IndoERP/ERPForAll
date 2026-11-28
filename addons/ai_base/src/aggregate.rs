@@ -103,7 +103,7 @@ pub fn aggregate_records_spec() -> Result<ToolSpec> {
             },
             "groupby": {
                 "type": "array",
-                "description": "List of field names to group by (e.g. ['partner_id'] or ['state'])",
+                "description": "Group fields such as state, partner_id or date_order:month; use [] for a whole-query KPI. Group monetary measures by their currency field or filter to one currency.",
                 "items": {"type": "string"}
             },
             "aggregates": {
@@ -162,15 +162,36 @@ impl AggregatePlan {
         &self.model
     }
 
-    /// The arguments for the standard `web_read_group` binder.
+    pub(crate) fn columns(&self) -> impl Iterator<Item = &str> {
+        self.groupby
+            .iter()
+            .chain(&self.aggregates)
+            .map(String::as_str)
+    }
+
+    /// Multi-axis analytics use the flat pivot query; the list API groups only the first axis.
+    pub fn rpc_method(&self) -> &'static str {
+        if self.groupby.len() != 1 || self.order.contains(':') {
+            "formatted_read_group"
+        } else {
+            "web_read_group"
+        }
+    }
+
+    /// The arguments for the standard list or pivot RPC binder.
     pub fn rpc_arguments(&self) -> Json {
         let mut map = serde_json::Map::new();
         map.insert("domain".to_string(), self.domain.clone());
         map.insert("groupby".to_string(), json!(self.groupby));
-        if !self.aggregates.is_empty() {
-            map.insert("aggregates".to_string(), json!(self.aggregates));
+        let mut aggregates = self.aggregates.clone();
+        if self.rpc_method() == "formatted_read_group" {
+            aggregates.push("__count".to_owned());
         }
-        map.insert("limit".to_string(), json!(self.limit));
+        map.insert("aggregates".to_owned(), json!(aggregates));
+        map.insert(
+            "limit".to_string(),
+            json!(self.limit + usize::from(self.rpc_method() == "formatted_read_group")),
+        );
         map.insert("offset".to_string(), json!(0));
         if !self.order.is_empty() {
             map.insert("order".to_string(), json!(self.order));
@@ -189,36 +210,55 @@ impl AggregatePlan {
     pub fn project(&self, call: &ToolCall, reply: &Json) -> Result<ToolResult> {
         let malformed =
             || Error::internal("Unexpected web_read_group result for assistant aggregation.");
-        let groups = reply["groups"].as_array().ok_or_else(malformed)?;
-        let total_groups = reply["length"].as_u64().unwrap_or(groups.len() as u64);
-
+        let (groups, total_groups) = if self.rpc_method() == "formatted_read_group" {
+            let groups = reply
+                .as_array()
+                .filter(|v| v.len() <= self.limit + 1)
+                .ok_or_else(malformed)?;
+            (
+                groups,
+                (groups.len() <= self.limit).then_some(groups.len() as u64),
+            )
+        } else {
+            let groups = reply["groups"]
+                .as_array()
+                .filter(|v| v.len() <= self.limit)
+                .ok_or_else(malformed)?;
+            let length = reply["length"]
+                .as_u64()
+                .filter(|&n| n >= groups.len() as u64)
+                .ok_or_else(malformed)?;
+            (groups, Some(length))
+        };
+        let truncated = total_groups.is_none_or(|n| n > self.limit as u64);
         let mut projected_groups = Vec::new();
-        for group in groups {
+        for group in groups.iter().take(self.limit) {
             let obj = group.as_object().ok_or_else(malformed)?;
             let mut row = Map::new();
-
-            // Extract groupby values (scalars or [id, display_name])
             for g in &self.groupby {
-                if let Some(val) = obj.get(g) {
-                    row.insert(g.clone(), val.clone());
-                }
+                row.insert(g.clone(), obj.get(g).ok_or_else(malformed)?.clone());
             }
-
-            // Extract aggregate metrics (e.g. amount_total, __count, etc.)
             for agg in &self.aggregates {
-                let clean_name = agg.split(':').next().unwrap_or(agg.as_str());
-                if let Some(val) = obj.get(clean_name).or_else(|| obj.get(agg.as_str())) {
-                    row.insert(clean_name.to_string(), val.clone());
+                let value = obj.get(agg).ok_or_else(malformed)?;
+                row.insert(agg.clone(), value.clone());
+                // Retain the original short name only when it denotes exactly one measure.
+                let short = agg.split(':').next().unwrap_or(agg);
+                if !row.contains_key(short)
+                    && self
+                        .aggregates
+                        .iter()
+                        .filter(|other| other.split(':').next() == Some(short))
+                        .count()
+                        == 1
+                {
+                    row.insert(short.to_owned(), value.clone());
                 }
             }
-            if let Some(count) = obj.get("__count") {
-                row.insert("__count".to_string(), count.clone());
-            }
-
+            row.insert(
+                "__count".into(),
+                obj.get("__count").ok_or_else(malformed)?.clone(),
+            );
             projected_groups.push(Json::Object(row));
-            if projected_groups.len() >= self.limit {
-                break;
-            }
         }
 
         let source = DataSource::new(name()?, Some(self.model.clone()), Vec::new())
@@ -228,6 +268,9 @@ impl AggregatePlan {
             "model": self.model,
             "groups": projected_groups,
             "total_groups": total_groups,
+            "truncated":truncated,
+            "query": {"model":self.model,"domain":self.domain,"groupby":self.groupby,
+                "aggregates":self.aggregates,"order":self.order,"limit":self.limit},
             "groupby": self.groupby,
             "aggregates": self.aggregates
         });
@@ -258,9 +301,54 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
     if !crate::ordinary_user(&env) {
         return Err(denied());
     }
+    prepare_authorized(tx, call).await
+}
+
+// MCP may save a definition only for sources its own bearer could aggregate.
+// The returned plan is always checked again under the actual viewer before any read.
+pub(crate) async fn prepare_saved(tx: &mut Transaction, call: &ToolCall) -> Result<AggregatePlan> {
+    let env = tx.env();
+    if !crate::ordinary_user(&env) {
+        let p = env.principal();
+        let model = call.arguments()["model"].as_str().ok_or_else(invalid)?;
+        let plan = if p.kind() == erp_sdk::PrincipalKind::Agent
+            && p.actor().is_none()
+            && !env.is_superuser()
+            && p.scope().is_some_and(|s| s.models().allows(model))
+        {
+            prepare_authorized(tx, call).await?
+        } else {
+            return Err(denied());
+        };
+        let method = plan.rpc_method();
+        if !p
+            .scope()
+            .is_some_and(|scope| scope.methods().allows(method))
+        {
+            return Err(denied());
+        }
+        return Ok(plan);
+    }
+    prepare_authorized(tx, call).await
+}
+
+async fn prepare_authorized(tx: &mut Transaction, call: &ToolCall) -> Result<AggregatePlan> {
+    let env = tx.env();
     let company = env.company()?.ok_or_else(denied)?.get();
     let args = call.arguments().as_object().ok_or_else(invalid)?;
-    if call.name() != TOOL || args.len() < 3 || args.len() > 7 {
+    const KEYS: [&str; 7] = [
+        "model",
+        "domain",
+        "groupby",
+        "group_by",
+        "aggregates",
+        "limit",
+        "order",
+    ];
+    if call.name() != TOOL
+        || args.keys().any(|k| !KEYS.contains(&k.as_str()))
+        || (args.contains_key("group_by") && args.contains_key("groupby"))
+    {
         return Err(invalid());
     }
 
@@ -285,11 +373,13 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
         return Err(denied());
     }
 
-    let limit = args
-        .get("limit")
-        .and_then(Json::as_u64)
-        .and_then(|v| usize::try_from(v).ok())
-        .unwrap_or(20);
+    let limit = match args.get("limit") {
+        Some(raw) => raw
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(invalid)?,
+        None => 20,
+    };
     let max_rows = crate::catalog::limit(tx, ROWS).await?;
     if limit == 0 || limit > max_rows {
         return Err(Error::validation(format!(
@@ -297,22 +387,32 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
         )));
     }
 
-    let empty_arr = vec![];
     let raw_groupby = args
         .get("groupby")
         .or_else(|| args.get("group_by"))
         .and_then(Json::as_array)
-        .unwrap_or(&empty_arr);
+        .ok_or_else(invalid)?;
     let max_groupby = crate::catalog::limit(tx, GROUPBY_FIELDS).await?;
-    if raw_groupby.is_empty() || raw_groupby.len() > max_groupby {
+    if raw_groupby.len() > max_groupby {
         return Err(Error::validation(format!(
-            "aggregate_records groupby must have between 1 and {max_groupby} fields."
+            "aggregate_records groupby may include at most {max_groupby} fields."
         )));
     }
 
     let mut groupby = Vec::new();
     for g in raw_groupby {
-        let name = g.as_str().filter(|s| ident(s)).ok_or_else(invalid)?;
+        let name = g.as_str().ok_or_else(invalid)?;
+        let (field, bucket) = name
+            .split_once(':')
+            .map_or((name, None), |(f, b)| (f, Some(b)));
+        if !ident(field)
+            || bucket.is_some_and(|b| {
+                !matches!(b, "hour" | "day" | "week" | "month" | "quarter" | "year")
+            })
+            || groupby.iter().any(|g| g == name)
+        {
+            return Err(invalid());
+        }
         groupby.push(name.to_string());
     }
 
@@ -353,13 +453,18 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
         {
             return Err(invalid());
         }
-        aggregates.push(text);
+        let spec = format!("{clean_field}:{func}");
+        if aggregates.contains(&spec) {
+            return Err(Error::validation("Aggregate measures must be unique."));
+        }
+        aggregates.push(spec);
     }
 
     let empty_domain = vec![];
     let raw_domain = args
         .get("domain")
-        .and_then(Json::as_array)
+        .map(|d| d.as_array().ok_or_else(invalid))
+        .transpose()?
         .unwrap_or(&empty_domain);
     let max_terms = crate::catalog::limit(tx, TERMS).await?;
     if raw_domain.len() > max_terms {
@@ -368,47 +473,25 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
         )));
     }
 
-    let order = args.get("order").and_then(Json::as_str).unwrap_or("");
+    let order_input = args
+        .get("order")
+        .map(|o| o.as_str().ok_or_else(invalid))
+        .transpose()?
+        .unwrap_or("");
+    let order = normalize_order(order_input, &groupby, &aggregates)?;
     if order.len() > 70 {
         return Err(invalid());
     }
 
-    let order_field = if !order.trim().is_empty() {
-        let mut order_parts = order.split_ascii_whitespace();
-        let ofield = order_parts.next().ok_or_else(invalid)?;
-        if let Some(dir) = order_parts.next()
-            && !dir.eq_ignore_ascii_case("asc")
-            && !dir.eq_ignore_ascii_case("desc")
-        {
-            return Err(invalid());
-        }
-        if order_parts.next().is_some() {
-            return Err(invalid());
-        }
-        let clean_order_field = ofield.split(':').next().unwrap_or(ofield);
-        if !ident(clean_order_field) && ofield != "__count" {
-            return Err(invalid());
-        }
-        Some(clean_order_field.to_string())
-    } else {
-        None
-    };
-
     // Verify fields exist and are accessible on the model
     let mut check_fields: BTreeSet<&str> = BTreeSet::new();
     for g in &groupby {
-        check_fields.insert(g.as_str());
+        check_fields.insert(g.split(':').next().unwrap_or(g));
     }
     for agg in &aggregates {
         let clean = agg.split(':').next().unwrap_or(agg.as_str());
         check_fields.insert(clean);
     }
-    if let Some(ref ofield) = order_field
-        && ofield != "__count"
-    {
-        check_fields.insert(ofield.as_str());
-    }
-
     let operand_limit = crate::catalog::limit(tx, OPERAND).await?;
     for item in raw_domain {
         let triple = item.as_array().ok_or_else(invalid)?;
@@ -455,14 +538,45 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
     };
 
     for f in &groupby {
-        if !is_safe_field(f) {
+        let (field, bucket) = f
+            .split_once(':')
+            .map_or((f.as_str(), None), |(field, bucket)| (field, Some(bucket)));
+        if !is_safe_field(field) {
             return Err(denied());
+        }
+        let date = recs
+            .spec()
+            .field(field)
+            .is_some_and(|field| matches!(field.ty, FieldType::Date | FieldType::Datetime));
+        if date != bucket.is_some()
+            || (bucket == Some("hour")
+                && recs
+                    .spec()
+                    .field(field)
+                    .is_some_and(|field| matches!(field.ty, FieldType::Date)))
+        {
+            return Err(Error::validation(
+                "Date groupings need an appropriate time interval, such as date_order:month.",
+            ));
         }
     }
     for agg in &aggregates {
         let clean = agg.split(':').next().unwrap_or(agg.as_str());
         if !is_safe_field(clean) {
             return Err(denied());
+        }
+        let metadata = recs.spec().field(clean).ok_or_else(denied)?;
+        let operation = agg.split_once(':').ok_or_else(invalid)?.1;
+        validate_measure(&metadata.ty, operation)?;
+        if agg.split(':').nth(1) != Some("count")
+            && let Some(FieldType::Monetary {
+                currency_field: Some(currency),
+            }) = recs.spec().field(clean).map(|f| &f.ty)
+            && !single_currency(&groupby, raw_domain, currency)
+        {
+            return Err(Error::validation(format!(
+                "Group or filter on {currency} before combining currency amounts."
+            )));
         }
     }
     for item in raw_domain {
@@ -474,13 +588,6 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
             return Err(denied());
         }
     }
-    if let Some(ref ofield) = order_field
-        && ofield != "__count"
-        && !is_safe_field(ofield.as_str())
-    {
-        return Err(denied());
-    }
-
     let domain = Json::Array(raw_domain.clone());
     if !raw_domain.is_empty() {
         Domain::from_json(&domain).map_err(|_| invalid())?;
@@ -491,9 +598,122 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<AggregateP
         groupby,
         aggregates,
         domain,
-        order: order.to_string(),
+        order,
         limit,
         company,
         byte_limit: crate::catalog::limit(tx, BYTES).await?,
     })
+}
+
+fn validate_measure(ty: &FieldType, operation: &str) -> Result<()> {
+    let supported = !matches!(ty, FieldType::BigInt)
+        && match operation {
+            "count" => true,
+            "avg" | "sum" => matches!(
+                ty,
+                FieldType::Integer | FieldType::Float { .. } | FieldType::Monetary { .. }
+            ),
+            "bool_and" | "bool_or" => matches!(ty, FieldType::Boolean),
+            "min" | "max" => !matches!(ty, FieldType::Boolean | FieldType::Many2one { .. }),
+            _ => false,
+        };
+    if supported {
+        Ok(())
+    } else {
+        Err(Error::validation(
+            "This aggregation is unsupported for the selected field type.",
+        ))
+    }
+}
+
+// Pivot ordering accepts qualified measures; the single-axis list endpoint orders by bare fields.
+fn normalize_order(raw: &str, groups: &[String], measures: &[String]) -> Result<String> {
+    let mut words = raw.split_ascii_whitespace();
+    let Some(key) = words.next() else {
+        return Ok(String::new());
+    };
+    let direction = words.next().unwrap_or("asc").to_ascii_lowercase();
+    if !matches!(direction.as_str(), "asc" | "desc") || words.next().is_some() {
+        return Err(invalid());
+    }
+    let matched = if key == "__count" || groups.iter().chain(measures).any(|item| item == key) {
+        key
+    } else {
+        let mut matches = groups
+            .iter()
+            .chain(measures)
+            .filter(|item| item.split_once(':').is_some_and(|(field, _)| field == key));
+        let item = matches.next().ok_or_else(invalid)?;
+        if matches.next().is_some() {
+            return Err(Error::validation(
+                "Specify the exact group or measure to order by.",
+            ));
+        }
+        item
+    };
+    Ok(format!("{matched} {direction}"))
+}
+
+pub(crate) fn single_currency(groupby: &[String], domain: &[Json], currency: &str) -> bool {
+    groupby.iter().any(|field| field == currency)
+        || domain.iter().any(|term| {
+            term.as_array().is_some_and(|parts| {
+                parts.len() == 3
+                    && parts[0] == currency
+                    && parts[1] == "="
+                    && parts[2].as_i64().is_some_and(|id| id > 0)
+            })
+        })
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use erp_sdk::ai::ToolCallId;
+    #[test]
+    fn measures_are_checked_against_supported_source_types() {
+        assert!(validate_measure(&FieldType::Integer, "avg").is_ok());
+        assert!(validate_measure(&FieldType::BigInt, "count").is_err());
+        assert!(validate_measure(&FieldType::Boolean, "sum").is_err());
+        assert!(validate_measure(&FieldType::Boolean, "bool_and").is_ok());
+        assert!(validate_measure(&FieldType::Date, "max").is_ok());
+    }
+    #[test]
+    fn multi_axis_queries_keep_distinct_measures_and_do_not_guess_a_total() {
+        let query = AggregatePlan {
+            model: "sale.order".into(),
+            groupby: vec!["state".into(), "currency_id".into()],
+            aggregates: vec!["amount:sum".into(), "amount:avg".into()],
+            domain: json!([]),
+            order: String::new(),
+            limit: 1,
+            company: 1,
+            byte_limit: 4096,
+        };
+        let call = ToolCall::new(
+            ToolCallId::new("metric").unwrap(),
+            "aggregate_records".into(),
+            json!({}),
+        )
+        .unwrap();
+        assert_eq!(query.rpc_method(), "formatted_read_group");
+        assert_eq!(query.rpc_arguments()["limit"], 2);
+        assert_eq!(
+            query.rpc_arguments()["aggregates"],
+            json!(["amount:sum", "amount:avg", "__count"])
+        );
+        assert!(normalize_order("amount desc", &query.groupby, &query.aggregates).is_err());
+        assert_eq!(
+            normalize_order("amount:sum desc", &query.groupby, &query.aggregates).unwrap(),
+            "amount:sum desc"
+        );
+        let group = json!({"state":"sale","currency_id":[1,"USD"],"amount:sum":100,"amount:avg":25,"__count":4});
+        let reply = query.project(&call, &json!([group, group])).unwrap();
+        let val = reply.data().value();
+        assert_eq!(val["groups"][0]["amount:sum"], 100);
+        assert_eq!(val["groups"][0]["amount:avg"], 25);
+        assert!(val["groups"][0].get("amount").is_none());
+        assert_eq!(val["truncated"], true);
+        assert!(val["total_groups"].is_null());
+    }
 }

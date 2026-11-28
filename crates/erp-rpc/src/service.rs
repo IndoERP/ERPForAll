@@ -287,6 +287,7 @@ pub trait AttemptGate: Send + Sync + 'static {
 /// One call, as the transport hands it over.
 pub struct RpcCall {
     assistant: bool,
+    assistant_company: Option<CompanyId>,
     callback: bool,
     route: std::result::Result<Route, RpcFailure>,
     body: Vec<u8>,
@@ -314,6 +315,7 @@ impl RpcCall {
     pub fn json2(path: &str, body: impl Into<Vec<u8>>, caller: Caller) -> Self {
         Self {
             assistant: false,
+            assistant_company: None,
             callback: false,
             route: Route::parse_json2(path),
             body: body.into(),
@@ -333,6 +335,15 @@ impl RpcCall {
     /// and the caller's permissions are rechecked inside each execution attempt.
     pub fn assistant(mut self) -> Self {
         self.assistant = true;
+        self
+    }
+
+    /// Dispatch an offered tool in the company selected by the authenticated chat. The
+    /// server adds the company only after validating the provider's closed input schema.
+    #[must_use]
+    pub fn assistant_in_company(mut self, company: CompanyId) -> Self {
+        self.assistant = true;
+        self.assistant_company = Some(company);
         self
     }
 
@@ -863,7 +874,7 @@ impl RpcService {
                 .into(),
             ));
         }
-        let body = if call.body.is_empty() {
+        let mut body = if call.body.is_empty() {
             Json::Object(Vec::new())
         } else {
             match json::parse(&call.body, self.config.json_depth()) {
@@ -995,6 +1006,15 @@ impl RpcService {
                     .into(),
                 )
             })?;
+        }
+        if let (Some(company), Json::Object(members)) = (call.assistant_company, &mut body) {
+            members.push((
+                "context".into(),
+                Json::Object(vec![(
+                    "allowed_company_ids".into(),
+                    Json::Array(vec![Json::Int(company.get())]),
+                )]),
+            ));
         }
         let bound = binding::bind_body(
             route,

@@ -82,7 +82,7 @@ impl OpportunityOrders {
     }
 
     #[method]
-    #[rpc(effect = read)]
+    #[rpc(effect = read, assistant = offer)]
     async fn action_view_quotations(
         this: &RecordSet<CrmLead>,
         tx: &mut Transaction,
@@ -120,7 +120,7 @@ impl OpportunityOrders {
     }
 
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     async fn action_create_quotation(
         this: &RecordSet<CrmLead>,
         tx: &mut Transaction,

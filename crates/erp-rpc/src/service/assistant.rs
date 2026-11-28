@@ -98,10 +98,29 @@ impl RpcService {
         tx: &mut Transaction,
         after: Option<&str>,
     ) -> Result<(Vec<Json>, Option<String>)> {
+        self.search_assistant_tools(orm, tx, after, "", 64).await
+    }
+
+    /// Filter qualified names before running policy checks, using the same catalog as MCP.
+    /// The next cursor is the last visible result when another authorized result exists.
+    ///
+    /// # Errors
+    /// Refuses invalid bounds, stale registries and permission or schema lookup failures.
+    pub async fn search_assistant_tools(
+        &self,
+        orm: &Orm,
+        tx: &mut Transaction,
+        after: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> Result<(Vec<Json>, Option<String>)> {
+        if !(1..=64).contains(&limit) || query.len() > 128 {
+            return Err(Error::validation("Invalid assistant tool search limits."));
+        }
         if !Arc::ptr_eq(orm.registry(), tx.registry()) {
             return Err(Error::access("Tool registry changed; repeat discovery."));
         }
-        const PAGE: usize = 64;
+        let query = query.to_ascii_lowercase();
         let mut tools = Vec::new();
         let mut previous = None;
         let mut offers = orm
@@ -112,7 +131,10 @@ impl RpcService {
             .collect::<Vec<_>>();
         offers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         for (name, tool) in offers {
-            if name.len() > 128 || after.is_some_and(|after| name.as_str() <= after) {
+            if !name.contains(&query)
+                || name.len() > 128
+                || after.is_some_and(|after| name.as_str() <= after)
+            {
                 continue;
             }
             let route = Route::parse_json2(&format!("/json/2/{}/{}", tool.model(), tool.method()))
@@ -127,7 +149,7 @@ impl RpcService {
             {
                 continue;
             }
-            if tools.len() == PAGE {
+            if tools.len() == limit {
                 return Ok((tools, previous));
             }
             let input = input_schema(tool)?.to_json();

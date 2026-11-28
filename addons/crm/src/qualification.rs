@@ -223,7 +223,7 @@ fn form_action(model: &str, id: i64, name: &str, target: &str) -> Value {
 #[methods(CrmLead, addon = "crm")]
 impl CrmLead {
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     async fn action_qualify(this: &RecordSet<CrmLead>, tx: &mut Transaction) -> Result<Value> {
         let lead = this.ensure_one()?.as_records();
         lead.check_access(tx, Operation::Write).await?;

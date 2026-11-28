@@ -3,7 +3,7 @@ summary = "Quotations and sales orders"
 category = "Sales/Sales"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.11.0"
+version = "1.11.1"
 depends = ["base", "web", "reporting", "sales_team", "product", "mail", "account"]
 exact_only = true
 # Groups first, then the order sequence, the screens and menus, the access rows last (B5).

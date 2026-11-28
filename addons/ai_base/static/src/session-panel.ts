@@ -33,7 +33,7 @@ export interface SessionPanelOptions {
    */
   context?: Record<string, unknown>;
   /** Called after a successful resume, with the session and the sequence the next turn continues. */
-  onResume?: (session: SessionSummary, resume: ResumeSessionResult) => void;
+  onResume?: (session: SessionSummary, resume: ResumeSessionResult) => void | Promise<void>;
   /** Called when the panel asks to return to the chat. */
   onClose?: () => void;
 }
@@ -377,7 +377,7 @@ export function sessionPanel(options: SessionPanelOptions): SessionPanelHandle {
       const result = await resumeSession(rpc, session.id);
       activeId = result.id;
       renderBody(true);
-      options.onResume?.(session, result);
+      await options.onResume?.(session, result);
       return { message: "" };
     });
   }

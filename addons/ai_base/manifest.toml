@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 exact_only = true
-name = "AI configuration"
-summary = "Provider metadata, company routing and protected server credentials"
+name = "AI Assistant"
+summary = "Role-based ERP assistance, implementation projects, live reports and dashboards"
 category = "Technical"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "0.4.0"
+version = "0.5.0"
 depends = ["base"]
-data = ["security/ir.access.csv", "data/ai_defaults.xml", "views/configuration.xml", "views/workspace.xml"]
+data = ["security/implementation.xml", "security/ir.access.csv", "data/ai_defaults.xml", "views/configuration.xml", "views/workspace.xml", "views/insights.xml", "views/implementation.xml"]

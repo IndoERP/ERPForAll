@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { expect, test, vi } from "vitest";
-import { renderReply, workspacePrompt } from "../src/presentation.js";
+import { renderReply, renderChatReply, workspacePrompt } from "../src/presentation.js";
 function show(props: object) {
   const node=document.createElement("div"), openDraft=vi.fn().mockResolvedValue(undefined);
   const text=["```erp-view",JSON.stringify({version:1,title:"Report",...props}),"```"].join("\n");
@@ -44,4 +44,12 @@ test("an existing-document answer cannot navigate until its named link is activa
   expect(open).toHaveBeenCalledTimes(1);
   renderReply(node, reply, {run:job=>{void job();}}, () => undefined);
   expect(node.querySelector("button")).toBeNull();
+});
+
+test("chat renders financial figures through a sourced canvas", () => {
+  const host = document.createElement("div");
+  const proposal = {version:1,title:"Revenue",type:"table",columns:["Revenue"],rows:[[10000]]};
+  renderChatReply(host,["```erp-view",JSON.stringify(proposal),"```"].join("\n"));
+  expect(host.querySelector("table")).toBeNull();
+  expect(host.textContent).toContain("live report");
 });

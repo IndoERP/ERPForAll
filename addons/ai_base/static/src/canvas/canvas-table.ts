@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { csvCell } from "./csv.js";
 import { icon } from "@erpforall/client";
 
 export type ColumnItem =
@@ -13,6 +14,7 @@ export type ColumnItem =
     };
 
 export type TableSpec = {
+  allowExport?: boolean;
   title?: string;
   columns?: ColumnItem[];
   rows?: unknown[];
@@ -127,7 +129,9 @@ export function renderRichTable(spec: TableSpec): HTMLElement {
   countBadge.className = "canvas-table-count";
   countBadge.textContent = `${displayRows.length} baris`;
 
-  toolbar.append(searchBox, exportBtn, countBadge);
+  toolbar.append(searchBox);
+  if (spec.allowExport !== false) toolbar.append(exportBtn);
+  toolbar.append(countBadge);
 
   // Table element
   const scrollWrapper = document.createElement("div");
@@ -256,9 +260,9 @@ export function renderRichTable(spec: TableSpec): HTMLElement {
   exportBtn.addEventListener("click", () => {
     const title = spec.title || "tabel-ekspor";
     const csvLines = [
-      normalizedCols.map(c => `"${c.label.replace(/"/g, '""')}"`).join(","),
+      normalizedCols.map(c => csvCell(c.label)).join(","),
       ...displayRows.map(r =>
-        (Array.isArray(r) ? r : [r]).map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")
+        (Array.isArray(r) ? r : [r]).map(csvCell).join(",")
       ),
     ];
     const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });

@@ -1607,3 +1607,72 @@ fn live_onchange_computes_line_and_order_totals_before_save() {
         tx.rollback().await.unwrap();
     });
 }
+
+#[test]
+fn offered_quotation_operations_use_catalog_pricing_and_the_native_mail_composer() {
+    run(async {
+        let (_db, orm) = cloned_sale().await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let world = world(&mut tx).await;
+        let product = product(&mut tx, "Quoted product", "125", &[]).await;
+        let env = tx.env().with_company(world.company).unwrap();
+        let orders = env.records("sale.order").unwrap();
+        let Value::Json(action) = orders
+            .call::<_, Value>(&mut tx, "action_draft_quotation", (world.customer,))
+            .await
+            .unwrap()
+        else {
+            panic!("expected quotation action")
+        };
+        let order = orders.browse([action["res_id"].as_i64().unwrap()]).unwrap();
+        let Value::Json(action) = order
+            .call::<_, Value>(
+                &mut tx,
+                "action_add_quotation_product",
+                (product, "2.5".to_owned()),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected sales line action")
+        };
+        let line = env
+            .records("sale.order.line")
+            .unwrap()
+            .browse([action["res_id"].as_i64().unwrap()])
+            .unwrap();
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("125"));
+        assert_eq!(amount(&mut tx, &line, "product_uom_qty").await, dec("2.5"));
+        assert!(
+            order
+                .call::<_, Value>(
+                    &mut tx,
+                    "action_add_quotation_product",
+                    (product, "0".to_owned())
+                )
+                .await
+                .is_err()
+        );
+        let Value::Json(action) = order
+            .call::<_, Value>(&mut tx, "action_prepare_quotation_email", ())
+            .await
+            .unwrap()
+        else {
+            panic!("expected composer action")
+        };
+        let draft = env
+            .records("sale.quotation.send")
+            .unwrap()
+            .browse([action["res_id"].as_i64().unwrap()])
+            .unwrap();
+        assert_eq!(
+            many2one(&mut tx, &draft, "order_id").await,
+            Some(order.ids()[0])
+        );
+        assert_eq!(
+            many2one(&mut tx, &draft, "partner_id").await,
+            Some(world.customer)
+        );
+        assert_eq!(text(&mut tx, &order, "state").await, "draft");
+    });
+}

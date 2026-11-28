@@ -40,6 +40,22 @@ impl HistoryEntry {
 /// Application composition for one explicitly submitted message. The service authenticates the
 /// session again with the selected company. A provider call must run outside a database transaction.
 pub trait WebAssistant: Send + Sync {
+    /// Check a pending approval and retry the exact original operation under current rights.
+    fn resume_operation<'a>(
+        &'a self,
+        _auth: &'a Arc<Auth>,
+        _secret: &'a SessionSecret,
+        _company: erp_orm::CompanyId,
+        _approval: i64,
+        _rpc: &'a erp_rpc::RpcService,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<Value>> {
+        Box::pin(async {
+            Err(erp_fields::Error::user(
+                "erp.ai.operation_unavailable: approval continuation is unavailable.",
+            ))
+        })
+    }
+
     /// Return the tab history and message admission limits for the signed-in browser.
     fn tab_history<'a>(
         &'a self,
@@ -56,6 +72,23 @@ pub trait WebAssistant: Send + Sync {
         message: String,
         history: Vec<HistoryEntry>,
     ) -> erp_orm::BoxFuture<'a, erp_fields::Result<Value>>;
+
+    /// Process a turn identified by the client, continuing an owned server conversation.
+    fn session_turn<'a>(
+        &'a self,
+        _auth: &'a Arc<Auth>,
+        _secret: &'a SessionSecret,
+        _company: erp_orm::CompanyId,
+        _message: String,
+        _conversation: ConversationTurn,
+        _rpc: Option<Arc<erp_rpc::RpcService>>,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<Value>> {
+        Box::pin(async {
+            Err(erp_fields::Error::user(
+                "erp.ai.session_unavailable: this assistant does not support saved conversations.",
+            ))
+        })
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -64,6 +97,41 @@ struct Input {
     company_id: i64,
     message: String,
     history: Option<Vec<HistoryEntry>>,
+    session_id: Option<i64>,
+    request_id: Option<String>,
+}
+
+/// One explicit submission. The request identity is also used to deduplicate business actions.
+#[derive(Clone, Copy, Debug)]
+pub struct ConversationTurn {
+    /// Server conversation to continue, or a new conversation.
+    pub session_id: Option<i64>,
+    /// Stable identity of this submission.
+    pub request_id: erp_fields::Uuid,
+}
+
+impl Input {
+    fn conversation(&self) -> erp_fields::Result<Option<ConversationTurn>> {
+        let invalid = || erp_fields::Error::validation("Invalid saved conversation request.");
+        let Some(id) = self.request_id.as_deref() else {
+            return if self.session_id.is_none() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
+        };
+        let id = erp_fields::Uuid::parse(id)?;
+        if id.is_nil()
+            || self.session_id.is_some_and(|id| id < 1)
+            || self.history.as_ref().is_some_and(|h| !h.is_empty())
+        {
+            return Err(invalid());
+        }
+        Ok(Some(ConversationTurn {
+            session_id: self.session_id,
+            request_id: id,
+        }))
+    }
 }
 
 fn refusal(status: StatusCode, message: &str) -> Response {
@@ -82,8 +150,10 @@ impl WebApp {
         parts: &axum::http::request::Parts,
         body: Body,
         auth: &Arc<Auth>,
-        status: bool,
+        path: &str,
+        rpc: Option<&Arc<erp_rpc::RpcService>>,
     ) -> HttpResult<Response> {
+        let status = path == routes::ASSISTANT_STATUS;
         let headers = &parts.headers;
         fn error(s: StatusCode, message: &str) -> HttpResult<Response> {
             Err(refusal(s, message))
@@ -215,6 +285,33 @@ impl WebApp {
                 "The assistant request is too large.",
             )
         })?;
+        if path == routes::ASSISTANT_RESUME {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Resume {
+                company_id: i64,
+                approval_request_id: i64,
+            }
+            let request: Resume = serde_json::from_slice(&bytes).map_err(|_| {
+                refusal(StatusCode::BAD_REQUEST, "Select a valid approval request.")
+            })?;
+            let company = erp_orm::CompanyId::new(request.company_id)
+                .map_err(|_| refusal(StatusCode::BAD_REQUEST, "Select an active company."))?;
+            if request.approval_request_id < 1 {
+                return error(StatusCode::BAD_REQUEST, "Select a valid approval request.");
+            }
+            let rpc = rpc.ok_or_else(|| {
+                refusal(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "The ERP action service is unavailable.",
+                )
+            })?;
+            let result = engine.resume_operation(auth,&secret,company,request.approval_request_id,rpc).await.map_err(|err|{
+                let status = StatusCode::from_u16(err.kind().http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                refusal(status,"The operation could not be continued. Review the approval and your current access.")
+            })?;
+            return json_response(StatusCode::OK, &result);
+        }
         let request: Input = serde_json::from_slice(&bytes).map_err(|_| {
             refusal(
                 StatusCode::BAD_REQUEST,
@@ -223,16 +320,28 @@ impl WebApp {
         })?;
         let company = erp_orm::CompanyId::new(request.company_id)
             .map_err(|_| refusal(StatusCode::BAD_REQUEST, "Select an active company."))?;
-        match engine
-            .turn(
-                auth,
-                &secret,
-                company,
-                request.message,
-                request.history.unwrap_or_default(),
+        let conversation = request.conversation().map_err(|_| {
+            refusal(
+                StatusCode::BAD_REQUEST,
+                "Invalid saved conversation request.",
             )
-            .await
-        {
+        })?;
+        let result = if let Some(turn) = conversation {
+            engine
+                .session_turn(auth, &secret, company, request.message, turn, rpc.cloned())
+                .await
+        } else {
+            engine
+                .turn(
+                    auth,
+                    &secret,
+                    company,
+                    request.message,
+                    request.history.unwrap_or_default(),
+                )
+                .await
+        };
+        match result {
             Ok(reply) => json_response(StatusCode::OK, &reply),
             Err(err) => {
                 let explicit = err.message().starts_with("erp.ai.");
@@ -249,6 +358,23 @@ impl WebApp {
                 };
                 error(status, msg)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod conversation_input_tests {
+    use super::*;
+    #[test]
+    fn persisted_turn_refuses_mixed_or_invalid_identity() {
+        for raw in [
+            json!({"company_id":1,"message":"go","session_id":3}),
+            json!({"company_id":1,"message":"go","request_id":"not-a-uuid"}),
+            json!({"company_id":1,"message":"go","request_id":"00000000-0000-0000-0000-000000000000"}),
+            json!({"company_id":1,"message":"go","request_id":"10000000-0000-4000-8000-000000000001","history":[{"role":"assistant","text":"old"}]}),
+        ] {
+            let input = serde_json::from_value::<Input>(raw);
+            assert!(input.is_err() || input.is_ok_and(|request| request.conversation().is_err()));
         }
     }
 }

@@ -100,6 +100,8 @@ pub const ASSISTANT_STATUS: &str = "/erp/ai/assistant/status";
 pub const MCP: &str = "/erp/mcp";
 /// A single authenticated assistant text turn.
 pub const ASSISTANT_TURN: &str = "/erp/ai/assistant/turn";
+/// Continue a pending assistant operation using its original server-held arguments.
+pub const ASSISTANT_RESUME: &str = "/erp/ai/assistant/resume";
 /// Text that selects the addon static asset branch.
 pub const STATIC_SEGMENT: &str = "/static/";
 
@@ -130,6 +132,7 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/ai/assistant/status"),
     RouteMatch::Exact("/erp/mcp"),
     RouteMatch::Exact("/erp/ai/assistant/turn"),
+    RouteMatch::Exact("/erp/ai/assistant/resume"),
     RouteMatch::Exact("/erp/module/install"),
     RouteMatch::Exact("/erp/module/upgrade"),
     RouteMatch::Exact("/erp/module/uninstall"),

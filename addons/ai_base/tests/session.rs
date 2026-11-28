@@ -1049,3 +1049,84 @@ async fn a_missing_partition_fails_the_insert_and_upkeep_recovers() {
     tx.commit().await.unwrap();
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn private_operation_payload_is_immutable_and_consumed_with_the_business_transaction() {
+    use erp_addon_ai_base::operation;
+    let h = harness().await;
+    let company = seed_company(&h, "Action receipts").await;
+    seed_user(&h, 7, company).await;
+    seed_user(&h, 8, company).await;
+    let begin = |uid| {
+        h.orm().begin_with(
+            erp_sdk::UserId::new(uid).unwrap(),
+            erp_sdk::Context::new().with_company_id(company),
+        )
+    };
+    let mut tx = begin(7).await.unwrap();
+    let session = open_session(&mut tx, &NewSession::new(company))
+        .await
+        .unwrap();
+    let turn = erp_sdk::Uuid::from_bytes([5; 16]);
+    let key = erp_sdk::Uuid::from_bytes([6; 16]).to_string();
+    let action = "res.partner.example";
+    let payload = r#"{"note":"private input"}"#;
+    operation::prepare(&mut tx, session, turn, &key, action, payload)
+        .await
+        .unwrap();
+    operation::prepare(&mut tx, session, turn, &key, action, payload)
+        .await
+        .unwrap();
+    assert!(
+        operation::prepare(&mut tx, session, turn, &key, action, "{}")
+            .await
+            .is_err()
+    );
+    tx.commit().await.unwrap();
+    let mut other = begin(8).await.unwrap();
+    assert!(
+        operation::receipts(&mut other, session, turn)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(operation::claim(&mut other, &key).await.is_err());
+    other.rollback().await.unwrap();
+    let mut abandoned = begin(7).await.unwrap();
+    operation::claim(&mut abandoned, &key).await.unwrap();
+    abandoned.rollback().await.unwrap();
+    let mut done = begin(7).await.unwrap();
+    operation::claim(&mut done, &key).await.unwrap();
+    done.commit().await.unwrap();
+    let mut replay = begin(7).await.unwrap();
+    assert!(operation::claim(&mut replay, &key).await.is_err());
+    let visible = operation::receipts(&mut replay, session, turn)
+        .await
+        .unwrap();
+    assert_eq!(
+        visible,
+        vec![json!({"name":action,"model":"res.partner","ids":[],"status":"completed"})]
+    );
+    // A deleted target (such as a vacuumed transient wizard) leaves an owner-visible
+    // disposition, without retaining an actionable ID or disclosing the obsolete input.
+    let stale_turn = erp_sdk::Uuid::from_bytes([7; 16]);
+    let stale_key = erp_sdk::Uuid::from_bytes([8; 16]).to_string();
+    operation::prepare(
+        &mut replay,
+        session,
+        stale_turn,
+        &stale_key,
+        action,
+        r#"{"ids":[999999999],"note":"private obsolete input"}"#,
+    )
+    .await
+    .unwrap();
+    let stale = operation::receipts(&mut replay, session, stale_turn)
+        .await
+        .unwrap();
+    assert_eq!(
+        stale,
+        vec![json!({"name":action,"model":"res.partner","ids":[],"status":"unavailable"})]
+    );
+    replay.rollback().await.unwrap();
+}

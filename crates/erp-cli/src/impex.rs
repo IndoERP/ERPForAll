@@ -17,6 +17,63 @@ const RECORD_LIMIT: usize = 10_000;
 const PREVIEW_ROWS: usize = 10;
 const CONTACTS_GUIDE: &[u8] = include_bytes!("../../../addons/contacts/data/import_guide.csv");
 
+const STEP_KEY: &str = "ai_implementation_step_id";
+
+#[erp_orm::linkme::distributed_slice(impex::RPC_IMPORT_ADAPTERS)]
+#[linkme(crate = erp_orm::linkme)]
+static STEP_IMPORT: impex::RpcImportAdapter = impex::RpcImportAdapter {
+    context_key: STEP_KEY,
+    load: load_implementation_step,
+};
+
+fn rpc_fingerprint(model: &str, fields: &[&str], rows: impex::ValueRows<'_>) -> String {
+    use impex::RowSource;
+    erp_addon_ai_base::implementation::import_fingerprint_iter(
+        model,
+        fields,
+        (0..rows.len()).map(|r| (0..rows.row_len(r)).map(move |c| rows.cell(r, c))),
+    )
+}
+
+fn load_implementation_step<'a>(
+    tx: &'a mut Transaction,
+    records: &'a Records,
+    fields: &'a [&'a str],
+    rows: impex::ValueRows<'a>,
+) -> BoxFuture<'a, Result<impex::LoadResult>> {
+    use impex::RowSource;
+    Box::pin(async move {
+        records.check_access(tx, Operation::Create).await?;
+        records.check_access(tx, Operation::Write).await?;
+        if fields.is_empty()
+            || rows.is_empty()
+            || rows.len() > RECORD_LIMIT
+            || records.env().context().contains("_import_limit")
+        {
+            return Err(Error::validation(format!(
+                "An implementation import requires mapped columns and 1 to {RECORD_LIMIT} rows in a complete batch."
+            )));
+        }
+        impex::validate_import_columns(records, tx, fields).await?;
+        tx.savepoint(async |tx| {
+            let model = records.model_name();
+            let step = erp_addon_ai_base::implementation::StepImport::prepare_scoped(
+                tx,
+                records.env(),
+                model,
+                || rpc_fingerprint(model, fields, rows),
+            )
+            .await?;
+            let loaded = impex::load_rows(records, tx, fields, rows).await?;
+            if let Some(ids) = &loaded.ids {
+                step.complete(tx, ids.len()).await?;
+            }
+            Ok(loaded)
+        })
+        .await
+    })
+}
+
 pub(crate) struct DataExchange;
 
 impl WebDataExchange for DataExchange {
@@ -67,7 +124,16 @@ async fn check_transfer_policy(
         payload: None,
         binding: None,
     };
-    file_admission(approval_request::admit(tx, call).await?, model, method)
+    let admission = approval_request::admit(tx, call).await?;
+    if method == "load"
+        && matches!(admission, Admission::KeyRequired)
+        && let Some(Value::Int(step)) = records.env().context().get(STEP_KEY)
+    {
+        return Err(Error::validation(format!(
+            "This implementation import requires approval. Submit {model}.load through JSON-2 with an Idempotency-Key and context.{STEP_KEY} set to {step}. Retry the same call after approval to record the import on this step."
+        )));
+    }
+    file_admission(admission, model, method)
 }
 
 fn file_admission(admission: Admission, model: &str, method: &str) -> Result<()> {
@@ -183,7 +249,21 @@ async fn upload(
             ));
         }
     }
+    let step_import = if mode == ImportMode::Import {
+        erp_addon_ai_base::implementation::StepImport::prepare(
+            tx,
+            &options.model,
+            &fields,
+            &file.rows,
+        )
+        .await?
+    } else {
+        None
+    };
     let result = impex::load(&records, tx, &fields, &file.rows).await?;
+    if let (Some(step), Some(ids)) = (step_import, &result.ids) {
+        step.complete(tx, ids.len()).await?;
+    }
     let mut reply = value_to_json(&result.to_value())?;
     let messages = reply["messages"]
         .as_array_mut()
@@ -411,6 +491,29 @@ fn csv_file(header: &[String], rows: &[Vec<Json>]) -> Result<Vec<u8>> {
 mod tests {
     use super::{Admission, Error, file_admission};
     use erp_fields::ErrorKind;
+
+    #[test]
+    fn step_import_rpc_and_file_identify_same_mapped_values() {
+        use erp_fields::Value;
+        let rows = [vec!["one".to_owned(), "two".to_owned()]];
+        let values = [Value::list(rows[0].iter().map(Value::str))];
+        let source = erp_data::impex::ValueRows::validate(&values, 10).unwrap();
+        assert_eq!(
+            super::rpc_fingerprint("res.partner", &["ref", "name"], source),
+            erp_addon_ai_base::implementation::import_fingerprint(
+                "res.partner",
+                &["ref", "name"],
+                &rows
+            )
+        );
+        assert_eq!(
+            erp_data::impex::RPC_IMPORT_ADAPTERS
+                .iter()
+                .filter(|a| a.context_key == super::STEP_KEY)
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn files_dispatch_only_when_rpc_admission_allows_the_transfer() {

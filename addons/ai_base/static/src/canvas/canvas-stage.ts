@@ -12,10 +12,12 @@ import { renderRichTable, type TableSpec } from "./canvas-table.js";
 import { renderWorkflowFlow } from "./canvas-flow.js";
 import { renderSimulation } from "./canvas-simulation.js";
 import { renderPivotTable, type PivotSpec } from "./canvas-pivot.js";
+import { artifactFormat, artifactIndex } from "./artifact-index.js";
+import { renderStudioDocument } from "./canvas-document.js";
 import { slides } from "../presentation.js";
 
 export type CanvasArtifact = {
-  canvas_type: "chart" | "table" | "pivot" | "flow" | "dashboard" | "simulation" | "slides";
+  canvas_type: "chart" | "table" | "pivot" | "flow" | "dashboard" | "simulation" | "slides" | "document" | "brief" | "timeline" | "checklist";
   title?: string;
   description?: string;
   data: unknown;
@@ -23,7 +25,8 @@ export type CanvasArtifact = {
 
 export type CanvasStageHandle = {
   node: HTMLElement;
-  renderArtifact(artifact: unknown): void;
+  renderArtifact(artifact: unknown, options?: { activate?: boolean }): string;
+  selectArtifact(id: string): boolean;
   detectAndRender(text: string): boolean;
   clear(): void;
   dispose(): void;
@@ -31,190 +34,104 @@ export type CanvasStageHandle = {
 
 type ViewMode = "bar" | "line" | "donut" | "pivot" | "table";
 
-function createDragHandle(): HTMLElement {
-  const span = document.createElement("span");
-  span.className = "canvas-drag-handle";
-  span.title = "Tarik untuk mengatur urutan kartu";
-  span.setAttribute("aria-label", "Pindahkan kartu");
+let nextVisualization = 0;
 
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
-  svg.setAttribute("fill", "currentColor");
-  svg.setAttribute("aria-hidden", "true");
-
-  for (const [cx, cy] of [
-    [9, 6],
-    [15, 6],
-    [9, 12],
-    [15, 12],
-    [9, 18],
-    [15, 18],
-  ]) {
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", String(cx));
-    circle.setAttribute("cy", String(cy));
-    circle.setAttribute("r", "1.5");
-    svg.append(circle);
+function dashboardMetrics(data: Record<string, unknown>): HTMLElement | null {
+  const { dimensions, records, measures } = data;
+  if (!Array.isArray(dimensions) || dimensions.length || !Array.isArray(records) || records.length !== 1
+    || !Array.isArray(measures) || !measures.length) return null;
+  const row: unknown = records[0];
+  if (!row || typeof row !== "object") throw new Error("A dashboard needs one aggregate result.");
+  const metrics = document.createElement("dl");
+  metrics.className = "studio-metrics";
+  for (const measure of measures) {
+    if (!measure || typeof measure.key !== "string" || !Object.hasOwn(row, measure.key)) {
+      throw new Error("The ERP result is missing a dashboard measure.");
+    }
+    const value = (row as Record<string, unknown>)[measure.key];
+    if (value !== null && typeof value !== "number" && typeof value !== "string" && value !== false) {
+      throw new Error("The ERP result contains an invalid dashboard value.");
+    }
+    const name = document.createElement("dt"), amount = document.createElement("dd");
+    name.textContent = typeof measure.label === "string" && measure.label !== measure.key ? measure.label
+      : measure.key.split(":").map((part: string) => part === "id" ? "ID" : part.replaceAll("_"," ").replace(/^./,c=>c.toUpperCase())).join(" · ");
+    amount.textContent = value === null || value === false ? "—" : String(value);
+    const metric = document.createElement("div");
+    metric.append(name,amount); metrics.append(metric);
   }
-
-  span.append(svg);
-  return span;
+  return metrics;
 }
 
-export function createCanvasStage(onPromptSelect?: (prompt: string) => void): CanvasStageHandle {
+export function createCanvasStage(
+  onPromptSelect?: (prompt: string) => void,
+  onSave?: (name: string, definition: string) => void,
+  onOpenSource?: (title: string, model: string, domain: unknown[]) => void,
+): CanvasStageHandle {
   const container = document.createElement("section");
-  container.className = "ai-workspace-canvas-stage";
-  container.setAttribute("aria-label", "AI Canvas");
+  container.className = "ai-workspace-canvas-stage canvas-studio";
+  container.setAttribute("aria-label", "Canvas Studio");
 
-  const header = document.createElement("div");
-  header.className = "canvas-stage-header";
-
-  const titleGroup = document.createElement("div");
-  titleGroup.className = "canvas-stage-title-group";
-
-  const stageTitle = document.createElement("h2");
-  stageTitle.className = "canvas-stage-title";
-  stageTitle.textContent = "Canvas";
-
-  const stageSubtitle = document.createElement("p");
-  stageSubtitle.className = "canvas-stage-subtitle";
-  stageSubtitle.textContent = "Analisis dan visualisasi dari data perusahaan";
-
-  titleGroup.append(stageTitle, stageSubtitle);
-
-  const actions = document.createElement("div");
-  actions.className = "canvas-stage-actions";
-
-  const status = document.createElement("span");
-  status.className = "canvas-stage-status";
-  status.textContent = "Terhubung ke data perusahaan";
-
-  const clearBtn = document.createElement("button");
-  clearBtn.type = "button";
-  clearBtn.className = "erp-button erp-button-secondary canvas-btn-clear";
-  clearBtn.textContent = "Bersihkan";
-  clearBtn.hidden = true;
-
-  actions.append(status, clearBtn);
-  header.append(titleGroup, actions);
-
-  // Viewport
-  const viewport = document.createElement("div");
-  viewport.className = "canvas-stage-viewport";
-
-  // Blank placeholder
+  const header = document.createElement("header"); header.className = "canvas-stage-header";
+  const stageTitle = document.createElement("h2"); stageTitle.className = "canvas-stage-title";
+  stageTitle.append(icon("panels-top-left"),document.createTextNode("Canvas Studio"));
+  const count = document.createElement("span"); count.className = "studio-count";
+  count.setAttribute("role","status");
+  const expand = document.createElement("button");
+  expand.type = "button"; expand.className = "studio-expand erp-button";
+  function expandLabel(open: boolean) {
+    expand.replaceChildren(icon(open ? "x" : "maximize"));
+    expand.title = open ? "Exit focus mode" : "Enter focus mode";
+    expand.setAttribute("aria-label",expand.title); expand.setAttribute("aria-pressed",String(open));
+  }
+  expandLabel(false);
+  const dialog = document.createElement("dialog"); dialog.className = "studio-focus-dialog";
+  dialog.setAttribute("aria-label","Canvas Studio");
+  const anchor = document.createComment("Canvas Studio");
+  function restore(focus: boolean) {
+    if (anchor.parentNode) anchor.replaceWith(container);
+    dialog.remove(); expandLabel(false);
+    if (focus && container.isConnected) expand.focus();
+  }
+  dialog.addEventListener("close", () => restore(true));
+  expand.onclick = () => {
+    if (dialog.open) { dialog.close(); return; }
+    container.before(anchor,dialog); dialog.append(container);
+    dialog.showModal(); expandLabel(true); expand.focus();
+  };
   const blankState = document.createElement("div");
-  blankState.className = "canvas-blank-state";
-
-  const blankTitle = document.createElement("p");
-  blankTitle.className = "canvas-blank-title";
-  blankTitle.textContent = "Tanyakan analisis bisnis, hasilnya muncul di sini.";
-
-  const blankDesc = document.createElement("p");
-  blankDesc.className = "canvas-blank-desc";
-  blankDesc.textContent =
-    "Pilih analisis siap pakai di bawah ini atau ajukan pertanyaan lewat AI Assistant untuk grafik, tabel dan pivot dari data perusahaan.";
-
-  const suggestionList = document.createElement("div");
-  suggestionList.className = "canvas-suggestion-list";
-
+  blankState.className = "canvas-blank-state"; blankState.tabIndex = -1;
+  const blankTitle = document.createElement("h3");
+  blankTitle.textContent = "What would you like to create?";
+  const intro = document.createElement("p"); intro.textContent = "Choose a starting point or describe an output in the conversation.";
+  const suggestionList = document.createElement("div"); suggestionList.className = "canvas-suggestion-list";
   const suggestions = [
-    { label: "5 customer terloyal", prompt: "Siapa 5 customer terloyal tahun ini? Tampilkan grafiknya di canvas." },
-    { label: "Pivot omzet & status", prompt: "Tampilkan pivot table omzet penjualan per customer dan status pesanan." },
-    { label: "Tren omzet bulanan", prompt: "Tampilkan omzet penjualan bulanan tahun ini dalam bentuk chart." },
-    { label: "Piutang jatuh tempo", prompt: "Tampilkan tabel ringkasan faktur piutang yang jatuh tempo." },
-    { label: "Alur siklus pesanan", prompt: "Gambarkan alur proses dari penawaran harga hingga faktur terbayar." },
+    {kind:"chart",label:"Analyze a trend",detail:"Plot revenue over time",prompt:"Chart monthly sales from the ERP by currency and include the records behind the trend."},
+    {kind:"document",label:"Draft a brief",detail:"Summarize a decision",prompt:"Draft a decision brief with background, options, and next steps. Ask me for the decision first."},
+    {kind:"checklist",label:"Plan a rollout",detail:"Map tasks and milestones",prompt:"Prepare an ERP implementation checklist and timeline. Ask me about modules, owners and target dates first."},
+    {kind:"pivot",label:"Build a pivot",detail:"Compare groups and measures",prompt:"Build a sales pivot by status and currency using the live ERP records."},
+    {kind:"slides",label:"Prepare slides",detail:"Outline a presentation",prompt:"Prepare a presentation for a stakeholder review. Ask which decisions, audience and sources to include."},
+    {kind:"flow",label:"Map a workflow",detail:"Explain a business process",prompt:"Map the steps from quotation to paid invoice and show where approvals are required."},
   ];
-
-  suggestions.forEach(item => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "canvas-suggestion-chip";
-    chip.textContent = item.label;
-    chip.addEventListener("click", () => {
-      if (onPromptSelect) onPromptSelect(item.prompt);
-    });
+  if (onPromptSelect) for (const item of suggestions) {
+    const chip = document.createElement("button"), label = document.createElement("span"), detail = document.createElement("small");
+    chip.type = "button"; chip.className = "canvas-suggestion-chip"; chip.dataset["kind"] = item.kind;
+    label.textContent = item.label; detail.textContent = item.detail;
+    const copy = document.createElement("span"); copy.append(label,detail);
+    chip.append(icon(artifactFormat(item.kind)[1]),copy,icon("chevron-right"));
+    chip.onclick = () => onPromptSelect(item.prompt);
     suggestionList.append(chip);
+  }
+  if (!onPromptSelect) intro.textContent = "Ask the assistant to create a report, document or plan.";
+  blankState.append(blankTitle,intro,suggestionList);
+  const viewport = document.createElement("div"); viewport.className = "canvas-stage-viewport";
+  const cardsGrid = document.createElement("div"); cardsGrid.className = "canvas-cards-grid";
+  const index = artifactIndex(cardsGrid, blankState, size => {
+    count.textContent = size ? `${size} artifact${size === 1 ? "" : "s"}` : "";
+    viewport.dataset["empty"] = String(!size);
   });
-
-  blankState.append(blankTitle, blankDesc, suggestionList);
-
-  // Cards container for generated dashboard widgets
-  const cardsGrid = document.createElement("div");
-  cardsGrid.className = "canvas-cards-grid";
-
-  viewport.append(blankState);
-  container.append(header, viewport);
-
-  let draggedCard: HTMLElement | null = null;
-
-  function setupCardDragAndDrop(card: HTMLElement) {
-    card.setAttribute("draggable", "true");
-
-    card.addEventListener("dragstart", (e: DragEvent) => {
-      draggedCard = card;
-      card.classList.add("is-dragging");
-      if (e.dataTransfer) {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", card.dataset["cardId"] || "");
-      }
-    });
-
-    card.addEventListener("dragend", () => {
-      card.classList.remove("is-dragging");
-      draggedCard = null;
-      cardsGrid.querySelectorAll(".canvas-card-item").forEach(c => {
-        c.classList.remove("drag-over-above", "drag-over-below");
-      });
-    });
-
-    card.addEventListener("dragover", (e: DragEvent) => {
-      e.preventDefault();
-      if (!draggedCard || draggedCard === card) return;
-      if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = "move";
-      }
-      const rect = card.getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      if (e.clientY < midY) {
-        card.classList.add("drag-over-above");
-        card.classList.remove("drag-over-below");
-      } else {
-        card.classList.add("drag-over-below");
-        card.classList.remove("drag-over-above");
-      }
-    });
-
-    card.addEventListener("dragleave", () => {
-      card.classList.remove("drag-over-above", "drag-over-below");
-    });
-
-    card.addEventListener("drop", (e: DragEvent) => {
-      e.preventDefault();
-      card.classList.remove("drag-over-above", "drag-over-below");
-      if (!draggedCard || draggedCard === card) return;
-
-      const rect = card.getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      if (e.clientY < midY) {
-        cardsGrid.insertBefore(draggedCard, card);
-      } else {
-        cardsGrid.insertBefore(draggedCard, card.nextSibling);
-      }
-    });
-  }
-
-  function clear() {
-    cardsGrid.replaceChildren();
-    viewport.replaceChildren(blankState);
-    stageTitle.textContent = "Canvas";
-    stageSubtitle.textContent = "Analisis dan visualisasi dari data perusahaan";
-    clearBtn.hidden = true;
-  }
-
-  clearBtn.addEventListener("click", clear);
+  header.append(stageTitle,count,index.arrange,expand); viewport.append(index.rail,cardsGrid);
+  container.append(header,index.picker,viewport);
+  function clear() { index.clear(); }
 
   function renderViewModeContent(
     mode: ViewMode,
@@ -261,7 +178,6 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
   ): HTMLElement {
     const card = document.createElement("article");
     card.className = "canvas-card-item canvas-rendered-card";
-    card.dataset["cardId"] = `card-${Math.random().toString(36).substring(2, 9)}`;
 
     // Prepare normalized data
     let initialMode: ViewMode = "bar";
@@ -274,6 +190,8 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
       else initialMode = "bar";
     }
 
+    const grounded = typeof data["source_model"] === "string";
+
     const unit = typeof data["unit"] === "string" ? data["unit"] : undefined;
     let series: ChartPoint[] = [];
     if (Array.isArray(data["series"]) || Array.isArray(data["data"])) {
@@ -282,17 +200,21 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
       series = normalizeSeries(data);
     }
 
+    if (grounded && (initialMode === "pivot" || !series.length)) initialMode = "table";
+    const metrics = canvasType === "dashboard" && grounded ? dashboardMetrics(data) : null;
+
     let tableSpec: TableSpec | undefined;
     if (Array.isArray(data["columns"]) || Array.isArray(data["rows"]) || Array.isArray(data["records"])) {
       tableSpec = {
         title,
+        allowExport: !grounded,
         columns: Array.isArray(data["columns"]) ? (data["columns"] as any[]) : undefined,
         rows: Array.isArray(data["rows"]) ? (data["rows"] as any[]) : undefined,
         records: Array.isArray(data["records"]) ? (data["records"] as any[]) : undefined,
       };
-      if (!series.length && Array.isArray(data["rows"]) && data["rows"].length) {
+      if (!data["source_model"] && !series.length && Array.isArray(data["rows"]) && data["rows"].length) {
         series = normalizeSeries(data["rows"]);
-      } else if (!series.length && Array.isArray(data["records"]) && data["records"].length) {
+      } else if (!data["source_model"] && !series.length && Array.isArray(data["records"]) && data["records"].length) {
         series = normalizeSeries(data["records"]);
       }
     }
@@ -314,7 +236,7 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
         columns: Array.isArray(data["columns"]) ? (data["columns"] as string[]) : undefined,
         rows: Array.isArray(data["rows"]) ? (data["rows"] as any[][]) : undefined,
       };
-      if (!series.length && Array.isArray(records) && records.length) {
+      if (!data["source_model"] && !series.length && Array.isArray(records) && records.length) {
         series = normalizeSeries(records);
       }
     }
@@ -326,33 +248,37 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
     const titleArea = document.createElement("div");
     titleArea.className = "canvas-card-title-area";
 
-    const dragHandle = createDragHandle();
+    const format = artifactFormat(canvasType);
+    const formatLabel = document.createElement("span"); formatLabel.className = "studio-format";
+    formatLabel.append(icon(format[1]),document.createTextNode(format[0]));
     const cardHeading = document.createElement("h3");
     cardHeading.className = "canvas-card-title";
     cardHeading.textContent = title;
 
-    titleArea.append(dragHandle, cardHeading);
+    titleArea.append(formatLabel, cardHeading);
 
     // View Switcher (Bar, Line, Donut, Pivot, Table)
     const switcher = document.createElement("nav");
     switcher.className = "canvas-view-switcher";
     switcher.setAttribute("role", "tablist");
-    switcher.setAttribute("aria-label", "Tampilan Visual");
+    switcher.setAttribute("aria-label", "Visualization");
 
     const modes: { id: ViewMode; label: string; iconName: "chart-column" | "chart-line" | "chart-pie" | "layout-grid" | "list" }[] = [
-      { id: "bar", label: "Batang", iconName: "chart-column" },
-      { id: "line", label: "Tren", iconName: "chart-line" },
+      { id: "bar", label: "Bar", iconName: "chart-column" },
+      { id: "line", label: "Line", iconName: "chart-line" },
       { id: "donut", label: "Donut", iconName: "chart-pie" },
       { id: "pivot", label: "Pivot", iconName: "layout-grid" },
-      { id: "table", label: "Tabel", iconName: "list" },
+      { id: "table", label: "Table", iconName: "list" },
     ];
 
     let currentMode = initialMode;
     const body = document.createElement("div");
     body.className = "canvas-card-body";
+    body.id = `studio-visualization-${++nextVisualization}`;
 
     function updateView(mode: ViewMode) {
       currentMode = mode;
+      body.setAttribute("aria-labelledby", `${body.id}-${mode}`);
       switcher.querySelectorAll<HTMLButtonElement>(".canvas-btn-switch").forEach(btn => {
         const selected = btn.dataset["mode"] === mode;
         btn.classList.toggle("active", selected);
@@ -366,9 +292,13 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
     modes.forEach(m => {
       const btn = document.createElement("button");
       btn.type = "button";
+      // Pre-aggregated rows cannot be summed across currencies or averaged a second time.
+      btn.hidden = grounded && (m.id === "pivot" || m.id === "donut" || (!series.length && m.id !== "table"));
       btn.className = `canvas-btn-switch ${m.id === currentMode ? "active" : ""}`;
       btn.dataset["mode"] = m.id;
       btn.setAttribute("role", "tab");
+      btn.id = `${body.id}-${m.id}`;
+      btn.setAttribute("aria-controls", body.id);
       btn.setAttribute("aria-selected", String(m.id === currentMode));
       btn.tabIndex = m.id === currentMode ? 0 : -1;
       btn.append(icon(m.iconName), document.createTextNode(` ${m.label}`));
@@ -401,23 +331,36 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "canvas-card-btn-close";
-    closeBtn.title = "Tutup kartu visualisasi ini";
-    closeBtn.setAttribute("aria-label", "Tutup kartu");
+    closeBtn.title = "Close artifact";
+    closeBtn.setAttribute("aria-label", `Close ${title}`);
     closeBtn.append(icon("x"));
-    closeBtn.addEventListener("click", () => {
-      card.remove();
-      if (!cardsGrid.children.length) {
-        clear();
-      }
-    });
+    closeBtn.addEventListener("click", () => index.remove(card.id));
 
+    if (onSave && data["source_model"] && data["analysis_definition"]) {
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "erp-button";
+      save.textContent = "Save report";
+      save.addEventListener("click", () => onSave(title, JSON.stringify(data["analysis_definition"])));
+      cardActions.append(save);
+    }
     cardActions.append(closeBtn);
-    cardHeader.append(titleArea, switcher, cardActions);
+    cardHeader.append(titleArea, cardActions);
 
     // Initial Body Render
-    if (canvasType === "slides") {
-      const slideEl = slides(data);
-      if (slideEl) body.append(slideEl);
+    if (grounded && Array.isArray(data["records"]) && !data["records"].length) {
+      body.textContent = "No matching records.";
+      switcher.hidden = true;
+    } else if (metrics) {
+      body.append(metrics);
+      switcher.hidden = true;
+    } else if (canvasType === "slides") {
+      const slideEl = slides({...data,title});
+      if (!slideEl) throw new Error("A presentation needs slides with a heading and bullet points.");
+      body.append(slideEl);
+      switcher.hidden = true;
+    } else if (["document","brief","checklist","timeline"].includes(canvasType)) {
+      body.append(renderStudioDocument(canvasType,data));
       switcher.hidden = true;
     } else if (canvasType === "flow") {
       const steps = (data["steps"] as any[]) || [];
@@ -438,10 +381,32 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
       );
       switcher.hidden = true;
     } else {
-      body.append(renderViewModeContent(currentMode, title, series, unit, tableSpec, pivotSpec));
+      body.setAttribute("role", "tabpanel");
+      updateView(currentMode);
     }
 
-    card.append(cardHeader, body);
+    card.append(cardHeader);
+    if (description && !grounded) {
+      const summary = document.createElement("p"); summary.className = "studio-summary"; summary.textContent = description;
+      card.append(summary);
+    }
+    if (!switcher.hidden) card.append(switcher);
+    if (grounded || canvasType === "simulation" || canvasType === "flow") {
+      const source = document.createElement("p");
+      source.className = "canvas-card-provenance";
+      source.textContent = grounded
+        ? `ERP · ${String(data["source_model"])}${data["truncated"] === true ? " · Partial results" : ""}`
+        : canvasType === "simulation" ? "Hypothetical scenario" : "Proposed workflow";
+      if (onOpenSource && typeof data["source_model"] === "string" && Array.isArray(data["source_domain"])) {
+        const model = data["source_model"], domain = data["source_domain"];
+        const open = document.createElement("button");
+        open.type = "button"; open.className = "ai-workspace-reference"; open.textContent = "Open source records";
+        open.onclick = () => onOpenSource(title, model, domain);
+        source.append(document.createTextNode(" · "), open);
+      }
+      card.append(source);
+    }
+    card.append(body);
 
     // Contextual follow-up questions
     const lowerTitle = title.toLowerCase();
@@ -471,16 +436,19 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
       ];
     }
 
-    const followupsSection = document.createElement("div");
+    const followupsSection = document.createElement("details");
     followupsSection.className = "canvas-card-followups";
 
-    const followupsTitle = document.createElement("span");
+    const followupsTitle = document.createElement("summary");
     followupsTitle.className = "canvas-followups-label";
-    followupsTitle.textContent = "Pertanyaan lanjutan";
+    followupsTitle.textContent = "Continue in chat";
 
     const followupsChips = document.createElement("div");
     followupsChips.className = "canvas-followups-chips";
 
+    if (["document","brief","slides","flow","checklist","timeline"].includes(canvasType)) {
+      followups = ["Review the assumptions", "Outline the next steps"];
+    }
     followups.forEach(promptText => {
       const chip = document.createElement("button");
       chip.type = "button";
@@ -493,76 +461,59 @@ export function createCanvasStage(onPromptSelect?: (prompt: string) => void): Ca
     });
 
     followupsSection.append(followupsTitle, followupsChips);
-    card.append(followupsSection);
-
-    setupCardDragAndDrop(card);
+    if (onPromptSelect) card.append(followupsSection);
     return card;
   }
 
-  function renderArtifact(raw: unknown): void {
-    if (typeof raw !== "object" || raw === null) return;
-    const obj = raw as Record<string, unknown>;
-    const canvasType = String(obj["canvas_type"] || obj["type"] || "chart");
-    const title = typeof obj["title"] === "string" ? obj["title"] : "Visualisasi";
-    const description = typeof obj["description"] === "string" ? obj["description"] : "";
-    const data = (obj["data"] ?? obj) as Record<string, unknown>;
-
-    stageTitle.textContent = title;
-    stageSubtitle.textContent = description || `Tipe visual: ${canvasType}`;
-    clearBtn.hidden = false;
-
-    if (viewport.contains(blankState)) {
-      viewport.replaceChildren(cardsGrid);
-    }
-
-    try {
-      const card = buildCard(canvasType, title, description, data);
-      cardsGrid.prepend(card);
-    } catch (renderError) {
-      console.error("Canvas artifact rendering error:", renderError);
-      const errCard = document.createElement("div");
-      errCard.className = "canvas-render-error canvas-rendered-card";
-      const errTitle = document.createElement("strong");
-      errTitle.textContent = "Gagal memvisualisasikan data pada canvas";
-      const errDesc = document.createElement("p");
-      errDesc.textContent = renderError instanceof Error ? renderError.message : "Format data tidak sesuai.";
-      errCard.append(errTitle, errDesc);
-      cardsGrid.prepend(errCard);
-    }
+  function errorCard(message: string): HTMLElement {
+    const card = document.createElement("article"); card.className = "canvas-render-error canvas-rendered-card";
+    const detail = document.createElement("p"); detail.setAttribute("role","alert"); detail.textContent = message;
+    const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "erp-button";
+    dismiss.textContent = "Close artifact"; dismiss.onclick = () => index.remove(card.id);
+    card.append(detail,dismiss); return card;
   }
-
-  function detectAndRender(text: string): boolean {
-    const match = text.match(/```(?:erp-view|json)\s*\n([\s\S]*?)\n```/);
-    if (!match || !match[1]) return false;
+  function renderArtifact(raw: unknown, options?: {activate?: boolean}): string {
+    const obj = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw as Record<string,unknown> : {};
+    const kind = String(obj["canvas_type"] ?? obj["type"] ?? "");
+    const title = typeof obj["title"] === "string" && obj["title"].trim() ? obj["title"] : artifactFormat(kind)[0];
+    const description = typeof obj["description"] === "string" ? obj["description"] : "";
+    const data = obj["data"] ?? obj;
+    let card: HTMLElement;
     try {
-      const parsed = JSON.parse(match[1]);
-      renderArtifact(parsed);
-      return true;
-    } catch (err) {
-      console.warn("AI Canvas artifact JSON parse failed:", err);
-      if (viewport.contains(blankState)) {
-        viewport.replaceChildren(cardsGrid);
+      if (artifactFormat(kind)[0] === "Artifact" || !data || typeof data !== "object" || Array.isArray(data)) throw new Error("Unsupported artifact format.");
+      card = buildCard(kind,title,description,data as Record<string,unknown>);
+    } catch (error) {
+      card = errorCard(error instanceof Error ? error.message : "This artifact could not be displayed.");
+    }
+    const reading = cardsGrid.contains(document.activeElement) && !blankState.contains(document.activeElement);
+    return index.add(card,kind,title,options?.activate ?? !reading);
+  }
+  function detectAndRender(text: string): boolean {
+    if (text.length > 65536) return false;
+    const match = text.match(/```(?:erp-view|json)\s*\n([\s\S]*?)\n```/);
+    if (!match?.[1]) return false;
+    try {
+      const raw: unknown = JSON.parse(match[1]);
+      // Free-form assistant text cannot supply actions or attest that its numbers came from ERP.
+      if (typeof raw === "object" && raw !== null) {
+        const data = (raw as Record<string,unknown>)["data"] ?? raw;
+        if (data && typeof data === "object" && ("source_model" in data || "analysis_definition" in data)) return false;
       }
-      const errCard = document.createElement("div");
-      errCard.className = "canvas-render-error canvas-rendered-card";
-      const errTitle = document.createElement("strong");
-      errTitle.textContent = "Format Visualisasi Tidak Valid";
-      const errDesc = document.createElement("p");
-      errDesc.textContent = "Gagal memproses artifact visual: Format data JSON tidak terbaca.";
-      errCard.append(errTitle, errDesc);
-      cardsGrid.prepend(errCard);
-      clearBtn.hidden = false;
+      renderArtifact(raw); return true;
+    } catch {
+      index.add(errorCard("Unable to read the artifact JSON."),"error","Invalid artifact");
       return false;
     }
   }
-
   return {
     node: container,
     renderArtifact,
+    selectArtifact: index.select,
     detectAndRender,
     clear,
     dispose() {
-      container.remove();
+      if (dialog.open) dialog.close();
+      restore(false); index.clear(); container.remove();
     },
   };
 }

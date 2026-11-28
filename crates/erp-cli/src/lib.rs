@@ -7,6 +7,7 @@ pub mod addon;
 mod addon_life;
 pub mod approval_rpc;
 pub mod args;
+mod assistant_business;
 pub mod assistant_read;
 pub mod assistant_turn;
 mod attachment_content;

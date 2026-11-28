@@ -115,12 +115,16 @@ function draft(view: Record<string, unknown>, env?: DraftHost): HTMLElement | un
 
 /** Display a provider reply as text or as one explicitly versioned ERP view. */
 export function renderReply(container: HTMLElement, text: string, env?: DraftHost,
-  lookup?: (model: string, reference: string) => (() => Promise<void>) | undefined): void {
+  lookup?: (model: string, reference: string) => (() => Promise<void>) | undefined, sourcedFigures = false): void {
   const match = /^\s*`{3}erp-view\s*\n([\s\S]*?)\n`{3}\s*$/.exec(text);
   if (!match || text.length > 65536) { container.textContent = text; return; }
   let view: unknown;
   try { view = JSON.parse(match[1]!); } catch { container.textContent = text; return; }
   if (!obj(view) || view["version"] !== 1 || !label(view["title"])) { container.textContent = text; return; }
+  if (sourcedFigures && (view["type"] === "table" || view["type"] === "chart")) {
+    container.textContent = "Request a live report to view figures from ERP records.";
+    return;
+  }
   let recordLink: HTMLElement | undefined;
   if (view["type"] === "record" && label(view["model"]) && label(view["reference"])) {
     const reference = view["reference"].trim();
@@ -133,4 +137,10 @@ export function renderReply(container: HTMLElement, text: string, env?: DraftHos
   if (!content) { container.textContent = text; return; }
   const panel = tag("section"); panel.className = "ai-answer-view";
   panel.append(tag("h3", view["title"]), content); container.replaceChildren(panel);
+}
+
+/** Quantitative cards in chat must arrive through a server-validated canvas. */
+export function renderChatReply(container: HTMLElement, text: string, env?: DraftHost,
+  lookup?: (model: string, reference: string) => (() => Promise<void>) | undefined): void {
+  renderReply(container, text, env, lookup, true);
 }

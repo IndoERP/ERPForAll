@@ -489,7 +489,7 @@ impl PurchaseOrder {
     /// Confirms requests for quotation: the approval step for each order the approval question
     /// admits, "to approve" for the others.
     #[method]
-    #[rpc(effect = write)]
+    #[rpc(effect = write, assistant = offer)]
     pub async fn button_confirm(
         this: &RecordSet<PurchaseOrder>,
         tx: &mut Transaction,

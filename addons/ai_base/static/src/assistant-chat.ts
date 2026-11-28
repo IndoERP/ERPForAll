@@ -1,8 +1,9 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { icon, type Command, type IconName, type SystrayEnvironment } from "@erpforall/client";
 
-import { renderReply } from "./presentation.js";
-import { assistantSession, readHistoryPolicy, type AssistantSession, type AssistantMessage } from "./assistant-session.js";
+import { renderChatReply } from "./presentation.js";
+import { assistantSession, messageCanvases, readHistoryPolicy, type AssistantSession, type AssistantMessage } from "./assistant-session.js";
+import { renderOperations } from "./operations.js";
 import { sessionPanel, type SessionPanelHandle } from "./session-panel.js";
 
 function control(label: string, glyph: IconName, style: string): HTMLButtonElement {
@@ -21,11 +22,13 @@ function object(value: unknown): value is Record<string, unknown> {
 
 /** The command palette and toolbar open the same active company window. */
 export function assistantCommands({ searchValue }: { searchValue: string }): Command[] {
-  const button = document.querySelector<HTMLButtonElement>(".ai-chat-trigger:not([hidden])");
+  const button = document.querySelector<HTMLButtonElement>(".ai-chat-trigger:not([hidden]), .ai-chat-trigger[data-workspace-active=true]");
   const name = "Open AI Assistant";
   if (!button || !name.toLowerCase().includes(searchValue.trim().toLowerCase())) return [];
   return [{ id: "ai_base.open_assistant", name, action() {
-    if (!button.isConnected || button.hidden) return;
+    if (!button.isConnected) return;
+    if (button.dataset["workspaceActive"] === "true") { button.click(); return; }
+    if (button.hidden) return;
     if (button.getAttribute("aria-expanded") === "true") {
       document.getElementById("ai-assistant-dock")?.querySelector("textarea")?.focus();
     } else {
@@ -44,6 +47,7 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
   trigger.setAttribute("aria-expanded", "false");
   const lifetime = new AbortController();
   let session: AssistantSession | undefined;
+  let workspaceId: number | undefined;
   let unsubscribe: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   const dock = document.createElement("section");
@@ -62,7 +66,12 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
   sessionsButton.setAttribute("aria-controls", "ai-session-panel");
   const fold = control("Minimize chat", "chevron-down", "icon-button");
   const close = control("Close chat", "x", "icon-button");
-  header.append(icon("message-square"), title, sessionsButton, fold, close);
+  const studio = control("Open Canvas Studio", "panels-top-left", "icon-button");
+  studio.hidden = true;
+  studio.onclick = () => {
+    if (workspaceId && env.navigate && env.run) env.run(() => env.navigate!({action:String(workspaceId)}));
+  };
+  header.append(icon("message-square"), title, sessionsButton, studio, fold, close);
 
   const thread = document.createElement("div");
   thread.className = "ai-chat-thread";
@@ -76,14 +85,36 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
   input.setAttribute("aria-label", "Message to AI Assistant");
   const hint = document.createElement("p");
   hint.className = "ai-chat-hint";
-  hint.textContent = "This tab’s recent conversation is sent with each question so the assistant keeps the context.";
+  hint.textContent = "Conversations are scoped to your account and active company.";
   const send = control("Send message", "send", "erp-button erp-button-primary");
   send.type = "submit";
   send.disabled = true;
   const compose = document.createElement("div");
   compose.className = "ai-chat-compose";
   compose.append(input, send);
-  form.append(hint, compose);
+  const include = document.createElement("button");
+  include.type = "button";
+  include.className = "erp-button erp-button-secondary";
+  include.setAttribute("aria-label", "Include current record");
+  function currentRecord(): string | undefined {
+    const model = env.assistantContext?.["active_model"];
+    const id = env.assistantContext?.["active_id"];
+    if (typeof model === "string" && /^[a-z][a-z0-9_.]*$/.test(model) && typeof id === "number" && Number.isSafeInteger(id) && id > 0) return model + " #" + id;
+    return undefined;
+  }
+  function updateRecord() {
+    const reference = currentRecord();
+    include.hidden = !reference;
+    include.textContent = reference ? "Include " + reference : "";
+  }
+  include.onclick = () => {
+    const reference = currentRecord();
+    if (reference) session?.updateDock({ draft: [input.value.trimEnd(), reference].filter(Boolean).join(" ") + " " });
+    updateRecord();
+    input.focus();
+  };
+  form.addEventListener("focusin", updateRecord);
+  form.append(hint, include, compose);
   dock.append(header, thread, form);
 
   // The session panel replaces the thread and form while it is open; the fold hides both surfaces.
@@ -107,18 +138,21 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
     const data: unknown = await response.json();
     if (!object(data) || typeof data["available"] !== "boolean") throw new Error("Invalid assistant availability response.");
     if (lifetime.signal.aborted || !data["available"]) return;
+    const action = object(data["history"]) ? data["history"]["workspace_action_id"] : undefined;
+    if (typeof action === "number" && Number.isSafeInteger(action) && action > 0) workspaceId = action;
     session = assistantSession(env.rpc ?? request, company, token, { ...(env.userId !== undefined && { userId: env.userId }), request, history: readHistoryPolicy(data["history"]) });
     trigger.hidden = false;
     sessionsButton.hidden = !env.rpc;
+    studio.hidden = !(workspaceId && env.run && env.navigate);
     unsubscribeDraft = session.subscribeDraft(text => {
       if (input.value !== text) input.value = text;
-      hint.textContent = session?.persistenceWarning || "This tab’s recent conversation is sent with each question so the assistant keeps the context.";
+      hint.textContent = session?.persistenceWarning || "Conversations are scoped to your account and active company.";
       update();
     });
     unsubscribe = session.subscribe(renderMessages);
     renderMessages();
     const saved = session.readDock();
-    if (saved.mode !== "closed") {
+    if (!session.workspaceActive && saved.mode !== "closed") {
       expand(false);
       if (saved.mode === "minimized") minimize(false);
       thread.scrollTop = saved.scroll;
@@ -131,6 +165,8 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
   });
 
   const expand = (focus = true) => {
+    if (session?.focusWorkspaceChat()) return;
+    updateRecord();
     if (!dock.isConnected) document.body.append(dock);
     dock.hidden = false;
     minimized = false;
@@ -166,7 +202,7 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
       panel = sessionPanel({
         rpc: env.rpc,
         context: env.assistantContext,
-        onResume: () => closePanel(),
+        onResume: async (_summary, resume) => { await session!.resume(resume.id); closePanel(); },
         onClose: () => closePanel(),
       });
     }
@@ -236,6 +272,15 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
   const rendered = new Map<AssistantMessage, HTMLElement>();
   function renderMessages() {
     if (!session) return;
+    trigger.hidden = session.workspaceActive;
+    trigger.dataset["workspaceActive"] = String(session.workspaceActive);
+    if (session.workspaceActive) {
+      panel?.dispose(); panel = undefined; panelOpen = false;
+      dock.hidden = true;
+      dock.remove();
+      trigger.setAttribute("aria-expanded","false");
+      return;
+    }
     const atBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 1;
     const visible = new Set(session.messages);
     for (const [item, part] of rendered) {
@@ -246,8 +291,10 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
     } else {
       emptyPromptContainer.remove();
     }
+    let previous: HTMLElement | undefined;
     for (const item of visible) {
-      if (rendered.has(item)) continue;
+      const existing = rendered.get(item);
+      if (existing) { previous = existing; continue; }
       const part = document.createElement("div");
       const author = document.createElement("strong");
       author.textContent = item.role === "user" ? "You" : "AI Assistant";
@@ -256,9 +303,12 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
       content.className = "ai-chat-content";
       content.classList.toggle("ai-chat-error", item.state === "error");
       if (item.role === "assistant" && item.state === "ready") {
-        renderReply(content, item.text);
-        if (item.canvas && typeof item.canvas === "object") {
-          const c = item.canvas as Record<string, unknown>;
+        renderChatReply(content, item.text);
+        renderOperations(content, item.operations, session, env.openRecord && env.run
+          ? action => env.run!(() => env.openRecord!(action.res_model, action.res_id))
+          : undefined);
+        for (const c of messageCanvases(item)) {
+          if (!object(c)) continue;
           const canvasCard = document.createElement("div");
           canvasCard.className = "ai-chat-canvas-card";
           const badge = document.createElement("div");
@@ -277,24 +327,24 @@ export function assistantChat(env: SystrayEnvironment, request: typeof fetch = (
           viewBtn.className = "erp-button erp-button-secondary ai-chat-canvas-view-btn";
           viewBtn.textContent = "Lihat di Canvas Studio";
           viewBtn.addEventListener("click", () => {
-            const stage = document.querySelector(".ai-workspace-canvas-stage");
-            if (stage) {
-              stage.scrollIntoView({ behavior: "smooth" });
-            } else {
-              window.location.href = "/erp/action-137?menu=152";
+            session?.showCanvas(c);
+            if (!document.querySelector(".ai-workspace-canvas-stage") && workspaceId && env.navigate && env.run) {
+              env.run(() => env.navigate!({action:String(workspaceId)}));
             }
           });
-          canvasCard.append(badge, descP, viewBtn);
+          canvasCard.append(badge, descP);
+          if (workspaceId && env.navigate) canvasCard.append(viewBtn);
           content.append(canvasCard);
         }
       } else {
         content.textContent = item.text;
       }
       part.append(author, content);
-      thread.append(part);
+      thread.insertBefore(part, previous ? previous.nextSibling : thread.firstChild);
+      previous = part;
       rendered.set(item, part);
     }
-    hint.textContent = session.persistenceWarning || "This tab’s recent conversation is sent with each question so the assistant keeps the context.";
+    hint.textContent = session.persistenceWarning || "Conversations are scoped to your account and active company.";
     if (atBottom) thread.scrollTop = thread.scrollHeight;
     update();
   }

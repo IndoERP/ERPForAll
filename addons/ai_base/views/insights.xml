@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="insight_list" model="ir.ui.view">
+    <field name="name">ai.insight.list</field><field name="model">ai.insight</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="shared_group_id"/><field name="create_uid" string="Owner"/><field name="write_date"/></list></field>
+  </record>
+  <record id="insight_form" model="ir.ui.view">
+    <field name="name">ai.insight.form</field><field name="model">ai.insight</field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <header><button name="action_open" type="object" string="Open report" class="btn-primary"/></header>
+      <sheet><div class="oe_title"><h1><field name="name" placeholder="Report name"/></h1></div>
+        <group><group><field name="company_id" readonly="1"/><field name="create_uid" string="Owner" readonly="1"/></group>
+        <group><field name="shared_group_id" groups="base.group_erp_manager" domain="[('share','=',False)]"
+            placeholder="Private" options="{'no_create': True}"/></group></group>
+        <group><field name="sources" readonly="1"/></group>
+        <notebook><page name="query" string="Query definition"><field name="definition" nolabel="1" placeholder="Paste the query definition supplied by the assistant"/></page></notebook>
+      </sheet></form></field>
+  </record>
+  <record id="insight_search" model="ir.ui.view">
+    <field name="name">ai.insight.search</field><field name="model">ai.insight</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="create_uid"/><filter name="mine" string="My reports" domain="[('create_uid','=',uid)]"/></search></field>
+  </record>
+  <record id="insight_action" model="ir.actions.act_window">
+    <field name="name">Saved reports and dashboards</field><field name="res_model">ai.insight</field>
+    <field name="view_mode">list,form</field><field name="view_id" ref="insight_list"/><field name="search_view_id" ref="insight_search"/>
+  </record>
+  <menuitem id="insights_menu" name="Saved reports and dashboards" parent="workspace_menu" action="insight_action" groups="base.group_user" sequence="20"/>
+</erp>

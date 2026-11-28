@@ -1,0 +1,13 @@
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+.ai-insight { padding: clamp(12px, 2vw, 28px); color: var(--text); }
+.ai-insight > header, .ai-insight-source { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ai-insight > header { justify-content: space-between; margin-bottom: 16px; }
+.ai-insight h1, .ai-insight h2 { margin: 0; }
+.ai-insight-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); }
+.ai-insight-panel { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); }
+.ai-insight-panel h2 { font-size: 1rem; }
+.ai-insight-source { margin-block: 8px 16px; color: var(--muted); overflow-wrap: anywhere; }
+.ai-insight-table { overflow-x: auto; }
+.ai-insight-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ai-insight-table :is(th, td) { text-align: end; padding: 8px; border-bottom: 1px solid var(--line); }
+.ai-insight-table th:first-child { text-align: start; }
