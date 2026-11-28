@@ -2026,7 +2026,12 @@ span.field-color-toggler {
 
 /* Declared button presentation and scoped access-key hints. */
 .erp-button-unstyled { background: transparent; border-color: transparent; color: inherit; }
-.button-hotkey-hint { display: inline-block; margin-inline-start: .3em; padding: 0 .2em; border: 1px solid currentColor; border-radius: .2em; font-size: .75em; pointer-events: none; }
+button:has(> .button-hotkey-hint) { position: relative; }
+.button-hotkey-hint {
+  position: absolute; inset-block-start: -.3em; inset-inline-end: -.2em; z-index: 1;
+  padding: 0 .3em; border: 1px solid currentColor; border-radius: .25em; background: var(--surface); color: var(--text);
+  font-size: .72em; font-weight: 650; line-height: 1.25; text-transform: uppercase; pointer-events: none;
+}
 .button-help-tooltip p { margin: .25rem 0; overflow-wrap: anywhere; }
 
 /* Copy to clipboard widget */

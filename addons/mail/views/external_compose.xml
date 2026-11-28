@@ -9,7 +9,7 @@
       <field name="subject"/><field name="body"/>
       <field name="attachment_ids" widget="many2many_tags" domain="[('res_model', '=', model), ('res_id', '=', res_id), ('res_field', '=', False)]"/>
     </group><footer><button name="action_send_email" type="object" class="btn-primary" string="Queue email"/>
-    <button special="cancel" string="Discard"/></footer></form></field>
+    <button special="cancel" string="Discard" data-hotkey="j"/></footer></form></field>
   </record>
   <record id="document_template_list" model="ir.ui.view">
     <field name="name">mail.document.template.list</field><field name="model">mail.document.template</field>

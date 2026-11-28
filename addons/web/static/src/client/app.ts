@@ -5,7 +5,7 @@ import { PanelCompatibilityError, PanelRecoverySafety, attemptPanelRecovery } fr
 import { loginReturnUrl } from "./login-return.js";
 import { initializeAttachmentPolicy } from "./attachment-policy.js";
 import { BIN_SIZE_CONTEXT, forgetBinaryContent } from "./binary-content.js";
-import { createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
+import { actionHotkeyModifier, createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { reportHotkeyError } from "../../../../../web/src/runtime/hotkeys.js";
 import { dropAbsentDashboardFilters, mountDashboard } from "./dashboard.js";
 import { admitRequestContext } from "./dashboard-card.js";
@@ -534,8 +534,12 @@ export class HumanApp {
       const active = this.homeMenuOpen || this.mobileDrawer?.isOpen || this.userDropdownOpen || debugOpen || this.navigation.querySelector(".nav-dropdown-menu.open");
       const list: HotkeyBinding[] = [];
       if (active) list.push({ kind: "callback", chord: "escape", target: this.host, allowEditable: true, run: () => this.closeKeyboardOverlay() });
-      list.push({ kind: "callback", chord: "ctrl+k", target: this.host, allowEditable: true, run: () => this.openCommandPalette() });
+      list.push({ kind: "callback", chord: "ctrl+k", target: this.host, hint: "", allowEditable: true, run: () => this.openCommandPalette() });
       list.push({ kind: "callback", chord: "meta+k", target: this.host, allowEditable: true, run: () => this.openCommandPalette() });
+      const create = this.content.querySelector<HTMLButtonElement>('[data-control-panel]:not(.control-panel-form) [data-control-actions] button[data-hotkey="c"]');
+      if (create && !active && !this.busy && !this.actionPending && !this.keyboardPending && !this.uncertainMethod && !this.messages.block.blocked) {
+        list.push({ kind: "dom", chord: actionHotkeyModifier(document) + "+c", target: create, allowEditable: true });
+      }
       return list;
     } });
     const scriptError = (event: ErrorEvent): void => {
@@ -5526,6 +5530,7 @@ export class HumanApp {
     let formHotkeys: ReturnType<typeof createHotkeyController> | undefined;
     let scalarChange: Promise<void> | undefined;
     let queuedAction: (() => Promise<void>) | undefined;
+    let createButton: HTMLButtonElement | undefined;
     const runFormAction = (job: () => Promise<void>): void => {
       if (this.lifetime.signal.aborted || binding !== this.generation || this.expired) return;
       if (scalarChange) {
@@ -5535,7 +5540,15 @@ export class HumanApp {
       this.run(job);
     };
     const debounce=new ButtonDebouncer();
-    const hotkeys=new ButtonHotkeys(()=>surface?.controls().filter((control):control is HTMLButtonElement=>control instanceof HTMLButtonElement)??[],{blocked:()=>this.keyboardPending!==undefined||this.busy||this.actionPending||this.uncertainMethod||this.messages.block.blocked,report:error=>this.hotkeyError(error)});
+    const hotkeys = new ButtonHotkeys(
+      () => {
+        const buttons = surface?.controls().filter((control): control is HTMLButtonElement => control instanceof HTMLButtonElement) ?? [];
+        if (createButton) buttons.push(createButton);
+        return buttons;
+      },
+      { allowEditable: true, blocked: () => this.keyboardPending !== undefined || this.busy && !scalarChange || queuedAction !== undefined ||
+          this.actionPending || this.uncertainMethod || state.writeUncertain || this.messages.block.blocked, report: error => this.hotkeyError(error) }
+    );
     let disposed = false;
     const dispose = (): void => { if (disposed) return; disposed = true; headingObserver?.disconnect(); formHotkeys?.dispose(); hotkeys.dispose(); debounce.dispose(); surface?.dispose(); };
 
@@ -5591,15 +5604,17 @@ export class HumanApp {
     const canEdit = view.canEdit !== false && !isFalsy(context["edit"]);
     const readFirst = view.editMode === "read" && canEdit;
     if (!canEdit) this.lockedRecords.add(state);
+    const hasLocalEdit = (): boolean => surface?.hasLocalEdits() === true;
     const updateStatus = (): void => {
+      const dirty = state.dirty || hasLocalEdit();
       editBtn.hidden = surface?.mode !== "read";
       if (surface?.mode === "read") {
         statusBadge.hidden = true;
         statusActions.style.display = "none";
-      } else if ((state.dirty || !state.id) && (canEdit || !state.id)) {
+      } else if ((dirty || !state.id) && (canEdit || !state.id)) {
         statusBadge.className = "status-badge dirty";
-        statusBadge.textContent = state.dirty ? "Unsaved changes" : "New";
-        statusBadge.hidden = !state.dirty;
+        statusBadge.textContent = dirty ? "Unsaved changes" : "New";
+        statusBadge.hidden = !dirty;
         statusActions.style.display = "inline-flex";
       } else {
         statusBadge.className = "status-badge saved";
@@ -5748,6 +5763,11 @@ export class HumanApp {
     sheet.append(form);
     // Staging itself is discarded on navigation; keep the form styling anchor in the mounted tree.
     const viewport = el("div", undefined, "record-form-viewport");
+    const syncDraftActions = (): void => {
+      if (state.id && canEdit && !state.dirty && surface?.mode !== "read" && hasLocalEdit() !== (statusActions.style.display !== "none")) updateStatus();
+    };
+    viewport.addEventListener("input", syncDraftActions);
+    viewport.addEventListener("keydown", event => { if (event.key === "Escape") syncDraftActions(); });
     panel.classList.toggle("has-chatter", hasChatter); panel.classList.toggle("has-aside", hasAside);
     viewport.append(headerHost);
     viewport.append(sheet);
@@ -5781,11 +5801,13 @@ export class HumanApp {
       if (element instanceof HTMLElement && headerHost.contains(element)) return element.dataset["focusKey"];
       return formFocus(form, element);
     };
+    let releaseRebuiltButtons: (() => void) | undefined;
     const render = (focus = surface?.focus()): void => {
       if (disposed || this.lifetime.signal.aborted || this.expired) return;
+      releaseRebuiltButtons?.(); releaseRebuiltButtons = undefined;
       surface!.render(focus); surface!.setDisabled(runningButton || this.uncertainMethod); updateStatus(); syncPageHeading?.();
       // Saving during an action can replace widgets and overflow controls while the action still runs.
-      if (runningButton) for (const control of surface!.controls()) if (control instanceof HTMLButtonElement) control.disabled = true;
+      if (runningButton) releaseRebuiltButtons = lockButtonControls(surface!.controls().filter((control): control is HTMLButtonElement => control instanceof HTMLButtonElement));
       if (this.uncertainMethod) {
         surface!.setDisabled(true);
         for (const control of surface!.controls()) control.disabled = true;
@@ -5888,14 +5910,17 @@ export class HumanApp {
       if (node.kind === "button" && archiveNames.has(node.name)) return;
       const control = viewButton(node,{activate:()=>debounce.run(node,node.details?.debounce_ms??0,()=>runFormAction(()=>clickButton(node))),model:state.model,debug:this.debug,messages:this.messages,report:error=>this.reportError(error),className:`form-header-btn ${node.variant}`});
       control.dataset["focusKey"] = `button:${node.name}`;
-      control.disabled = control.disabled || runningButton || this.uncertainMethod || failure !== undefined;
+      control.disabled = control.disabled || this.uncertainMethod || failure !== undefined;
       if (failure !== undefined) control.title = `Unavailable: ${failure}`;
       parent.append(control);
       return control;
     };
     const clickButton = async (node: ButtonNode): Promise<void> => {
       if (runningButton || this.uncertainMethod || binding !== this.generation || this.expired) return;
+      // An onchange may have hidden the button since its click was queued.
+      if (buttonHidden(node, view.fields, state.values)) return;
       const focus = focusTarget(document.activeElement);
+      let saveRefused = false;
       runningButton = true; this.actionPending = true; surface!.setDisabled(true);
       const invocation = { caller: state, generation: binding };
       this.pendingInvocation = invocation;
@@ -5905,11 +5930,11 @@ export class HumanApp {
       ]);
       try {
         await runObjectButton(node, {
-          model: state.model, context: context,uid:this.userId, fields:view.fields,values:()=>state.values,id: () => state.id, dirty: () => state.dirty,
+          model: state.model, context: context,uid:this.userId, fields:view.fields,values:()=>state.values,id: () => state.id, dirty: () => state.dirty || hasLocalEdit(),
           block:()=>this.messages.block.begin(),
           action:(id,effective)=>this.declaredButtonAction(id,state,view.fields,effective,binding,async()=>{await state.load(state.id);if(binding===this.generation&&!this.expired)render(focus);}),
           url:href=>runUrlButton(href,{baseUrl:location.href,navigate:route=>this.navigate(route,false,false,invocation),openExternal:(url,target,features)=>{window.open(url,target,features);}}),
-          save,
+          save: async () => { const saved = await trySave(); saveRefused = !saved; return saved; },
           call: async (model, method, args) => {
             try { return await this.rpc.call(model, method, args, { write: true }); }
             catch (error) { if (error instanceof ClientError && error.kind === "ambiguous") this.uncertainMethod = true; throw error; }
@@ -5941,17 +5966,22 @@ export class HumanApp {
         // End this invocation's transient lock. The render below reapplies uncertainty to writes,
         // while the persistent read-only Reload control remains available for recovery.
         releaseButtons();
+        releaseRebuiltButtons?.(); releaseRebuiltButtons = undefined;
         if (binding !== this.generation || this.expired) return;
-        if (!this.wizard) { render(focus); updateBreadcrumbs(); updateStatus(); }
+        if (!this.wizard) {
+          // Validation already marked and focused the mounted fields. Rebuilding would lose that feedback.
+          if (saveRefused) surface!.setDisabled(false);
+          else render(focus);
+          updateBreadcrumbs(); updateStatus();
+        }
       }
     };
 
     controls.replaceChildren();
     const canCreate = view.canCreate !== false && !isFalsy(context["create"]);
     if (canCreate) {
-      controls.append(
-        actionButton("New", () => runFormAction(() => this.navigate({ ...route, id: undefined, view_type: "form" })))
-      );
+      createButton = actionButton("New", () => runFormAction(() => this.navigate({ ...route, id: undefined, view_type: "form" })));
+      controls.append(createButton);
     }
 
     const actionDropdown = el("div", undefined, "nav-dropdown form-actions-dropdown");
@@ -6158,36 +6188,42 @@ export class HumanApp {
     try {
       if (readFirst && state.id !== undefined) surface.setReadMode(true);
       render();
-    formHotkeys = createHotkeyController(document.body, {
-      blocked: () => this.keyboardPending !== undefined || this.busy || this.actionPending || this.uncertainMethod || state.writeUncertain || this.messages.block.blocked,
-      report: error => this.hotkeyError(error),
-      bindings: (): HotkeyBinding[] => surface!.mode === "read" ? [
-        // E edits a read-first record; typing in a field (the chatter composer, a search box) is never taken.
-        { kind: "callback", chord: "e", target: editBtn, hint: "e", run: () => runFormAction(edit) },
-      ] : (canEdit || !state.id) && (state.dirty || !state.id || surface!.controls().some(control => control.closest(".field-dirty,.field-invalid"))) ? [
-        { kind: "callback", chord: "alt+s", target: state.dirty || !state.id ? saveBtn : form, allowEditable: true, hint: "s", run: async () => {
-          const binding = this.generation;
-          try {
-            const active = document.activeElement;
-            if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) && surface!.controls().includes(active)) {
-              const before = scalarChange;
-              active.blur(); // Native change runs the existing field/onchange pipeline before Save.
-              // Programmatic DOM fixtures (and controls that do not emit change on blur) need the same explicit commit event.
-              if (scalarChange === before && active.closest(".field-dirty,.field-invalid")) active.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-            // Blur/change preparation is synchronous; own every subsequent await across all UI entry points.
-            this.keyboardPending = "save";
-            if (scalarChange) {
-              try { await scalarChange; }
-              catch { return; } // The existing change owner reports this failure; never save after a failed change.
-            }
-            if (!this.lifetime.signal.aborted && binding === this.generation) await save();
-          } finally { this.keyboardPending = undefined; }
-        } },
-        { kind: "callback", chord: "alt+j", target: state.dirty || !state.id ? discardBtn : form, allowEditable: true, hint: "j", run: async () => { this.keyboardPending = "discard"; try { await discard(); } finally { this.keyboardPending = undefined; } } }
-      ] : []
-    });
-
+      formHotkeys = createHotkeyController(document.body, {
+        blocked: () => this.keyboardPending !== undefined || this.busy || this.actionPending || this.uncertainMethod || state.writeUncertain || this.messages.block.blocked,
+        report: error => this.hotkeyError(error),
+        bindings: (): HotkeyBinding[] => {
+          if (surface!.mode === "read") return [
+            // E edits a read-first record; typing in a field (the chatter composer, a search box) is never taken.
+            { kind: "callback", chord: "e", target: editBtn, hint: "e", run: () => runFormAction(edit) },
+          ];
+          if (!canEdit && state.id) return [];
+          // An editor can restore its draft with a non-bubbling input event during a render.
+          if (statusActions.style.display === "none" && hasLocalEdit()) updateStatus();
+          const modifier = actionHotkeyModifier(document);
+          return [
+            { kind: "callback", chord: modifier + "+s", target: saveBtn, allowEditable: true, run: async () => {
+              const binding = this.generation;
+              try {
+                const active = document.activeElement;
+                if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) && surface!.controls().includes(active)) {
+                  const before = scalarChange;
+                  active.blur(); // Native change runs the existing field/onchange pipeline before Save.
+                  // Programmatic DOM fixtures (and controls that do not emit change on blur) need the same explicit commit event.
+                  if (scalarChange === before && active.closest(".field-dirty,.field-invalid")) active.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+                // Blur/change preparation is synchronous; own every subsequent await across all UI entry points.
+                this.keyboardPending = "save";
+                if (scalarChange) {
+                  try { await scalarChange; }
+                  catch { return; } // The existing change owner reports this failure; never save after a failed change.
+                }
+                if (!this.lifetime.signal.aborted && binding === this.generation) await save();
+              } finally { this.keyboardPending = undefined; }
+            } },
+            { kind: "callback", chord: modifier + "+j", target: discardBtn, allowEditable: true, run: async () => { this.keyboardPending = "discard"; try { await discard(); } finally { this.keyboardPending = undefined; } } }
+          ];
+        }
+      });
     }
     catch (error) { dispose(); stopActionMenu(); throw error; }
     return () => { dispose(); stopActionMenu(); };

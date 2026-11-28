@@ -221,18 +221,20 @@ describe("application", () => {
     for (const region of ["header", "navigation", "notice", "content"]) { const part = document.createElement("div"); part.setAttribute(`data-client-${region}`, ""); root.append(part); }
     document.body.append(root); return root;
   };
-  const start = async (respond: (path: string, body: Record<string, unknown>) => Promise<Response> | Response | undefined, nodes: unknown[] = bookForm, fresh = false) => {
+  const start = async (respond: (path: string, body: Record<string, unknown>) => Promise<Response> | Response | undefined, nodes: unknown[] = bookForm, fresh = false, extraFields: Record<string, ReturnType<typeof textField>> = {}) => {
     history.replaceState(null, "", fresh ? "/erp/action-20?view_type=form" : "/erp/action-20?id=5&view_type=form");
     const calls: { path: string; body: Record<string, unknown> }[] = [];
     const book = { state: "available" };
+    const description = descriptionOf(nodes);
+    Object.assign(description.fields["test.book"], extraFields);
     vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       calls.push({ path, body });
       const custom = respond(path, body);
       if (custom) return custom;
       const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] }
-        : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Books", model: "test.book", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, descriptionOf(nodes))
-        : path.endsWith("get_views") ? descriptionOf(nodes)
+        : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Books", model: "test.book", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
+        : path.endsWith("get_views") ? description
         : path.endsWith("erp_normalize_action_result") ? { wire_major: 1, result: { kind: "none" } }
         : path.endsWith("onchange") ? { value: {} }
         : path.endsWith("web_save") ? [{ id: 5, name: (body["vals"] as Record<string, unknown>)["name"] ?? "Dune", ...book }]
@@ -248,6 +250,140 @@ describe("application", () => {
   };
   const buttons = (root: HTMLElement): string[] => [...root.querySelectorAll(".form-header-btn")].map(b => b.textContent ?? "");
   const choice = (label: string): void => { [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === label)!.click(); };
+
+  const partners = ["partner_id", "partner_invoice_id", "partner_shipping_id"];
+  const partner = { id: 4, display_name: "Demo Customer" };
+  const startQuotation = (search: () => Promise<Response>, complete = false, fresh = true) => {
+    const nodes = [
+      { kind: "form", record_mode: "record", children: [1, 3, 4, 5, 6] },
+      { kind: "header", children: [2] },
+      buttonNode({ name: "action_confirm", label: "Confirm", details: attributeDetails({ hotkey: "q" }) }),
+      ...partners.map(name => fieldNode(name, "many2one")), fieldNode("name")
+    ];
+    const values = { name: "My quotation", ...Object.fromEntries(partners.map(name => [name, complete ? partner : false])) };
+    return start(path => {
+      if (path.endsWith("get_res_users_settings")) return Response.json({ homemenu_config: null });
+      if (path.endsWith("web_name_search")) return search();
+      if (path.endsWith("default_get")) return Response.json(values);
+      if (path.endsWith("web_save") || path.endsWith("web_read")) return Response.json([{ id: 5, ...values }]);
+      if (path.endsWith("action_confirm")) return Response.json(true);
+      return undefined;
+    }, nodes, fresh, Object.fromEntries(partners.map(name => [name, textField(name, "many2one", { relation: "res.partner", required: true })])));
+  };
+  const shortcut = (key: string, target: EventTarget = document) => target.dispatchEvent(new KeyboardEvent("keydown", {
+    key, code: `Key${key.toUpperCase()}`, altKey: true, bubbles: true, cancelable: true,
+  }));
+
+  test.each(["Confirm", "Confirm shortcut", "Save", "Save shortcut"])("%s on an incomplete form keeps the fields marked and searches closed", async action => {
+    const search = vi.fn(async () => Response.json([partner]));
+    const { root, calls } = await startQuotation(search);
+    const customer = root.querySelector<HTMLInputElement>("input[name=partner_id]")!;
+    const btn = root.querySelector<HTMLButtonElement>(action.startsWith("Confirm") ? ".form-header-btn" : ".status-btn-save")!;
+    if (action.endsWith("shortcut")) shortcut(action.startsWith("Confirm") ? "q" : "s");
+    else { btn.focus(); btn.click(); }
+    const warnings = () => root.querySelectorAll('.client-notification[data-level="warning"] .client-notification-message');
+    await vi.waitFor(() => expect(warnings()[0]?.textContent).toBe("3 fields need a value"));
+    await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".form-header-btn")?.disabled).toBe(false));
+    expect(warnings()).toHaveLength(1);
+    for (const name of partners) {
+      const input = root.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
+      expect(input.getAttribute("aria-expanded")).toBe("false");
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(input.closest(".field-invalid")?.querySelector(".field-error")?.textContent).toBe("This field needs a value.");
+    }
+    expect(document.activeElement).toBe(customer);
+    expect(root.querySelector<HTMLInputElement>("input[name=name]")?.value).toBe("My quotation");
+    expect(calls.filter(call => /\/(?:web_save|create|action_confirm)$/.test(call.path))).toHaveLength(0);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  test.each(["Save", "Confirm shortcut", "Save shortcut"])("a late relation lookup stays closed after %s, and the user can search again", async action => {
+    let finishSearch!: (value: Response) => void;
+    const pending = new Promise<Response>(resolve => { finishSearch = resolve; });
+    const search = vi.fn(() => pending);
+    const { root, calls } = await startQuotation(search);
+    const customer = root.querySelector<HTMLInputElement>("input[name=partner_id]")!;
+    customer.focus();
+    customer.click();
+    expect(search).toHaveBeenCalledOnce();
+    expect(customer.getAttribute("aria-expanded")).toBe("true");
+    if (action === "Save") root.querySelector<HTMLButtonElement>(".status-btn-save")!.click();
+    else shortcut(action === "Confirm shortcut" ? "q" : "s", customer);
+    await vi.waitFor(() => expect(customer.getAttribute("aria-invalid")).toBe("true"));
+    finishSearch(Response.json([partner]));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(customer.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
+    expect(calls.filter(call => /\/(?:web_save|create|action_confirm)$/.test(call.path))).toHaveLength(0);
+    search.mockImplementationOnce(async () => Response.json([partner]));
+    customer.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="option"]')?.textContent).toBe("Demo Customer"));
+    document.querySelector<HTMLElement>('[role="option"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>("input[name=partner_id]")?.value).toBe("Demo Customer"));
+  });
+
+  test("an onchange for another field does not open empty required relation pickers", async () => {
+    const search = vi.fn(async () => Response.json([partner]));
+    const { root } = await startQuotation(search);
+    const name = root.querySelector<HTMLInputElement>("input[name=name]")!;
+    name.value = "Edited quotation"; name.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(name.isConnected).toBe(false));
+    for (const input of root.querySelectorAll<HTMLInputElement>(".many2one-input")) {
+      expect(input.getAttribute("aria-expanded")).toBe("false");
+    }
+    expect(root.querySelector<HTMLInputElement>("input[name=name]")?.value).toBe("Edited quotation");
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  test.each(["click", "shortcut"])("Confirm by %s never submits a saved quotation with an invalid local edit", async inputMethod => {
+    const { root, calls } = await startQuotation(async () => Response.json([partner]), true, false);
+    const name = root.querySelector<HTMLInputElement>("input[name=name]")!;
+    name.focus();
+    name.value = "";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    const confirm = root.querySelector<HTMLButtonElement>(".form-header-btn")!;
+    if (inputMethod === "click") { confirm.focus(); confirm.click(); }
+    else shortcut("q", name);
+    await vi.waitFor(() => expect(root.querySelector('.client-notification[data-level="warning"] .client-notification-message')?.textContent).toBe("1 field needs a value"));
+    await vi.waitFor(() => expect(confirm.disabled).toBe(false));
+    expect(document.activeElement).toBe(name);
+    expect(name.value).toBe("");
+    expect(calls.filter(call => /\/(?:web_save|action_confirm)$/.test(call.path))).toHaveLength(0);
+  });
+
+  test("Confirm after a retained editor commits keeps an empty required relation editable and focused", async () => {
+    const { default: ace } = await import("ace-builds");
+    const nodes = [
+      { kind: "form", record_mode: "record", children: [1, 3, 4] }, { kind: "header", children: [2] },
+      buttonNode({ name: "action_confirm", label: "Confirm" }), fieldNode("customer_id", "many2one"),
+      { ...fieldNode("source", "code"), options: { mode: "xml" } }
+    ];
+    const { root, calls } = await start(path => path.endsWith("default_get") ? Response.json({ source: "<form/>", customer_id: false }) : undefined,
+      nodes, true, { customer_id: textField("Customer", "many2one", { required: true, relation: "res.partner" }), source: textField("Source", "text") });
+    const editor = ace.edit(root.querySelector<HTMLElement>(".ace_editor")!);
+    editor.setValue("<form>draft</form>", -1);
+    await Promise.resolve();
+    root.querySelector<HTMLButtonElement>(".form-header-btn")!.click();
+    await vi.waitFor(() => expect(calls.filter(call => call.path.endsWith("/onchange"))).toHaveLength(2));
+    await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".form-header-btn")?.disabled).toBe(false));
+    const customer = root.querySelector<HTMLInputElement>("input[name=customer_id]")!;
+    expect(customer.disabled).toBe(false);
+    expect(customer.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(customer);
+    expect(editor.getValue()).toBe("<form>draft</form>");
+    expect(calls.filter(call => /\/(?:web_save|action_confirm)$/.test(call.path))).toHaveLength(0);
+  });
+
+  test("Confirm shortcut on a complete new form creates the document and calls its method once", async () => {
+    const { root, calls } = await startQuotation(async () => Response.json([]), true);
+    const confirm = root.querySelector<HTMLButtonElement>(".form-header-btn")!;
+    shortcut("q", confirm); shortcut("q", confirm);
+    const writes = () => calls.filter(call => /\/(?:web_save|action_confirm)$/.test(call.path));
+    await vi.waitFor(() => expect(writes().map(call => call.path.split("/").pop())).toEqual(["web_save", "action_confirm"]));
+    expect(writes()[1]!.body["ids"]).toEqual([5]);
+    await vi.waitFor(() => expect(calls.some(call => call.path.endsWith("web_read"))).toBe(true));
+    expect(writes()).toHaveLength(2);
+  });
 
   test("phone header re-evaluates visible action order while status fields stay separate", async () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);

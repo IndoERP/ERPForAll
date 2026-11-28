@@ -28,6 +28,6 @@
         <field name="move_id" readonly="1"/><field name="email_to"/><field name="subject"/><field name="body"/>
         <field name="attachment_ids" widget="many2many_tags" domain="[('res_model', '=', 'account.move'), ('res_id', '=', move_id), ('res_field', '=', False)]"/>
       </group><footer><button name="action_preview_pdf" type="object" string="Preview PDF"/>
-          <button name="action_send_email" type="object" class="btn-primary" string="Queue email"/><button special="cancel" string="Discard"/></footer></form></field>
+          <button name="action_send_email" type="object" class="btn-primary" string="Queue email"/><button special="cancel" string="Discard" data-hotkey="j"/></footer></form></field>
     </record>
 </erp>

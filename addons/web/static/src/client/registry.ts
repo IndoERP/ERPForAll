@@ -106,7 +106,15 @@ export interface DraftWidgetLifecycle {
 }
 /** Editor-local text/error snapshot; owners may restore it across an unrelated rerender. */
 export interface WidgetDraft { readonly value: string; readonly message: string }
-export interface WidgetHandle { node: HTMLElement; dispose(): void; captureDraft?(): WidgetDraft | undefined; restoreDraft?(draft: WidgetDraft): void; draft?: DraftWidgetLifecycle }
+export interface WidgetHandle {
+  node: HTMLElement;
+  dispose(): void;
+  captureDraft?(): WidgetDraft | undefined;
+  restoreDraft?(draft: WidgetDraft): void;
+  /** Dismiss transient suggestions so validation sees the represented value and owns the next focus. */
+  prepareValidation?(): void;
+  draft?: DraftWidgetLifecycle;
+}
 export interface FieldWidget { isEmpty?(value: unknown): boolean; isValid?(value: unknown): boolean; kinds: readonly Field["kind"][]; render: (environment: WidgetEnvironment) => WidgetHandle }
 export interface ServiceEnvironment extends Partial<ShellNavigation> { /** Authorized Settings presentation and guarded navigation. */ settingsNavigation?: SettingsNavigation; messages?: MessageServices; editorLocale?: EditorLocale; host: HTMLElement; panel?: HTMLElement; controls?: HTMLElement; rpc: RpcClient; companies: readonly Company[]; run: (job: () => Promise<void>) => void; notice: (message: string) => void; context: Record<string, unknown>; registry: string; options: Record<string, unknown> }
 export interface ServiceFactory { model: string; validateOptions(options: Record<string, unknown>): void; create(environment: ServiceEnvironment): Promise<ServiceController> }

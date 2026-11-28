@@ -171,14 +171,17 @@ function relationAutocomplete(options: RelationAutocompleteOptions): ReturnType<
   return { ...complete, dispose: () => { if (disposed) return; disposed = true; complete.dispose(); } };
 }
 
-function relationQueryDraft(input: HTMLInputElement, complete: ReturnType<typeof createAutocomplete>): Pick<WidgetHandle, "captureDraft" | "restoreDraft"> {
+function relationQueryDraft(input: HTMLInputElement, complete: ReturnType<typeof createAutocomplete>): Pick<WidgetHandle, "captureDraft" | "restoreDraft" | "prepareValidation"> {
+  let resumeSearch = false;
   return {
+    prepareValidation: () => { resumeSearch = false; complete.close(false); },
     captureDraft: () => complete.isOpen() ? { value: input.value, message: input.validationMessage } : undefined,
     restoreDraft: draft => {
       input.value = draft.value;
+      resumeSearch = true;
       // The owner inserts and refocuses the new control after restoring its draft.
       queueMicrotask(() => {
-        if (!input.isConnected || input.ownerDocument.activeElement !== input || complete.isDisposed()) return;
+        if (!resumeSearch || !input.isConnected || input.ownerDocument.activeElement !== input || complete.isDisposed()) return;
         input.setSelectionRange(input.value.length, input.value.length);
         input.dispatchEvent(new Event("input"));
       });
@@ -396,7 +399,7 @@ function many2manyControl({ field, value, rpc, context, change: changed, run, ed
   }
   area.append(tags);
   let dispose = (): void => {};
-  let drafts: Pick<WidgetHandle, "captureDraft" | "restoreDraft"> = {};
+  let drafts: Pick<WidgetHandle, "captureDraft" | "restoreDraft" | "prepareValidation"> = {};
   if (field.readonly) {
     if (!values.length) tags.append(el("span", "—", "muted"));
   } else {

@@ -25,10 +25,10 @@
     <field name="arch" type="xml">
       <form>
         <header>
-          <button name="action_post" type="object" string="Post" class="oe_highlight" invisible="state != 'draft'"/>
+          <button name="action_post" type="object" string="Post" data-hotkey="q" class="oe_highlight" invisible="state != 'draft'"/>
           <button name="action_reverse" type="object" string="Reverse Entry" invisible="state != 'posted'"/>
           <button name="button_draft" type="object" string="Reset to Draft" invisible="reset_blocked"/>
-          <button name="button_cancel" type="object" string="Cancel" invisible="state != 'draft'"/>
+          <button name="button_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state != 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
         </header>
         <sheet>

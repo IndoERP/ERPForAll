@@ -560,7 +560,7 @@
         </group>
         <footer>
           <button name="action_register_departure" type="object" string="Confirm Departure" class="btn-primary"/>
-          <button special="cancel" string="Cancel" class="btn-secondary"/>
+          <button special="cancel" string="Cancel" data-hotkey="x" class="btn-secondary"/>
         </footer>
       </form>
     </field>

@@ -104,7 +104,7 @@
     <field name="arch" type="xml">
       <form string="Purchase Order">
         <header>
-          <button name="button_confirm" type="object" string="Confirm Order" class="btn-primary" invisible="state not in ('draft', 'sent')"/>
+          <button name="button_confirm" type="object" string="Confirm Order" data-hotkey="q" class="btn-primary" invisible="state not in ('draft', 'sent')"/>
           <button name="action_open_rfq_send" type="object" string="Send by Email" invisible="state not in ('draft', 'sent')"/>
           <button name="action_open_alternative_wizard" type="object" string="Alternative" invisible="state not in ('draft', 'sent')"/>
           <button name="button_approve" type="object" string="Approve Order" class="btn-primary" invisible="state != 'to approve'" groups="purchase.group_purchase_manager"/>
@@ -114,7 +114,7 @@
           <button name="button_lock" type="object" string="Lock" invisible="state != 'purchase' or locked"/>
           <button name="button_unlock" type="object" string="Unlock" invisible="not locked" groups="purchase.group_purchase_manager"/>
           <button name="button_draft" type="object" string="Set to Draft" invisible="state != 'cancel'"/>
-          <button name="button_cancel" type="object" string="Cancel" invisible="state == 'cancel' or locked or cancel_blocked"/>
+          <button name="button_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state == 'cancel' or locked or cancel_blocked"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,sent,purchase" readonly="1"/>
         </header>
         <sheet>

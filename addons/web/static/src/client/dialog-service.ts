@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { createFocusTrap, createHotkeyController } from "@erpforall/elang";
+import { actionHotkeyModifier, createFocusTrap, createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { button, dialogCloseButton, el } from "./dom.js";
 import { ClientError } from "./transport.js";
 
@@ -146,7 +146,12 @@ export class DialogService {
       hotkeys = createHotkeyController(dialog, { report: this.report, bindings: () => {
         const usable = [...dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")].filter(control => !control.hidden && !control.closest("[hidden],[inert]") && getComputedStyle(control).display !== "none");
         const first = usable.find(control => control.hasAttribute("data-default-action")) ?? usable[0];
-        return first ? [{kind:"dom",chord:"ctrl+enter",target:first,allowEditable:true}] : [];
+        const bindings: HotkeyBinding[] = first ? [{kind:"dom",chord:"ctrl+enter",target:first,allowEditable:true}] : [];
+        for (const target of usable) {
+          const key = target.dataset["hotkey"];
+          if (key) bindings.push({ kind: "dom", chord: `${actionHotkeyModifier(dialog.ownerDocument)}+${key}`, target, allowEditable: true });
+        }
+        return bindings;
       } });
       this.publishActive();
       if (options.signal?.aborted) finish();
@@ -182,7 +187,11 @@ export class DialogService {
       return false;
     };
     // The primary (or destructive) action is last, right-aligned; Ctrl+Enter and the initial focus go to it.
-    if (!alert || options.cancel) footer.append(button(options.cancelLabel ?? "Cancel", () => { void run("cancel", options.cancel); }));
+    if (!alert || options.cancel) {
+      const cancel = button(options.cancelLabel ?? "Cancel", () => { void run("cancel", options.cancel); });
+      cancel.dataset["hotkey"] = "x";
+      footer.append(cancel);
+    }
     const confirmButton = button(options.confirmLabel ?? "OK", () => { void run("confirm", options.confirm); }, options.destructive ? "danger" : "primary");
     confirmButton.dataset["defaultAction"] = "";
     footer.append(confirmButton);

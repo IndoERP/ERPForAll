@@ -62,7 +62,7 @@ export type { FocusTrapOptions, RovingOptions } from "./runtime/accessibility.js
 export { createTranslator } from "./runtime/translation.js";
 export type { TranslationCatalogue, TranslationOptions, Translate } from "./runtime/translation.js";
 
-export { createHotkeyController, createHotkeyBoundary } from "./runtime/hotkeys.js";
+export { actionHotkeyModifier, createHotkeyController, createHotkeyBoundary } from "./runtime/hotkeys.js";
 export type { HotkeyBinding, HotkeyControllerOptions, HotkeyBoundaryOptions } from "./runtime/hotkeys.js";
 export { prepareRestrictedCard } from "./runtime/restricted-template.js";
 export type { CardIdentity } from "./runtime/restricted-template.js";

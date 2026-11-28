@@ -22,7 +22,7 @@ let popoverIdentity = 0;
 // Keyboard ownership is document-wide, like the UI5 focus-trap stack; each service still owns disposal.
 const documentPopovers = new WeakMap<Document, PopoverHandle[]>();
 const PLACEMENTS = ["top", "bottom", "left", "right"] as const;
-const ROLES = ["dialog", "tooltip", "menu", "listbox", "region", "status"];
+const ROLES = ["dialog", "tooltip", "menu", "listbox", "region", "status", "presentation"];
 
 /** Browser-local, owner-disposable anchored overlays; content is supplied by trusted code. */
 export class PopoverService {
@@ -54,7 +54,7 @@ export class PopoverService {
       if (options.presentation !== "sheet") node.style.width = "max-content";
     }
     node.append(content);
-    if ((options.role ?? "dialog") !== "tooltip") node.setAttribute("aria-label", (anchor.getAttribute("aria-label") ?? anchor.textContent?.trim()) || "More information");
+    if (options.role !== "tooltip" && options.role !== "presentation") node.setAttribute("aria-label", (anchor.getAttribute("aria-label") ?? anchor.textContent?.trim()) || "More information");
     const doc = anchor.ownerDocument, view = doc.defaultView!;
     const prior = doc.activeElement;
     let closed = false, nativeOpen = false;
@@ -120,7 +120,7 @@ export class PopoverService {
     removed.observe(doc.documentElement, { childList: true, subtree: true }); resize?.observe(anchor); resize?.observe(node);
     if (options.alignTo && options.alignTo !== anchor) resize?.observe(options.alignTo);
     doc.addEventListener("pointerdown", outside);
-    try { if (options.role !== "tooltip" && options.role !== "status") hotkeys = createHotkeyBoundary(node, { report: this.report, onEscape: () => handle.close("escape") }); }
+    try { if (options.role !== "tooltip" && options.role !== "status" && options.role !== "presentation") hotkeys = createHotkeyBoundary(node, { report: this.report, onEscape: () => handle.close("escape") }); }
     catch (error) { handle.close("dispose"); throw error; }
     view.addEventListener("resize", fit); view.addEventListener("scroll", fit, true);
     view.visualViewport?.addEventListener("resize", fit); view.visualViewport?.addEventListener("scroll", fit);

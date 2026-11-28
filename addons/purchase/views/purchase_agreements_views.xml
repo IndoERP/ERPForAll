@@ -181,11 +181,11 @@
     <field name="arch" type="xml">
       <form string="Purchase Agreement">
         <header>
-          <button name="action_confirm" type="object" string="Confirm" class="btn-primary" invisible="state != 'draft'"/>
+          <button name="action_confirm" type="object" string="Confirm" data-hotkey="q" class="btn-primary" invisible="state != 'draft'"/>
           <button name="action_create_rfq" type="object" string="New Quotation" class="btn-primary" invisible="state != 'confirmed'"/>
           <button name="action_done" type="object" string="Close" invisible="state != 'confirmed'"/>
           <button name="action_draft" type="object" string="Set to Draft" invisible="state != 'cancel'"/>
-          <button name="action_cancel" type="object" string="Cancel" invisible="state in ('done', 'cancel')"/>
+          <button name="action_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state in ('done', 'cancel')"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,confirmed,done" readonly="1"/>
         </header>
         <sheet>
@@ -247,7 +247,7 @@
         </group>
         <footer>
           <button name="action_send_rfq" type="object" string="Send" class="btn-primary"/>
-          <button special="cancel" string="Discard"/>
+          <button special="cancel" string="Discard" data-hotkey="j"/>
         </footer>
       </form>
     </field>
@@ -266,7 +266,7 @@
         </group>
         <footer>
           <button name="action_create_alternative" type="object" string="Create Alternative" class="btn-primary"/>
-          <button special="cancel" string="Cancel"/>
+          <button special="cancel" string="Cancel" data-hotkey="x"/>
         </footer>
       </form>
     </field>

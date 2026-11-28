@@ -165,3 +165,20 @@ test.each<[Record<string, unknown> | null, string]>([
   expect(() => dialogs.confirm(options as never)).toThrowError(expect.objectContaining({ kind: "validation", message }));
   expect(() => dialogs.alert(options as never)).toThrowError(expect.objectContaining({ kind: "validation", message }));
 });
+
+test("Cancel's platform shortcut dismisses only the top confirmation", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+  const parentCancel = vi.fn(), childCancel = vi.fn();
+  const parent = dialogs.confirm({ message: "Parent?", cancel: parentCancel });
+  const child = dialogs.confirm({ message: "Child?", cancel: childCancel });
+  const input = document.createElement("input");
+  child.dialog.querySelector(".message-dialog-body")!.append(input);
+  input.focus();
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true, bubbles: true }));
+  expect(parent.dialog.querySelector("[data-hotkey-hint]")).toBeNull();
+  expect(child.dialog.querySelector("[data-hotkey-hint]")?.textContent).toBe("x");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "x", code: "KeyX", ctrlKey: true, bubbles: true }));
+  await expect(child.result).resolves.toBe("cancel");
+  expect(childCancel).toHaveBeenCalledOnce(); expect(parentCancel).not.toHaveBeenCalled();
+  expect(parent.dialog.open).toBe(true);
+});

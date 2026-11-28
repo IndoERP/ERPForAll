@@ -5,7 +5,7 @@ summary = "The kernel of ERPForAll, needed for every installation"
 category = "Hidden"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.24.1"
+version = "1.24.2"
 auto_install = true
 depends = []
 # Loaded by the data loader. ir.capability: which groups hold the core capabilities.

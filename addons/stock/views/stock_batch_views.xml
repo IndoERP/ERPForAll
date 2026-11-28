@@ -25,9 +25,9 @@
         <header>
           <button name="action_confirm" type="object" string="Confirm" class="oe_highlight" invisible="state != 'draft'"/>
           <button name="action_assign" type="object" string="Check Availability" invisible="state != 'in_progress'"/>
-          <button name="action_done" type="object" string="Validate" class="oe_highlight" invisible="state != 'in_progress'"/>
+          <button name="action_done" type="object" string="Validate" data-hotkey="v" class="oe_highlight" invisible="state != 'in_progress'"/>
           <button name="action_add_transfers" type="object" string="Add Transfers" invisible="state not in ('draft', 'in_progress')"/>
-          <button name="action_cancel" type="object" string="Cancel" invisible="state not in ('draft', 'in_progress')"/>
+          <button name="action_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state not in ('draft', 'in_progress')"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,in_progress,done"/>
         </header>
         <sheet>
@@ -128,7 +128,7 @@
         <field name="picking_ids" widget="many2many_tags"/>
         <footer>
           <button name="action_add_to_batch" type="object" string="Confirm" class="btn-primary"/>
-          <button special="cancel" string="Cancel"/>
+          <button special="cancel" string="Cancel" data-hotkey="x"/>
         </footer>
       </form>
     </field>

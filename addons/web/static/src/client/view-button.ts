@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
+import { actionHotkeyModifier, createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { createButtonControl } from './button-control.js';
 import { knownMenuIcon } from './icons.js';
 import type { ButtonNode, CancelNode } from './metadata.js';
@@ -15,7 +15,7 @@ export function viewButton(node:ButtonNode|CancelNode, env:{activate():void;clas
  const icon=details?.icon===undefined?undefined:knownMenuIcon(details.icon);
  if(icon===null)throw new ClientError('validation',`Unknown button icon: ${details?.icon}.`);
  const control=createButtonControl({label:node.label,rank:node.variant,...(details?{size:details.size,circle:details.circle,...(icon?{icon}:{}),...(details.title!==undefined?{title:details.title}:{})}:{}),className:[env.className,...(details?.classes??[])].filter(Boolean).join(' '),...(node.kind==='cancel_button'||node.target?.kind!=='inert'?{action:env.activate}:{})});
- if(details?.hotkey)control.dataset['hotkey']=details.hotkey;
+ if (details?.hotkey) control.dataset["hotkey"] = details.hotkey;
  let dead=false, detach:(()=>void)|undefined, observer:MutationObserver|undefined;
  const detailed=details?.help!==undefined || env.debug===true;
  if(env.messages && (detailed || details?.title)) {
@@ -63,8 +63,14 @@ export class ButtonDebouncer {
 /** Compatibility adapter: all view owners share runtime arbitration. */
 export class ButtonHotkeys {
  private readonly controller: ReturnType<typeof createHotkeyController>;
- constructor(controls:()=>readonly HTMLButtonElement[], env:{blocked():boolean;report(error:unknown):void}) {
-  this.controller=createHotkeyController(document.body,{blocked:env.blocked,report:env.report,bindings:()=>controls().filter(control=>Boolean(control.dataset['hotkey'])).map((target):HotkeyBinding=>({kind:'dom',chord:`alt+${target.dataset['hotkey']!}`,target}))});
+ constructor(controls:()=>readonly HTMLButtonElement[], env:{blocked():boolean;report(error:unknown):void;allowEditable?:boolean}) {
+  const modifier = actionHotkeyModifier(document);
+  this.controller = createHotkeyController(document.body, {
+   blocked: env.blocked, report: env.report,
+   bindings: () => controls().filter(control => control.dataset["hotkey"]).map((target): HotkeyBinding => ({
+    kind: "dom", chord: `${modifier}+${target.dataset["hotkey"]}`, target, allowEditable: env.allowEditable === true,
+   })),
+  });
  }
  refresh():void { this.controller.refresh(); }
  dispose():void { this.controller.dispose(); }

@@ -86,7 +86,7 @@
     <field name="arch" type="xml">
       <form>
         <header>
-          <button name="action_post" type="object" string="Confirm" class="btn-primary" invisible="state != 'draft'"/>
+          <button name="action_post" type="object" string="Confirm" data-hotkey="q" class="btn-primary" invisible="state != 'draft'"/>
           <button name="action_register_payment" type="object" string="Register Payment" class="btn-primary"
                   invisible="state != 'posted' or payment_state not in ('not_paid', 'partial')"/>
           <button name="action_open_reversal_wizard" type="object" string="Credit Note"
@@ -94,7 +94,7 @@
           <!-- a posted invoice is corrected by a reversal: only a cancelled one without matched
                items or payments returns to draft, the server's reset_blocked -->
           <button name="button_draft" type="object" string="Reset to Draft" invisible="reset_blocked"/>
-          <button name="button_cancel" type="object" string="Cancel" invisible="state != 'draft'"/>
+          <button name="button_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state != 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
         </header>
         <sheet>
@@ -350,7 +350,7 @@
         </group>
         <footer>
           <button name="reverse_moves" type="object" string="Reverse" class="btn-primary"/>
-          <button special="cancel" string="Cancel"/>
+          <button special="cancel" string="Cancel" data-hotkey="x"/>
         </footer>
       </form>
     </field>

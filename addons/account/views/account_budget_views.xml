@@ -142,7 +142,7 @@
           <button name="action_budget_validate" type="object" string="Approve &amp; Activate AVC" class="btn-primary" invisible="state != 'confirm'"/>
           <button name="action_refresh_practical" type="object" string="Refresh Availability" invisible="state not in ('confirm', 'validate')"/>
           <button name="action_budget_done" type="object" string="Close" invisible="state != 'validate'"/>
-          <button name="action_budget_cancel" type="object" string="Cancel" invisible="state not in ('draft', 'confirm')"/>
+          <button name="action_budget_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state not in ('draft', 'confirm')"/>
           <button name="action_budget_draft" type="object" string="Reset to Draft" invisible="state != 'cancel'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,confirm,validate,done"/>
         </header>
@@ -236,7 +236,7 @@
         <header>
           <button name="action_submit" type="object" string="Submit" class="btn-primary" invisible="state != 'draft'"/>
           <button name="action_approve" type="object" string="Approve &amp; Apply" class="btn-primary" invisible="state not in ('draft', 'submitted')"/>
-          <button name="action_cancel" type="object" string="Cancel" invisible="state in ('approved', 'cancelled')"/>
+          <button name="action_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state in ('approved', 'cancelled')"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved"/>
         </header>
         <sheet>

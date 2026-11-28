@@ -6,7 +6,7 @@ import { ClientError } from "./transport.js";
 export type AutocompleteOption = { kind: "option"; label: string; select(): void | Promise<void> } | { kind: "status" | "heading"; label: string };
 export interface AutocompleteSource { options: readonly AutocompleteOption[] | ((query: string, signal: AbortSignal) => readonly AutocompleteOption[] | Promise<readonly AutocompleteOption[]>); placeholder?: string }
 export interface AutocompleteOptions { /** The field box the suggestion list lines up with (left edge, at least its width). */ alignTo?: HTMLElement; input: HTMLInputElement; owner: HTMLElement; environment: EditorEnvironment; sources: readonly AutocompleteSource[]; debounceMs?: number; autoSelect?: boolean; focusFirst?: boolean; representedValue?: () => string; onCancel?: () => void; touch?: boolean }
-export interface AutocompleteHandle { dropdown: HTMLElement; search(query: string): Promise<void>; toggle(query: string): void; close(): void; dispose(): void; isOpen(): boolean; isDisposed(): boolean }
+export interface AutocompleteHandle { dropdown: HTMLElement; search(query: string): Promise<void>; toggle(query: string): void; close(restoreFocus?: boolean): void; dispose(): void; isOpen(): boolean; isDisposed(): boolean }
 let autocompleteIdentity = 0;
 /** Value-independent suggestion interactions; adapters own search permissions and selected identities. */
 export function createAutocomplete(options: AutocompleteOptions): AutocompleteHandle {
@@ -72,7 +72,8 @@ export function createAutocomplete(options: AutocompleteOptions): AutocompleteHa
     opened = true; dropdown.style.display = "block"; input.setAttribute("aria-expanded", "true");
     transitioning = true;
     try {
-      overlay = openEditorOverlay({ anchor: input, content, environment, title, ...(options.touch === undefined ? {} : { touch: options.touch }), ...(options.alignTo ? { alignTo: options.alignTo } : {}), onClose: closeState });
+      // The anchored listbox belongs to the combobox; only its touch sheet is a separate dialog.
+      overlay = openEditorOverlay({ anchor: input, content, environment, title, popoverRole: "presentation", ...(options.touch === undefined ? {} : { touch: options.touch }), ...(options.alignTo ? { alignTo: options.alignTo } : {}), onClose: closeState });
       if (overlay.mode === "sheet") { inputSlot = document.createComment("editor-input"); input.before(inputSlot); content.prepend(input); input.focus(); }
     }
     catch (error) { opened = false; dropdown.style.display = "none"; input.setAttribute("aria-expanded", "false"); throw error; }
@@ -188,5 +189,5 @@ export function createAutocomplete(options: AutocompleteOptions): AutocompleteHa
   input.addEventListener("input", schedule); input.addEventListener("keydown", key); input.addEventListener("compositionstart", compositionStart); input.addEventListener("compositionend", compositionEnd); input.addEventListener("blur", blur); content.addEventListener("mousedown", preventBlur);
   removed.observe(owner.ownerDocument.documentElement, { childList: true, subtree: true }); environment.signal?.addEventListener("abort", dispose, { once: true });
   if (environment.signal?.aborted) dispose();
-  return { dropdown, search, toggle: query => { if (opened) close(); else void search(query).catch(reportFailure); }, close: () => close(), dispose, isOpen: () => opened, isDisposed: () => dead };
+  return { dropdown, search, toggle: query => { if (opened) close(); else void search(query).catch(reportFailure); }, close: restoreFocus => close("cancel", restoreFocus), dispose, isOpen: () => opened, isDisposed: () => dead };
 }

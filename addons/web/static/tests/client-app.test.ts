@@ -4141,3 +4141,58 @@ test("a sidebar menu pointing to a target=new window action opens its wizard dia
   expect(root.querySelector(".notification-danger, .client-notification[data-level=danger]")).toBeNull();
   await new Promise(resolve => setTimeout(resolve, 20));
 });
+
+test("Control+C on Mac opens New from the list and dirty form shortcuts are anchored to their buttons", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+  history.replaceState(null, "", "/erp/action-20");
+  const log = { saved: [] as unknown[], reads: [] as number[] };
+  const base = pagerSaveFetch(log, false);
+  vi.stubGlobal("fetch", (path: string, init: RequestInit) => path.endsWith("default_get")
+    ? new Response("{}", { headers: { "Content-Type": "application/json" } }) : base(path, init));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  const press = (target: EventTarget, key: string, code: string) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, code, ctrlKey: true, bubbles: true, cancelable: true }));
+  const hint = (label: string): string | undefined => [...root.querySelectorAll("button")]
+    .find(node => node.firstChild && node.textContent?.startsWith(label))?.querySelector("[data-hotkey-hint]")?.textContent?.toLowerCase();
+  press(root, "Control", "ControlLeft");
+  expect(hint("New")).toBe("c");
+  press(root, "c", "KeyC");
+  await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('input[name="name"]')).not.toBeNull());
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  input.focus(); input.value = "New quotation"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  press(input, "Control", "ControlLeft");
+  expect(hint("Save")).toBe("s");
+  expect(hint("Discard")).toBe("j");
+  press(input, "s", "KeyS");
+  await vi.waitFor(() => expect(log.saved).toEqual([{ name: "New quotation" }]));
+  await vi.waitFor(() => expect(root.querySelector(".status-badge")?.textContent).toBe("Saved"));
+  press(root, "Control", "ControlLeft");
+  expect(hint("Save")).toBeUndefined();
+  expect(hint("Discard")).toBeUndefined();
+  expect(hint("New")).toBe("c");
+});
+
+test("New waits for the focused field change and lets the user cancel leaving the record", async () => {
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  const log = { saved: [] as unknown[], reads: [] as number[] };
+  const base = pagerSaveFetch(log, false);
+  let release!: () => void;
+  const changing = new Promise<void>(resolve => { release = resolve; });
+  vi.stubGlobal("fetch", async (path: string, init: RequestInit) => {
+    if (path.endsWith("onchange")) await changing;
+    return base(path, init);
+  });
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  input.focus(); input.value = "Keep this edit"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.addEventListener("blur", () => input.dispatchEvent(new Event("change", { bubbles: true })), { once: true });
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", altKey: true, bubbles: true, cancelable: true }));
+  expect(document.querySelector("dialog")).toBeNull();
+  release();
+  await vi.waitFor(() => expect(document.querySelector("dialog")?.textContent).toContain("Unsaved changes"));
+  document.querySelector("dialog")!.dispatchEvent(new KeyboardEvent("keydown", { key: "x", code: "KeyX", altKey: true, bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(document.querySelector("dialog")).toBeNull());
+  expect(location.search).toContain("id=5");
+  expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Keep this edit");
+  expect(log.saved).toEqual([]);
+});

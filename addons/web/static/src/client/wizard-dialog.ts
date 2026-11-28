@@ -34,8 +34,7 @@ export class WizardDialog {
   private queuedActivation: (() => Promise<void>) | undefined;
   private uncertain = false;
   private saveUncertain = false;
-  private nextFocus: string | undefined;
-  private passwordFocus: HTMLInputElement | undefined;
+  private validationFocus: HTMLElement | undefined;
   private dead = false;
   private finish!: (completed: boolean) => void;
   readonly completion = new Promise<boolean>(resolve => { this.finish = resolve; });
@@ -128,12 +127,15 @@ export class WizardDialog {
       footerHost: footer,
       footer: (node, parent) => this.renderButton(node, parent)
     });
-    this.hotkeys=new ButtonHotkeys(()=>[...this.dialog.querySelectorAll<HTMLButtonElement>("button")],{blocked:()=>this.pending||this.commitPending!==undefined||this.uncertain||this.saveUncertain||this.env.messages?.block.blocked===true,report:error=>this.env.report(error)});
+    this.hotkeys = new ButtonHotkeys(() => [...this.dialog.querySelectorAll<HTMLButtonElement>("button")], {
+      allowEditable: true, blocked: () => this.pending || this.queuedActivation !== undefined || this.uncertain || this.saveUncertain || this.env.messages?.block.blocked === true,
+      report: error => this.env.report(error),
+    });
     this.form.addEventListener("submit", event => {
       event.preventDefault();
       // Enter in a password form presses its submission button: a password form is never saved.
       if (passwordModels.has(env.state.model)) { this.submissionButton()?.click(); return; }
-      this.run(() => this.save());
+      this.run(async () => { await this.save(); });
     });
     this.dialog.addEventListener("cancel", event => {
       event.preventDefault(); this.run(async () => { if (await this.canLeave(true)) await this.close(); });
@@ -176,16 +178,15 @@ export class WizardDialog {
       if (!this.dead) {
         for (const [input, disabled] of this.disabled) input.disabled = disabled;
         this.disabled.clear();
-        const target = this.nextFocus ?? focus; this.nextFocus = undefined;
-        // Password controls own uncommitted browser/autofill values until the managed call finishes.
-        if (!passwordModels.has(this.env.state.model)) this.surface.render(target);
+        // Keep inline validation, the revealed tab, and any browser-owned password values.
+        if (!this.validationFocus && !passwordModels.has(this.env.state.model)) this.surface.render(focus);
         this.disable();
-        if (this.passwordFocus) {
-          this.passwordFocus.focus();
-          this.passwordFocus = undefined;
-        } else if (target) {
+        if (this.validationFocus) {
+          this.validationFocus.focus();
+          this.validationFocus = undefined;
+        } else if (focus) {
           for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) {
-            if (control.dataset["focusKey"] === target) control.focus();
+            if (control.dataset["focusKey"] === focus) control.focus();
           }
         }
       }
@@ -209,7 +210,7 @@ export class WizardDialog {
         field.setAttribute("aria-invalid", "true");
         this.notification.id = "password-operation-error";
         field.setAttribute("aria-describedby", this.notification.id);
-        this.passwordFocus = field;
+        this.validationFocus = field;
       }
     }
     return true;
@@ -240,10 +241,9 @@ export class WizardDialog {
         if (!commitOk) {
           for (const [input, disabled] of this.disabled) input.disabled = disabled;
           this.disabled.clear();
-          const target = this.nextFocus ?? focus; this.nextFocus = undefined;
-          this.surface.render(target);
+          this.surface.render(focus);
           this.disable();
-          if (target) for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) if (control.dataset["focusKey"] === target) control.focus();
+          if (focus) for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) if (control.dataset["focusKey"] === focus) control.focus();
           if (commitError !== undefined) this.env.report(commitError);
         }
         if (commitOk && this.queuedCommits.length > 0) {
@@ -306,26 +306,27 @@ export class WizardDialog {
   private async validated(): Promise<boolean> {
     await this.surface.commit();
     for (const [input, disabled] of this.disabled) input.disabled = disabled;
-    const valid = this.surface.valid(), invalidFocus = formFocus(this.form);
-    if (!valid && passwordModels.has(this.env.state.model) && document.activeElement instanceof HTMLInputElement) {
-      this.passwordFocus = document.activeElement;
+    const valid = this.surface.valid();
+    if (!valid && document.activeElement instanceof HTMLElement && this.dialog.contains(document.activeElement)) {
+      this.validationFocus = document.activeElement;
     }
     this.disable();
-    if (!valid) this.nextFocus = invalidFocus;
     return valid;
   }
-  private async save(): Promise<void> {
-    if (!await this.validated()) return;
+  private async save(): Promise<boolean> {
+    if (!await this.validated()) return false;
     try { await this.env.state.save(); }
     catch (error) {
       // RecordState retains ambiguous web_save recovery; no mutation is replayed here.
       if (error instanceof ClientError && error.kind === "ambiguous") this.saveUncertain = true;
       throw error;
     }
+    return true;
   }
   private renderButton(node: ButtonNode | CancelNode, parent: HTMLElement): HTMLButtonElement | undefined {
     if (buttonHidden(node, this.env.view.fields, this.env.state.values)) return;
     const control = viewButton(node,{model:this.env.state.model,debug:this.env.debug,...(this.env.messages?{messages:this.env.messages}:{}),report:error=>this.env.report(error),activate:()=>this.debounce.run(node,node.details?.debounce_ms??0,()=>this.run(async () => {
+      if (buttonHidden(node, this.env.view.fields, this.env.state.values)) return;
       if (node.kind === "cancel_button") {
         if(node.details?.block_ui && !this.env.messages)throw new ClientError("unsupported","This button owner does not supply UI blocking.");
         const release=node.details?.block_ui?this.env.messages!.block.begin():undefined;
@@ -334,7 +335,7 @@ export class WizardDialog {
       await runObjectButton(node, {
         model: this.env.state.model, context: this.env.context,...(this.env.uid===undefined?{}:{uid:this.env.uid}), fields:this.env.view.fields,values:()=>this.env.state.values,id: () => this.env.state.id,
         ...(this.env.action?{action:this.env.action}:{}),...(this.env.url?{url:this.env.url}:{}),...(this.env.messages?{block:()=>this.env.messages!.block.begin()}:{}),
-        dirty: () => this.env.state.dirty, save: () => this.save(),
+        dirty: () => this.env.state.dirty || this.surface.hasLocalEdits(), save: () => this.save(),
         // A password submission sends its typed secrets as parameters of the managed operation and is never
         // saved first: the server refuses a saved secret.
         secretArguments: async (method, context) => {

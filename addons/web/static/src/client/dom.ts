@@ -35,6 +35,7 @@ export function dialogCloseButton(action: () => void, className = "message-dialo
 export function actionButton(label: ActionLabel, action: () => void, className?: string): HTMLButtonElement {
   const node = button(actionTexts[label](), action, className);
   node.classList.add("has-action-icon");
+  if (label === "New") node.dataset["hotkey"] = "c";
   if (label === "Actions") node.append(icon(actionIcons[label]));
   else node.prepend(icon(actionIcons[label]));
   return node;
@@ -83,6 +84,9 @@ export async function choose(title: string, message: string, choices: readonly s
       const action = (): void => finish(choice);
       const className = index !== 0 ? "" : DESTRUCTIVE_CAPTION.test(choice) ? "danger" : "primary";
       const node = isActionLabel(choice) ? actionButton(choice, action, className) : button(choice, action, className);
+      if (choice === "Save") node.dataset["hotkey"] = "s";
+      if (choice === "Discard") node.dataset["hotkey"] = "j";
+      if (choice === "Cancel") node.dataset["hotkey"] = "x";
       if (index === 0) node.dataset["defaultAction"] = "";
       return node;
     });

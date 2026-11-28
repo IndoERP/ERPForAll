@@ -69,7 +69,7 @@
         <header>
           <button name="action_process_barcode" type="object" string="Scan Barcode" class="oe_highlight" invisible="state != 'open'"/>
           <button name="action_validate_session" type="object" string="Validate / Apply" class="oe_highlight" invisible="state != 'open'"/>
-          <button name="action_cancel_session" type="object" string="Cancel" invisible="state != 'open'"/>
+          <button name="action_cancel_session" type="object" string="Cancel" data-hotkey="x" invisible="state != 'open'"/>
           <field name="state" widget="statusbar" statusbar_visible="open,done"/>
         </header>
         <sheet>

@@ -119,8 +119,8 @@
       <form string="Landed Cost">
         <header>
           <button name="compute_landed_cost" type="object" string="Compute" invisible="state != 'draft'"/>
-          <button name="button_validate" type="object" string="Validate" class="oe_highlight" invisible="state != 'draft'"/>
-          <button name="button_cancel" type="object" string="Cancel" invisible="state != 'draft'"/>
+          <button name="button_validate" type="object" string="Validate" data-hotkey="v" class="oe_highlight" invisible="state != 'draft'"/>
+          <button name="button_cancel" type="object" string="Cancel" data-hotkey="x" invisible="state != 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,done"/>
         </header>
         <sheet>

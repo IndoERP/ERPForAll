@@ -30,6 +30,11 @@ interface Candidate { binding: HotkeyBinding; controller?: Controller; report: (
 const dispatchers = new WeakMap<Document, Dispatcher>();
 const MODIFIERS = ["ctrl", "alt", "meta", "shift"] as const;
 
+/** Modifier for declarative view actions, independent of browser/application commands. */
+export function actionHotkeyModifier(doc: Document): "ctrl" | "alt" {
+  return /Mac|iPhone|iPad|iPod/.test(doc.defaultView!.navigator.platform) ? "ctrl" : "alt";
+}
+
 function plain(value: unknown, label: string, keys: readonly string[]): void {
   if (value === null || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
     throw new UIError(`${label} options must be a plain object`, "value");
@@ -156,22 +161,35 @@ class Dispatcher {
     return result;
   }
   private readonly key = (event: Event): void => {
-    this.clear();
     const view = this.doc.defaultView;
-    if (!view || !(event instanceof view.KeyboardEvent)) return;
+    if (!view || !(event instanceof view.KeyboardEvent)) { this.clear(); return; }
+    if (event.repeat && (event.key === "Control" || event.key === "Alt")) return;
+    this.clear();
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || this.composing || event.getModifierState("AltGraph")) return;
     const active = this.activeScope();
     const candidates = this.candidates(event, active);
     if (!candidates) return; // A malformed dynamic owner aborts dispatch; no background fallback.
-    if (event.key === "Alt" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat) {
-      for (const { binding } of candidates) if (/^alt\+(?:shift\+)?[a-z0-9]$/.test(binding.chord)) {
-        const hint = this.doc.createElement("span"); hint.className = "button-hotkey-hint"; hint.dataset["hotkeyHint"] = "";
-        hint.setAttribute("aria-hidden", "true"); hint.textContent = binding.hint ?? binding.chord.slice(4); binding.target.append(hint); this.hints.push(hint);
-      }
-      if (this.hints.length) {
-        this.observer = new view.MutationObserver(this.clear);
+    const modifier = actionHotkeyModifier(this.doc);
+    const modifierHeld = modifier === "ctrl" ? event.key === "Control" && event.ctrlKey && !event.altKey
+      : event.key === "Alt" && event.altKey && !event.ctrlKey;
+    if (modifierHeld && !event.metaKey && !event.shiftKey && !event.repeat) {
+      const update = (available: Candidate[]): void => {
+        const targets = available.flatMap(({ binding }) => {
+          if (!binding.chord.startsWith(modifier + "+") || binding.hint === "") return [];
+          const key = binding.chord.slice(modifier.length + 1);
+          return /^(?:shift\+)?[a-z0-9]$/.test(key) ? [{ target: binding.target, label: binding.hint ?? key }] : [];
+        });
+        if (targets.length === this.hints.length && targets.every(({ target, label }, i) =>
+          this.hints[i]?.parentElement === target && this.hints[i]?.textContent === label)) return;
+        this.clear();
+        for (const { target, label } of targets) {
+          const hint = this.doc.createElement("span"); hint.className = "button-hotkey-hint"; hint.dataset["hotkeyHint"] = "";
+          hint.setAttribute("aria-hidden", "true"); hint.textContent = label; target.append(hint); this.hints.push(hint);
+        }
+        this.observer = new view.MutationObserver(() => update(this.candidates(event, this.activeScope()) ?? []));
         this.observer.observe(this.doc.documentElement, { subtree: true, childList: true, attributes: true });
-      }
+      };
+      update(candidates);
       return;
     }
     const pressed = eventChord(event); if (pressed === undefined) return;

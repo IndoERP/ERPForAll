@@ -406,7 +406,11 @@ test("required field on a hidden notebook page is revealed and method never runs
   dialogButton("Confirm loan").click();
   await vi.waitFor(() => expect(document.querySelector('.wizard-dialog [role="tab"][aria-selected="true"]')?.textContent).toBe("Required"));
   expect(calls.some(c => c.path.includes("test.wizard/web_save") || c.path.endsWith("confirm_loan"))).toBe(false);
-  expect(document.activeElement).toBe(document.querySelector('.wizard-dialog input[name="reason"]'));
+  await vi.waitFor(() => expect(dialogButton("Confirm loan").disabled).toBe(false));
+  const invalid = document.querySelector<HTMLInputElement>('.wizard-dialog input[name="reason"]')!;
+  expect(document.activeElement).toBe(invalid);
+  expect(invalid.getAttribute("aria-invalid")).toBe("true");
+  expect(invalid.closest(".field-invalid")?.querySelector(".field-error")?.textContent).toBe("This field needs a value.");
 });
 
 test("caller refresh failure surfaces after close and never replays the method", async () => {
@@ -1148,7 +1152,11 @@ test("the footer hotkeys work in the dialog: Alt+x cancels, Alt+q updates", asyn
   cancelled.root.querySelector<HTMLButtonElement>(".user-dropdown-preferences")!.click();
   await vi.waitFor(() => expect(document.querySelector(".wizard-dialog")).not.toBeNull());
   await vi.waitFor(() => expect(dialogButton("Update Preferences").disabled).toBe(false));
-  document.querySelector(".wizard-dialog")!.dispatchEvent(altKey("q"));
+  const editor = document.querySelector<HTMLInputElement>('.wizard-dialog input[name="name"]')!;
+  editor.focus();
+  editor.dispatchEvent(new KeyboardEvent("keydown", { key: "q", bubbles: true }));
+  expect(cancelled.calls.some(c => c.path.endsWith("res.users/preference_save"))).toBe(false);
+  editor.dispatchEvent(altKey("q"));
   await vi.waitFor(() => expect(cancelled.reload).toHaveBeenCalledTimes(1));
   expect(cancelled.calls.filter(c => c.path.endsWith("res.users/preference_save"))).toHaveLength(1);
 });
@@ -1453,4 +1461,44 @@ test.each([
     await vi.waitFor(() => expect(presented).toContainEqual(expect.objectContaining({ kind: "permission", message })));
   }
   expect(session.calls.filter(c => c.path.endsWith("/run_check"))).toHaveLength(1);
+});
+
+test.each(["form", "wizard"] as const)("a typed edit hiding the queued %s action prevents its shortcut from submitting", async source => {
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  let editing = false;
+  const gated = (path: string) => editing && path.endsWith("onchange")
+    ? wait.then(() => json({ value: { name: "Locked" } })) : undefined;
+  const confirm = buttonNode({ name: "confirm_loan", label: "Confirm", details: attributeDetails({ hotkey: "q" }),
+    modifiers: modifiers(differs("name", source === "form" ? "Dune" : "Borrower")) });
+  const session = source === "form"
+    ? await start(path => {
+      if (path.endsWith("erp_load_web_action_views")) return json({
+        action: { wire_major: 1, id: 20, name: "Books", model: "test.book", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null },
+        views: descriptionOf([{ kind: "form", record_mode: "record", children: [1, 3] }, { kind: "header", children: [2] }, confirm, fieldNode("name")]),
+      });
+      return gated(path);
+    })
+    : await setup(undefined, undefined, path => {
+      if (path.endsWith("test.wizard/get_views")) {
+        const description = wizardDescription();
+        description.views[0]!.nodes[3] = confirm;
+        return json(description);
+      }
+      return gated(path);
+    });
+  const owner = source === "form" ? session.root : document.querySelector(".wizard-dialog")!;
+  const editor = owner.querySelector<HTMLInputElement>('input[name="name"]')!;
+  const control = owner.querySelector<HTMLButtonElement>('button[data-hotkey="q"]')!;
+  expect(control.disabled).toBe(false);
+  editor.focus(); editor.value = "Local edit"; editor.dispatchEvent(new Event("input", { bubbles: true }));
+  // jsdom needs an explicit native change on focus departure.
+  editor.addEventListener("blur", () => editor.dispatchEvent(new Event("change", { bubbles: true })), { once: true });
+  editing = true;
+  editor.dispatchEvent(altKey("q"));
+  expect(session.calls.some(call => call.path.endsWith("onchange") && (call.body["values"] as { name?: string })?.name === "Local edit")).toBe(true);
+  release();
+  await vi.waitFor(() => expect(owner.querySelector('button[data-hotkey="q"]')).toBeNull());
+  expect(session.calls.filter(call => call.path.endsWith("web_save") || call.path.endsWith("confirm_loan"))).toEqual([]);
+  expect(presented).toEqual([]);
 });

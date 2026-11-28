@@ -3,7 +3,7 @@ summary = "Barcode scanning sessions for receipts, deliveries, internal transfer
 category = "Inventory"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.0.0"
+version = "1.0.1"
 depends = ["base", "product", "barcodes_gs1_nomenclature", "stock"]
 data = [
     "security/ir.access.csv",

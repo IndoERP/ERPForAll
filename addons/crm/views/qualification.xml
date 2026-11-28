@@ -17,7 +17,7 @@
         </group>
       </group></sheet><footer>
         <button name="action_convert" type="object" string="Qualify" class="btn-primary"/>
-        <button string="Cancel" special="cancel"/>
+        <button string="Cancel" data-hotkey="x" special="cancel"/>
       </footer></form>
     </field>
   </record>
@@ -33,7 +33,7 @@
       <group><field name="next_step"/></group>
     </sheet><footer>
       <button name="action_submit" type="object" string="Submit Lead" class="btn-primary"/>
-      <button string="Cancel" special="cancel"/>
+      <button string="Cancel" data-hotkey="x" special="cancel"/>
     </footer></form></field>
   </record>
   <record id="submit_lead_window" model="ir.actions.act_window">

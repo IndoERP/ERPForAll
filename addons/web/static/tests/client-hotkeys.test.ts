@@ -45,3 +45,26 @@ test("a background search menu cannot consume a newer boundary Escape or composi
   menu.element.dispatchEvent(new CompositionEvent("compositionstart",{bubbles:true}));key(menu.element,{key:"Escape",code:"Escape",altKey:false});expect(menu.isOpen()).toBe(true);
   menu.element.dispatchEvent(new CompositionEvent("compositionend",{bubbles:true}));key(menu.element,{key:"Escape",code:"Escape",altKey:false});expect(menu.isOpen()).toBe(false);
 });
+
+test.each([
+  { platform: "MacIntel", key: "Control", modifier: "ctrlKey", other: "altKey" },
+  { platform: "Win32", key: "Alt", modifier: "altKey", other: "ctrlKey" },
+  { platform: "Linux x86_64", key: "Alt", modifier: "altKey", other: "ctrlKey" },
+] as const)("declared actions show hints and activate with the access modifier on $platform", ({ platform, key: modifierKey, modifier, other }) => {
+  const platformValue = vi.spyOn(window.navigator, "platform", "get").mockReturnValue(platform);
+  try {
+    const current = owner();
+    const press = (value: string, code: string, flags: KeyboardEventInit) =>
+      key(current.control, { key: value, code, altKey: false, ...flags });
+    press(modifier === "ctrlKey" ? "Alt" : "Control", "", { [other]: true });
+    expect(current.control.querySelector("[data-hotkey-hint]")).toBeNull();
+    press("x", "KeyX", { [other]: true });
+    expect(current.call).not.toHaveBeenCalled();
+    press(modifierKey, modifier === "ctrlKey" ? "ControlLeft" : "AltLeft", { [modifier]: true });
+    expect(current.control.querySelector("[data-hotkey-hint]")?.textContent?.toLowerCase()).toBe("x");
+    press("x", "KeyX", { [modifier]: true });
+    press("x", "KeyX", { [modifier]: true, repeat: true });
+    expect(current.call).toHaveBeenCalledOnce();
+    expect(current.report).not.toHaveBeenCalled();
+  } finally { platformValue.mockRestore(); }
+});

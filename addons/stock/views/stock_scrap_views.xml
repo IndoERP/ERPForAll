@@ -31,7 +31,7 @@
     <field name="arch" type="xml">
       <form string="Scrap">
         <header>
-          <button name="action_validate" type="object" string="Validate" class="oe_highlight" invisible="state != 'draft'"/>
+          <button name="action_validate" type="object" string="Validate" data-hotkey="v" class="oe_highlight" invisible="state != 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,done"/>
         </header>
         <sheet>

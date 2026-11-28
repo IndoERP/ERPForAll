@@ -133,7 +133,7 @@
         <header>
           <button name="action_import_csv" type="object" string="Import CSV Lines" invisible="state != 'open'"/>
           <button name="action_reconcile_all" type="object" string="Reconcile All" class="btn-primary" invisible="state != 'open' or unreconciled_count == 0"/>
-          <button name="action_post_statement" type="object" string="Post Statement" class="btn-primary" invisible="state != 'open'"/>
+          <button name="action_post_statement" type="object" string="Post Statement" data-hotkey="q" class="btn-primary" invisible="state != 'open'"/>
           <button name="action_reopen" type="object" string="Reopen" invisible="state != 'posted'"/>
           <field name="state" widget="statusbar" statusbar_visible="open,posted"/>
         </header>

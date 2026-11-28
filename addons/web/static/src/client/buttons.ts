@@ -54,8 +54,8 @@ export interface ButtonEnvironment {
   /** The open record's id, undefined while it is new. */
   id(): number | undefined;
   dirty(): boolean;
-  /** Same path as the Save button. Resolves without saving when native validation refuses. */
-  save(): Promise<void>;
+  /** A refused save stops the action, even when the invalid edit lives only in the browser. */
+  save(): Promise<boolean | void>;
   call(model: string, method: string, args: Record<string, unknown>): Promise<unknown>;
   reload(): Promise<void>;
   /**
@@ -118,8 +118,7 @@ export async function runObjectButton(node: ButtonNode, env: ButtonEnvironment):
       if(args !== undefined) { await invoke(node, env, {...args,...answer}, details?.context ? effective() : undefined); return; }
     }
     if (env.dirty() || env.id() === undefined) {
-      await env.save();
-      if (env.dirty() || env.id() === undefined) return;
+      if (await env.save() === false || env.dirty() || env.id() === undefined) return;
     }
     const id=env.id();if(id===undefined)return;
     const context=details?.context?buttonContext(details.context,env):env.context;

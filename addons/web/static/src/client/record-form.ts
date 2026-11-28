@@ -126,6 +126,8 @@ export class RecordForm {
   }
   private hosts(): HTMLElement[] { return [this.env.form, this.env.headerHost, this.env.smartHost, this.env.headerActionsHost, this.env.titleHost, this.env.notebookTabsHost, this.env.asideHost, this.env.footerHost].filter((host): host is HTMLElement => host !== undefined); }
   focus(): string | undefined { return this.hosts().map(host => formFocus(host)).find(key => key !== undefined); }
+  /** Invalid text can live in a widget before its onchange ever updates the record. */
+  hasLocalEdits(): boolean { return this.controls().some(control => control.closest(".field-dirty,.field-invalid") !== null); }
   controls(): (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement)[] {
     // Draft engines own their internal input/history policy through setDisabled, not native snapshots.
     return this.hosts().flatMap(host => [...host.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>("input,select,textarea,button")])
@@ -201,7 +203,12 @@ export class RecordForm {
     for (const control of this.controls()) {
       if (control instanceof HTMLButtonElement) continue;
       if (this.committing) { if (!this.nativeDisabled.has(control)) this.nativeDisabled.set(control, control.disabled); control.disabled = true; }
-      else if (this.nativeDisabled.has(control)) { control.disabled = this.nativeDisabled.get(control)! || this.disabled || this.saving || this.env.state.writeUncertain; this.nativeDisabled.delete(control); }
+      else if (this.nativeDisabled.has(control)) {
+        // The commit owns this temporary native lock. Release it before the pending
+        // form action validates: disabled native controls are omitted from validation.
+        control.disabled = this.nativeDisabled.get(control)! || this.env.state.writeUncertain;
+        this.nativeDisabled.delete(control);
+      }
     }
     for (const handle of this.retained.values()) handle.draft?.setDisabled(disabled);
   }
@@ -241,16 +248,18 @@ export class RecordForm {
     if (this.draftVersion !== state.draftVersion) this.currencies.clear();
     // Capture editor-local text drafts of ordinary controls before the layout is cleared.
     const drafts = new Map<string, { value: string; message: string }>();
-    const managed = new Set<string>();
+    // A widget with its own draft policy decides whether there is anything to restore.
+    // Replaying a generic input event on a closed relation would start a fresh lookup.
+    const managed = new Set(this.widgetHandles.filter(({ handle }) => handle.captureDraft && handle.restoreDraft).map(({ name }) => name));
     if (!isReadOnly) {
       for (const control of this.controls()) {
-        if ((control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) && control.name &&
+        if ((control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) && control.name && !managed.has(control.name) &&
           (control.closest(".field-dirty,.field-invalid") || !control.validity.valid) && this.draftVersion === state.draftVersion && Object.is(this.represented[control.name], state.values[control.name])) drafts.set(control.name, { value: control.value, message: control.validationMessage });
       }
       if (this.draftVersion === state.draftVersion) for (const { name, handle } of this.widgetHandles) {
         if (!Object.is(this.represented[name], state.values[name])) continue;
         const draft = handle.captureDraft?.();
-        if (draft) { drafts.set(name, draft); managed.add(name); }
+        if (draft) drafts.set(name, draft);
       }
     }
     let nodes: Node[];
@@ -379,7 +388,7 @@ export class RecordForm {
         if (!this.committed.has(node.field.name)) this.committed.set(node.field.name, state.values[node.field.name]);
       } else {
         this.widgetHandles.push({ name: node.field.name, handle });
-        if (managed.has(node.field.name)) handle.restoreDraft?.(drafts.get(node.field.name)!);
+        if (managed.has(node.field.name) && drafts.has(node.field.name)) handle.restoreDraft?.(drafts.get(node.field.name)!);
       }
       if (this.env.asideHost?.contains(parent) || this.env.titleHost?.contains(parent)) {
         if (handle.node.matches("input,select,textarea,button")) handle.node.setAttribute("form", form.id);
@@ -539,6 +548,7 @@ export class RecordForm {
     return true;
   }
   valid(notify = true): boolean {
+    for (const { handle } of this.widgetHandles) handle.prepareValidation?.();
     const found: { root: HTMLElement; focus(): void; missing: boolean }[] = [];
     for (const handle of this.retained.values()) if (handle.draft && !handle.draft.validate()) found.push({ root: handle.node, missing: false, focus: () => handle.draft!.focus() });
     const controls = this.controls().filter(control => !(control instanceof HTMLButtonElement) && !control.closest(".code-field"));

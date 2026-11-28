@@ -374,3 +374,17 @@ for (const transition of ["dispose", "blocked", "replace", "editable-policy"] as
     expect(current.report).toHaveBeenCalledWith(expect.objectContaining({code:"value",message:"Hotkey owner became unavailable before activation"}));
   });
 }
+
+test("holding the access modifier keeps eligible hints through repeats and unrelated renders", async () => {
+  const host = root(), target = button(host), unrelated = root();
+  owner(host, () => [{ kind: "dom", chord: "alt+x", target }]);
+  alt(); expect(hints()).toHaveLength(1);
+  key(document.body, { key: "Alt", code: "AltLeft", altKey: true, repeat: true });
+  expect(hints()).toHaveLength(1);
+  unrelated.textContent = "Updated";
+  await mutationDelivery();
+  expect(hints()).toHaveLength(1);
+  target.disabled = true;
+  await mutationDelivery();
+  expect(hints()).toHaveLength(0);
+});
