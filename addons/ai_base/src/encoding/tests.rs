@@ -302,6 +302,15 @@ fn unsupported_shapes_fail_with_their_position() {
 }
 
 #[test]
+fn openai_encodes_the_assistant_record_search() {
+    let search = crate::search::search_records_spec().unwrap();
+    let body = encoder(Family::OpenAiCompatible)
+        .encode(&request(conversation(), vec![search]))
+        .unwrap();
+    assert_eq!(body["tools"][0]["function"]["name"], "search_records");
+}
+
+#[test]
 fn openai_rejects_nonportable_schemas_without_weakening_them() {
     for (schema, reason) in [
         (json!({"type": "object"}), "additionalProperties"),

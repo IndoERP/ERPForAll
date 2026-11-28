@@ -74,7 +74,7 @@ fn valid_id_list(value: &Json, max_rows: usize) -> bool {
 /// # Errors
 /// Returns a programming error for an invalid built-in declaration.
 pub fn search_records_spec() -> Result<ToolSpec> {
-    let operand = json!({"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"type":"integer","minimum":1}}]});
+    let operand = json!({"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"type":"integer"}}]});
     let Json::Object(schema) = json!({"type":"object","additionalProperties":false,
       "properties":{"model":{"type":"string"},"domain":{"type":"array","description":"AND conditions. For exact records use [id, in, [positive IDs]] within the configured row limit.","items":{"type":"array","items":operand}},
       "fields":{"type":"array","items":{"type":"string"}},"limit":{"type":"integer"},"order":{"type":"string"}},
