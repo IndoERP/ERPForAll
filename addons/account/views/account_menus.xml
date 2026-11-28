@@ -14,7 +14,7 @@
     <field name="view_mode">form</field>
     <field name="view_id" ref="account_settings_form"/>
   </record>
-  <menuitem id="menu_finance" name="Accounting" groups="account.group_account_readonly" sequence="40" web_icon="lucide:calculator">
+  <menuitem id="menu_finance" name="Accounting" groups="account.group_account_readonly" sequence="50" web_icon="lucide:calculator">
     <menuitem id="menu_finance_configuration" name="Configuration" sequence="90">
       <menuitem id="menu_account_settings" name="Settings" action="account_settings_action" groups="account.group_account_manager" sequence="5"/>
       <menuitem id="menu_action_account_form" name="Chart of Accounts" action="action_account_form" sequence="10"/>

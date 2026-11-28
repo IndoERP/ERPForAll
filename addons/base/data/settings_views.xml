@@ -15,7 +15,7 @@
     <field name="view_mode">form</field>
     <field name="view_id" ref="settings_form"/>
   </record>
-  <menuitem id="settings_menu" name="Settings" action="settings_action" groups="base.group_system" sequence="90" web_icon="lucide:settings"/>
+  <menuitem id="settings_menu" name="Settings" action="settings_action" groups="base.group_system" sequence="999" web_icon="lucide:settings"/>
   <!--
 Each
        addon with settings ships its own Configuration > Settings menu that opens this page on its app

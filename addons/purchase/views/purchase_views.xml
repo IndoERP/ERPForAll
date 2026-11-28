@@ -265,7 +265,7 @@
     <field name="view_id" ref="purchase_settings_form"/>
   </record>
 
-  <menuitem id="menu_purchase_root" name="Purchase" sequence="135" groups="purchase.group_purchase_user" web_icon="lucide:shopping-cart">
+  <menuitem id="menu_purchase_root" name="Purchase" sequence="40" groups="purchase.group_purchase_user" web_icon="lucide:shopping-cart">
     <menuitem id="menu_procurement_management" name="Orders" sequence="10">
       <menuitem id="menu_purchase_rfq" name="Requests for Quotation" action="purchase_rfq" sequence="10"/>
       <menuitem id="menu_purchase_form_action" name="Purchase Orders" action="purchase_form_action" sequence="20"/>

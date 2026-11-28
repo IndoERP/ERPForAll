@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 <erp>
   <!-- App Root -->
-  <menuitem id="hr_menu_root" name="Employees" sequence="80" web_icon="lucide:users"/>
+  <menuitem id="hr_menu_root" name="Employees" sequence="70" web_icon="lucide:users"/>
 
   <!-- Top-level App Navigation -->
   <menuitem id="hr_employee_menu" name="Management" parent="hr_menu_root" action="hr_employee_action" sequence="10" groups="hr.group_hr_user"/>

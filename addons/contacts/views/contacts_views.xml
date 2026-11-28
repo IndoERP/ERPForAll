@@ -67,7 +67,7 @@
     <field name="sequence" eval="20"/>
   </record>
 
-  <menuitem id="menu_contacts_root" name="Contacts" action="action_contacts" groups="base.group_user" sequence="20" web_icon="lucide:contact">
+  <menuitem id="menu_contacts_root" name="Contacts" action="action_contacts" groups="base.group_user" sequence="60" web_icon="lucide:contact">
     <menuitem id="menu_contacts" name="Contacts" action="action_contacts" sequence="10"/>
     <menuitem id="menu_contacts_config" name="Configuration" groups="base.group_system" sequence="100">
       <menuitem id="menu_contact_tags" name="Contact Tags" action="action_contact_tags" sequence="10"/>

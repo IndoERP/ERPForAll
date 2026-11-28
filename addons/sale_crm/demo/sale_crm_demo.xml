@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Demo quotation linked to a CRM opportunity. -->
+<erp noupdate="1">
+  <record id="sale_order_demo_crm_toko_maju" model="sale.order">
+    <field name="company_id" ref="base.main_company"/>
+    <field name="partner_id" ref="base.partner_demo_toko_maju"/>
+    <field name="partner_invoice_id" ref="base.partner_demo_toko_maju"/>
+    <field name="partner_shipping_id" ref="base.partner_demo_toko_maju"/>
+    <field name="date_order">2026-11-26 10:00:00</field>
+    <field name="team_id" ref="sales_team.team_demo_corporate"/>
+    <field name="opportunity_id" ref="crm.opp_demo_toko_maju"/>
+    <field name="client_order_ref">CRM-TM-2026-01</field>
+  </record>
+  <record id="sale_order_line_demo_crm_toko_maju_rak" model="sale.order.line">
+    <field name="order_id" ref="sale_order_demo_crm_toko_maju"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product.product_demo_rak'))]"/>
+    <field name="name">Rak Buku Minimalis (Kontrak Distribusi)</field>
+    <field name="product_uom_qty">30</field>
+    <field name="price_unit">120</field>
+    <field name="customer_lead">5</field>
+  </record>
+</erp>

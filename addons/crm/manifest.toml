@@ -17,3 +17,6 @@ data = [
     "data/reports.xml",
     "views/menus.xml",
 ]
+demo = [
+    "demo/crm_demo.xml",
+]

@@ -7,3 +7,4 @@ author = "ERPForAll"
 depends = ["base", "crm", "mail", "reporting", "sale", "sales_team", "web"]
 auto_install = true
 data = ["data/activity_type.xml", "data/forecast_bookings.xml", "views/sale_crm_views.xml"]
+demo = ["demo/sale_crm_demo.xml"]

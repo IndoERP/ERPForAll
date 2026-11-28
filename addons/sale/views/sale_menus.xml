@@ -5,7 +5,7 @@ The Sales application menu. The root ships inactive: the application addon
 sale_management switches it on.
 -->
 <erp>
-  <menuitem id="sale_menu_root" name="Sales" active="False" groups="sales_team.group_sale_salesman" sequence="30" web_icon="lucide:handshake">
+  <menuitem id="sale_menu_root" name="Sales" active="False" groups="sales_team.group_sale_salesman" sequence="35" web_icon="lucide:handshake">
     <menuitem id="sale_order_menu" name="Orders" sequence="10">
       <menuitem id="menu_sale_quotations" name="Quotations" action="action_quotations" sequence="10"/>
       <menuitem id="menu_sale_order" name="Orders" action="action_orders" sequence="20"/>

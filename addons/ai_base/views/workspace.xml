@@ -6,5 +6,5 @@
     <field name="tag">ai_base.workspace</field>
   </record>
   <menuitem id="workspace_menu" name="AI Assistant" action="workspace_action" groups="base.group_user"
-            web_icon="lucide:message-square" sequence="75"/>
+            web_icon="lucide:message-square" sequence="20"/>
 </erp>
