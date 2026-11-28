@@ -14,6 +14,8 @@ pub const LINKED: &[&str] = &[
     "product_mail",
     "web",
     "approvals",
+    "crm",
+    "sale_crm",
     "web_map",
     "acceptance_notes",
     "theme_office_blue",
