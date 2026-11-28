@@ -14,7 +14,7 @@
         <group><field name="shared_group_id" groups="base.group_erp_manager" domain="[('share','=',False)]"
             placeholder="Private" options="{'no_create': True}"/></group></group>
         <group><field name="sources" readonly="1"/></group>
-        <notebook><page name="query" string="Query definition"><field name="definition" nolabel="1" placeholder="Paste the query definition supplied by the assistant"/></page></notebook>
+        <notebook><page name="query" string="Query definition"><group><field name="definition" placeholder="Paste the query definition supplied by the assistant"/></group></page></notebook>
       </sheet></form></field>
   </record>
   <record id="insight_search" model="ir.ui.view">
