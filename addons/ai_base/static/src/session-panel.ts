@@ -143,6 +143,9 @@ export function sessionPanel(options: SessionPanelOptions): SessionPanelHandle {
 
   const body = document.createElement("div");
   body.className = "ai-session-body";
+  body.tabIndex = 0;
+  body.setAttribute("role","region");
+  body.setAttribute("aria-label","Session list");
 
   panel.append(head, toolbar, status, body);
 

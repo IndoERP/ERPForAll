@@ -41,9 +41,12 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
   const history = button("History", () => {
     if (panel) { closeHistory(); return; }
     panel = sessionPanel({ rpc: env.rpc, onClose: closeHistory, onResume: async (_summary, resume) => {
-      await chat.resume(resume.id); closeHistory();
+      await chat.resume(resume.id);
+      closeHistory();
+      thread.scrollTop = thread.scrollHeight;
     } });
     thread.hidden = form.hidden = true;
+    jump.hidden = true;
     conversation.append(panel.node);
     panel.node.querySelector<HTMLInputElement>("input")?.focus();
   });
@@ -51,9 +54,19 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
   toolbar.append(history, newChat);
   const thread = document.createElement("div");
   thread.className = "ai-workspace-thread";
+  thread.tabIndex = 0;
   thread.setAttribute("role", "log");
   thread.setAttribute("aria-live", "polite");
   thread.setAttribute("aria-label", "Assistant conversation history");
+  const nearLatest = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight <= 8;
+  const jump = button("Ke pesan terbaru", () => {
+    thread.scrollTop = thread.scrollHeight;
+    thread.focus({ preventScroll: true });
+    jump.hidden = true;
+  });
+  jump.classList.add("ai-jump-latest");
+  jump.hidden = true;
+  thread.onscroll = () => { if (nearLatest()) jump.hidden = true; };
   const form = document.createElement("form");
   const input = document.createElement("textarea");
   input.rows = 2;
@@ -83,7 +96,7 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
     input.focus();
   };
   form.append(input, send);
-  conversation.append(toolbar, thread, form);
+  conversation.append(toolbar, thread, jump, form);
   const canvas = createCanvasStage(prompt => { showPane("chat"); chat.updateDock({ draft: prompt }); input.focus(); },
     env.openDraft ? (name, definition) => env.run(() => env.openDraft!("ai_base.insight_action", {name,definition})) : undefined,
     (name, model, domain) => env.run(() => env.open({
@@ -104,11 +117,11 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
   }
   showPane("chat");
   const artifactIds = new WeakMap<object,string>();
-  function display(artifact: unknown, select: boolean) {
+  function display(artifact: unknown, select: boolean, background = false) {
     if (!artifact || typeof artifact !== "object") throw new Error("Invalid Canvas output.");
     const known = artifactIds.get(artifact);
     if (!known || (select && !canvas.selectArtifact(known))) {
-      const handle = canvas.renderArtifact(artifact);
+      const handle = canvas.renderArtifact(artifact, background ? {activate: false} : undefined);
       artifactIds.set(artifact, handle);
     }
     if (select) {
@@ -122,7 +135,8 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
   let previousConversation = chat.conversationId;
   function render() {
     if (previousConversation !== chat.conversationId) { canvas.clear(); previousConversation = chat.conversationId; }
-    const atBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 4;
+    const atBottom = nearLatest();
+    let newReply = false;
     const messages = new Set(chat.messages);
     for (const [item, node] of rendered) {
       if (!messages.has(item)) { node.remove(); rendered.delete(item); }
@@ -141,9 +155,14 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
       part.append(author, body);
       if (item.role === "assistant" && item.state === "ready") {
         renderChatReply(body, item.text, env, lookup);
-        for (const artifact of messageCanvases(item)) {
+        newReply = true;
+        const artifacts = messageCanvases(item);
+        const kindOf = (artifact: unknown) => artifact && typeof artifact === "object" && "canvas_type" in artifact
+          ? artifact.canvas_type : undefined;
+        const hasChart = artifacts.some(artifact => kindOf(artifact) === "chart");
+        for (const artifact of artifacts) {
           try {
-            display(artifact, false);
+            display(artifact, false, hasChart && kindOf(artifact) === "table");
             const title = artifact && typeof artifact === "object" && "title" in artifact && typeof artifact.title === "string"
               ? artifact.title : "Canvas";
             const link = button("Open " + title, () => display(artifact, true));
@@ -163,6 +182,7 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
       rendered.set(item, part);
     }
     if (atBottom) thread.scrollTop = thread.scrollHeight;
+    else if (newReply && !thread.hidden) jump.hidden = false;
     update();
   }
   const resources = document.createElement("nav");

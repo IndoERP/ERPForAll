@@ -19,7 +19,7 @@ const compiled = await build({
       if (!r.ok) throw new Error("RPC failed");
       return r.json();
     }};
-    const limits = {turns:8,bytes:16384,message_bytes:4096,saved_sessions:true,workspace_action_id:23};
+    const limits = {turns:80,bytes:131072,message_bytes:4096,saved_sessions:true,workspace_action_id:23};
     let active;
     const run = job => job().catch(error => {throw error});
     async function openStudio() {
@@ -31,7 +31,7 @@ const compiled = await build({
     const dock = assistantChat({rpc,userId:19,csrfToken:"fixture",context:{allowed_company_ids:[7]},run,
       navigate:async route=>{ if(route.action === "23") await openStudio(); }
     },async (url,init)=> url === "/erp/ai/assistant/status" ? Response.json({available:true,history:limits}) : fetch(url,init));
-    document.body.prepend(dock.node);
+    document.querySelector(".systray").append(dock.node);
     if (sessionStorage.getItem("fixture.page") === "studio") await openStudio();
     window.leaveStudio = () => {active.dispose(); active=undefined;sessionStorage.removeItem("fixture.page");};
 
@@ -61,7 +61,14 @@ const timeline = {canvas_type:"timeline",title:"Pilot milestones",description:"R
 const chart = {canvas_type:"chart",title:"Purchase orders by stage",description:"ERP · purchase.order",
   data:{source_model:"purchase.order",source_domain:[],series:[{label:"Request",value:16},{label:"Approved",value:12},{label:"Ordered",value:22}],
     columns:["state","id:count"],records:[{state:"Request","id:count":16},{state:"Approved","id:count":12},{state:"Ordered","id:count":22}]}};
-const salesQuestion = "Show monthly sales by currency";
+const salesQuestion = "Chart all sales by currency and include the records behind the trend";
+const salesChart = {canvas_type:"chart",title:"Sales by currency", data:{
+  source_model:"sale.order", source_domain:[["state","=","sale"]], series:[{label:"USD",value:53047.92}]}};
+const salesRows = {canvas_type:"table",title:"Supporting records",data:{source_model:"sale.order",
+  records:Array.from({length:17},(_,i)=>({id:i+1,name:"Order "+(i+1),currency:"USD",amount:i===16?"5047.92":"3000.00"}))}};
+const manyMessages = Array.from({length:50},(_,i)=>[
+  {role:"user",text:"Question "+i},{role:"assistant",text:"Earlier answer "+i},
+]).flat();
 const sourceTable = "<table><tr><th>Reference</th></tr><tr><td>" + "2026110123456789".repeat(6) + "</td></tr></table>";
 const salesReply = [
   "**Monthly Sales by Currency**", "",
@@ -84,18 +91,21 @@ const server = createServer(async (req,res) => {
     let reply;
     if (req.url === "/erp/ai/assistant/turn") {
       received.push(value);
-      if (value.message === salesQuestion) reply = {session_id:18,text:salesReply};
+      if (value.message === salesQuestion) reply = {session_id:18,text:salesReply,canvas:salesRows,canvases:[salesChart,salesRows]};
       else reply = value.message === "Prepare a rollout brief and timeline"
         ? {session_id:18,text:"The purchasing pilot has three milestones. Start with the supplier review.",canvases:[brief,chart,timeline],canvas:timeline}
         : {session_id:18,text:"Quotation approval requested.",operations:[pending]};
     } else if (req.url === "/erp/ai/assistant/resume" && value.approval_request_id === 24 && value.company_id === 7) {
       approvals++; reply = done;
     } else if (req.url === "/rpc" && value.method === "search_sessions") {
-      reply = [{id:18, title:salesQuestion, state:"open", last_event_at:"2026-11-28T12:00:00Z", anchor:null}];
+      reply = Array.from({length:20}, (_, i) => ({
+        id:18+i, title:i ? "Earlier conversation " + i : salesQuestion, state:"open",
+        last_event_at:"2026-11-28T12:00:00Z", anchor:null,
+      }));
     } else if (req.url === "/rpc" && value.method === "resume_session" && value.args.id === 18) {
       reply = {id:18, last_seq:2, anchor:null};
     } else if (req.url === "/rpc" && value.method === "conversation_history" && value.args.id === 18) {
-      if (received.at(-1)?.message === salesQuestion) reply = {id:18,messages:[
+      if (received.at(-1)?.message === salesQuestion) reply = {id:18,messages:[...manyMessages,
         {role:"user",text:salesQuestion},{role:"assistant",text:salesReply}
       ]};
       else reply = {id:18,messages:[{role:"user",text:"Create quotation"},{role:"assistant",text:"Quotation approval requested.",operations:[approvals ? done : pending]}]};
@@ -103,7 +113,7 @@ const server = createServer(async (req,res) => {
     res.writeHead(200,{"Content-Type":"application/json"}).end(JSON.stringify(reply)); return;
   }
   const theme = req.url === "/blue" ? ' data-office-theme="office-blue"' : "";
-  res.writeHead(200,{"Content-Type":"text/html"}).end(`<!doctype html><html lang="en"${theme}><head><title>AI workspace</title><style>main{height:100dvh;min-width:0}</style><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body><main></main><script src="/fixture.js" type="module"></script></body></html>`);
+  res.writeHead(200,{"Content-Type":"text/html"}).end(`<!doctype html><html lang="en"${theme}><head><title>AI workspace</title><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body><div class="erp-client"><header class="app-bar" data-client-header><div class="systray"></div></header><nav class="app-navigation" data-client-navigation></nav><div class="client-notice" data-client-notice></div><main id="erp-content" data-client-content><section class="control-panel"><h1>AI Assistant</h1></section></main></div><script src="/fixture.js" type="module"></script></body></html>`);
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 let browser;
@@ -196,16 +206,59 @@ try {
     await page.keyboard.press("Enter");
     await page.getByRole("button",{name:"Open Canvas Studio"}).click();
     await checkSalesReply();
+    const studio = page.locator(".canvas-studio");
+    assert.equal(await page.locator(".ai-workspace-shell").getAttribute("data-pane"),"chat");
+    if (width === 390) await page.getByRole("button",{name:"Canvas",exact:true}).click();
+    await studio.getByRole("heading",{name:"Sales by currency"}).waitFor();
+    assert.equal(await studio.getByRole("tabpanel").locator(".canvas-bar").count(),1);
+    assert.match(await studio.getByRole("tabpanel").locator(".canvas-chart").textContent(),/USD/);
+    if (width === 390) await page.getByRole("button",{name:"Chat",exact:true}).click();
+    await page.getByRole("button",{name:"Open Supporting records",exact:true}).click();
+    assert.equal(await studio.getByRole("row").count(),18);
+    if (width === 390) await page.getByRole("button",{name:"Chat",exact:true}).click();
     await page.reload();
     await checkSalesReply();
     assert.equal(await input.count(),1);
     await page.getByRole("button",{name:"New chat",exact:true}).click();
     await page.getByRole("button",{name:"History",exact:true}).click();
+    const sessionList = page.getByRole("region",{name:"Session list"});
+    await sessionList.getByRole("button",{name:"Resume Earlier conversation 19"}).waitFor({state:"attached"});
+    await sessionList.focus();
+    await page.keyboard.press("End");
+    await page.waitForFunction(()=>document.querySelector(".ai-session-body").scrollTop > 0);
+    assert.equal(await page.evaluate(()=>document.scrollingElement.scrollTop),0);
     await page.getByRole("button",{name:"Resume " + salesQuestion,exact:true}).click();
     await checkSalesReply();
+    const thread = page.locator(".ai-workspace-thread");
+    assert.equal(await thread.locator("article").count(),102);
+    assert.ok(await thread.evaluate(el=>el.scrollHeight - el.scrollTop - el.clientHeight <= 8));
+    async function insideViewport() {
+      assert.ok(await page.evaluate(()=> document.scrollingElement.scrollHeight <= innerHeight + 1));
+      const box = await input.boundingBox();
+      assert.ok(box && box.y >= 0 && box.y + box.height <= 851);
+    }
+    await insideViewport();
+    await page.locator(".erp-client").evaluate(el=>el.classList.add("office-sidebar-hidden"));
+    await insideViewport();
+    await thread.evaluate(el=>{el.scrollTop=120;});
+    await input.fill(salesQuestion);
+    await input.press("Enter");
+    const jump = page.getByRole("button",{name:"Ke pesan terbaru"});
+    await jump.waitFor();
+    assert.equal(await thread.evaluate(el=>el.scrollTop),120);
+    await jump.click();
+    assert.ok(await thread.evaluate(el=>el.scrollHeight - el.scrollTop - el.clientHeight <= 8));
+    await page.getByRole("button",{name:"Open Supporting records",exact:true}).last().click();
+    const canvasContent = studio.getByRole("region",{name:"Canvas content"});
+    const initialChatScroll = await thread.evaluate(el=>el.scrollTop);
+    await canvasContent.focus();
+    await page.keyboard.press("End");
+    await page.waitForFunction(()=>document.querySelector(".canvas-cards-grid").scrollTop > 0);
+    assert.equal(await thread.evaluate(el=>el.scrollTop), initialChatScroll);
+    assert.equal(await page.evaluate(()=>document.scrollingElement.scrollTop),0);
     assert.deepEqual(embeddedRequests,[]);
     assert.deepEqual(errors,[]);
-    console.log(`${theme} ${width}px: submit, reload, approval, open record, follow-up new chat, multi-output Canvas, focus mode, formatted replies in dock/workspace/history and single-composer handoff passed`);
+    console.log(`${theme} ${width}px: conversation and Canvas scroll independently, composer stays in view, sales chart and 17 supporting records render. History, formatted replies, focus mode, approvals and dock handoff passed.`);
     await page.close();
   }
 } finally {

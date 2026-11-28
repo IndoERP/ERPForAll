@@ -136,18 +136,38 @@ pub fn extract_canvas_payload(call: &ToolCall) -> Result<Json> {
 /// # Errors
 /// Refuses a quantitative card without an appropriate successful query.
 pub fn grounded_canvas_payload(call: &ToolCall, data: Option<&LabelledData>) -> Result<Json> {
-    let mut payload = extract_canvas_payload(call)?;
-    let kind = payload["canvas_type"].as_str();
-    if !matches!(kind, Some("chart" | "table" | "dashboard" | "pivot")) {
+    let payload = extract_canvas_payload(call)?;
+    let Some(kind @ ("chart" | "table" | "dashboard" | "pivot")) = payload["canvas_type"].as_str()
+    else {
         return Ok(payload);
+    };
+    let source = data.ok_or_else(|| {
+        Error::validation("Run a matching ERP query before rendering an analytical card.")
+    })?;
+    let title = payload["title"]
+        .as_str()
+        .ok_or_else(|| Error::invariant("Validated canvas has no title."))?;
+    analytical_output(kind, title, source)
+}
+
+/// Build the same sourced analytical card for an explicit tool call or an automatic visualization.
+///
+/// # Errors
+/// Returns a validation error when the source does not support the requested analytical layout.
+pub fn analytical_output(kind: &str, title: &str, source: &LabelledData) -> Result<Json> {
+    if !matches!(kind, "chart" | "table" | "dashboard" | "pivot")
+        || title.trim().is_empty()
+        || title.len() > 256
+    {
+        return Err(Error::validation("Invalid analytical card type or title."));
     }
+    let mut payload = json!({"canvas_type":kind, "title":title});
     let unavailable =
         || Error::validation("Run a matching ERP query before rendering an analytical card.");
-    let source = data.ok_or_else(unavailable)?;
     let model = source.source().model().ok_or_else(unavailable)?;
     let result = source.value();
     let mut card = match source.source().tool().as_str() {
-        "search_records" if kind == Some("table") => {
+        "search_records" if kind == "table" => {
             let rows = result["records"].as_array().ok_or_else(unavailable)?;
             json!({"records":rows,"truncated":result["truncated"],"source_domain":[["id","in",source.source().ids()]]})
         }
@@ -197,8 +217,7 @@ pub fn grounded_canvas_payload(call: &ToolCall, data: Option<&LabelledData>) -> 
                     series.push(json!({"label":label,"value":n}));
                 }
             }
-            if !rows.is_empty() && series.is_empty() && matches!(kind, Some("chart" | "dashboard"))
-            {
+            if !rows.is_empty() && series.is_empty() && matches!(kind, "chart" | "dashboard") {
                 return Err(Error::validation(
                     "This measure has no numeric values to chart. Choose a table.",
                 ));
@@ -220,7 +239,7 @@ pub fn grounded_canvas_payload(call: &ToolCall, data: Option<&LabelledData>) -> 
         query.insert("title".into(), payload["title"].clone());
         query.insert(
             "visualization".into(),
-            json!(if matches!(kind, Some("chart" | "dashboard")) {
+            json!(if matches!(kind, "chart" | "dashboard") {
                 "bar"
             } else {
                 "table"

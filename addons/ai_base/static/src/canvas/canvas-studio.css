@@ -15,7 +15,7 @@
 .studio-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .studio-expand.erp-button { margin-inline-start: auto; width: 40px; min-height: 40px; padding: 0; display: grid; place-items: center; }
 .canvas-studio .canvas-stage-viewport {
-  display: grid; grid-template-columns: minmax(0, 1fr); padding: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0,1fr); padding: 0;
   overflow: hidden; min-height: 0; background: var(--surface-subtle);
 }
 .canvas-studio .canvas-cards-grid { display: block; min-width: 0; min-height: 0; height: 100%; overflow-y: auto; }

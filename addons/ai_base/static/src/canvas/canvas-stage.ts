@@ -125,6 +125,9 @@ export function createCanvasStage(
   blankState.append(blankTitle,intro,suggestionList);
   const viewport = document.createElement("div"); viewport.className = "canvas-stage-viewport";
   const cardsGrid = document.createElement("div"); cardsGrid.className = "canvas-cards-grid";
+  cardsGrid.tabIndex = 0;
+  cardsGrid.setAttribute("role", "region");
+  cardsGrid.setAttribute("aria-label", "Canvas content");
   const index = artifactIndex(cardsGrid, blankState, size => {
     count.textContent = size ? `${size} artifact${size === 1 ? "" : "s"}` : "";
     viewport.dataset["empty"] = String(!size);

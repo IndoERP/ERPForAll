@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Native assistant composition with multi-turn tool calling, live data aggregation, and canvas staging.
+mod analysis;
+
 use crate::{assistant_business, assistant_read};
 use erp_addon_ai_base::{canvas, catalog, config::Credentials, conversation, ledger, routing};
 use erp_fields::{Error, Result, Value};
@@ -30,7 +32,7 @@ CRITICAL EXECUTION RULES:\n\
    - Stock / Deliveries: 'stock.picking' (fields: name, partner_id, state, scheduled_date).\n\
    - Partners / Customers: 'res.partner' (fields: name, email, phone, city, customer_rank).\n\
 4. Visual Canvas Rendering:\n\
-   Use render_canvas for requested visual or structured outputs. For quantitative chart, table, pivot or dashboard call it just after the relevant ERP query, passing {} in data_json. Source values are bound by the server. For a plan or explanation use a document, brief, checklist, timeline, flow or slides. For an explicitly hypothetical what-if use simulation. Follow the tool schema. You may compose a response by calling render_canvas several times, e.g. narrative brief, live sales chart, then an implementation checklist.\n\
+   Use render_canvas for requested visual or structured outputs. For quantitative chart, table, pivot or dashboard call it just after the relevant ERP query, passing {} in data_json. Source values are bound by the server. For a chart with supporting transactions, run both aggregate_records and search_records on the same model and filters. Return the chart even for a single group and return actual records as the detail table. For a plan or explanation use a document, brief, checklist, timeline, flow or slides. For an explicitly hypothetical what-if use simulation. Follow the tool schema. You may compose a response by calling render_canvas several times, e.g. narrative brief, live sales chart, then an implementation checklist.\n\
 5. Language: Always respond in the language used by the user (Indonesian if asked in Indonesian). In your final response after calling tools, provide a concise, professional summary highlighting key insights.\n\
 6. If the server sends you a notice that your previous reply could not be rendered, immediately produce the complete, valid answer. Never mention the notice, never apologize, and never repeat the unusable reply.";
 
@@ -358,9 +360,8 @@ impl TextAssistant {
             let mut last_model = route.model().to_string();
             let mut text = String::new();
             let mut final_text = String::new();
-            let mut canvases = Vec::new();
-            let mut canvas_bytes = 0;
-            let mut live_data: Option<LabelledData> = None;
+            let mut visuals = analysis::Analysis::new(&message);
+            let mut visual_notices = Vec::new();
             let mut actions = assistant_business::Catalog::default();
             let mut operation_slots = assistant_business::Slots::default();
             let mut operations = Vec::new();
@@ -398,7 +399,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                 usage: None,
             };
             let result: Result<()> = async {
-                'attempts: for _attempt in 0..max_attempts {
+                'attempts: for attempt in 0..max_attempts {
                     'rounds: for _turn_idx in 0..MAX_TURNS {
                         let req = ToolTurnRequest::new(route.model(), messages.clone(), tools.clone())
                             .map_err(invalid)?
@@ -479,9 +480,6 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                         let mut tool_results = Vec::new();
                         for call in tool_calls {
                             tool_count += 1;
-                            if matches!(call.name(), "search_records" | "aggregate_records") {
-                                live_data = None;
-                            }
                             let tool_result = match call.name() {
                                 "find_models" => {
                                     let mut tx = auth.begin_session(secret, options()).await?.tx;
@@ -558,16 +556,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                                     Ok(result)
                                 }.await,
                                 "render_canvas" => {
-                                    canvas::grounded_canvas_payload(&call, live_data.as_ref()).and_then(|payload| {
-                                        let result = canvas::render_canvas(&call)?;
-                                        let bytes = serde_json::to_vec(&payload).map_err(|_|Error::invariant("Could not size the canvas."))?.len();
-                                        if canvases.len() >= 12 || canvas_bytes + bytes > 524_288 {
-                                            return Err(Error::validation("This turn is limited to 12 canvas outputs and 512 KiB combined. Narrow the data or start a follow-up."));
-                                        }
-                                        canvas_bytes += bytes;
-                                        canvases.push(payload);
-                                        Ok(result)
-                                    })
+                                    visuals.render(&call).and_then(|()| canvas::render_canvas(&call))
                                 }
                                 other => Err(Error::validation(format!(
                                     "Unknown assistant tool '{other}'."
@@ -583,7 +572,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                             match tool_result {
                                 Ok(result) => {
                                     if matches!(call.name(), "search_records" | "aggregate_records") {
-                                        live_data = Some(result.data().clone());
+                                        visuals.read(&call, Ok(result.data()));
                                     }
                                     if matches!(
                                         call.name(),
@@ -603,6 +592,7 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                                     }
                                 }
                                 Err(err) => {
+                                    visuals.read(&call, Err(&err));
                                     let tool_name = ToolName::new(call.name())
                                         .or_else(|_| ToolName::new("unknown"))
                                         .map_err(|e| Error::programming(e.to_string()))?;
@@ -625,16 +615,18 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
 
                         messages.push(TurnMessage::new(TurnRole::User, tool_results).map_err(invalid)?);
                     }
-                    if !final_text.trim().is_empty() || !text.trim().is_empty() || !canvases.is_empty() {
-                        break 'attempts;
+                    let correction = if operations.is_empty() { visuals.correction() } else { None };
+                    if correction.is_none() || attempt + 1 == max_attempts {
+                        if operations.is_empty() { visual_notices = visuals.complete(); }
+                        if !final_text.trim().is_empty() || !text.trim().is_empty() || !visuals.cards.is_empty() || !visual_notices.is_empty() {
+                            break 'attempts;
+                        }
                     }
-                    // The final reply of this attempt is unusable: tell the model what is wrong and
-                    // give it one more round, within the declared correction budget.
                     messages.push(
                         TurnMessage::new(
                             TurnRole::User,
                             vec![ContentPart::UserText(UserText::new(
-                                CORRECTION_TEMPLATE.to_string(),
+                                correction.unwrap_or(CORRECTION_TEMPLATE).to_string(),
                             ))],
                         )
                         .map_err(invalid)?,
@@ -648,7 +640,8 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
             let last_usage = meter.usage;
             let completion = async {
                 result?;
-                let output_text = if !final_text.trim().is_empty() {
+                let canvases = visuals.cards;
+                let mut output_text = if !final_text.trim().is_empty() {
                     final_text
                 } else if !text.trim().is_empty() {
                     text
@@ -658,6 +651,10 @@ render_canvas with a valid payload. Do not apologize, do not mention this notice
                     String::new()
                 };
 
+                for notice in visual_notices {
+                    if !output_text.is_empty() { output_text.push_str("\n\n"); }
+                    output_text.push_str(&notice);
+                }
                 if output_text.trim().is_empty() && canvases.is_empty() {
                     return Err(Error::user(
                         "erp.ai.provider_failed: the provider returned no text or canvas.",

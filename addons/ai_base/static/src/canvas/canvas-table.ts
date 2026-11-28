@@ -77,7 +77,7 @@ export function renderRichTable(spec: TableSpec): HTMLElement {
   }
 
   if (!normalizedCols.length) {
-    container.textContent = "Tidak ada kolom yang didefinisikan.";
+    container.textContent = rawInputRows.length ? "Tidak ada kolom yang didefinisikan." : "Tidak ada data untuk ditampilkan.";
     return container;
   }
 

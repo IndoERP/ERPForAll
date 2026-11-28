@@ -51,6 +51,10 @@ describe("Canvas Visual Components", () => {
     expect(legendItems[0]?.textContent).toContain("Draft");
   });
 
+  test("a search with no matches shows the empty result even without inferred columns", () => {
+    expect(renderRichTable({ records: [] }).textContent).toBe("Tidak ada data untuk ditampilkan.");
+  });
+
   test("renderRichTable sorts columns and filters rows", () => {
     const el = renderRichTable({
       title: "Sales Orders",
