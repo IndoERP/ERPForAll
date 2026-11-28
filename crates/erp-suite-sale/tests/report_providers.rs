@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The Sales Report and the Purchase Report providers: they read as the caller (record rules and
-//! column groups), add amounts of the company currency only, check every line id and drill target,
+//! column groups), report amounts in the company currency, check every line id and drill target,
 //! page the orders of a partner, and agree with "Purchases by Product" on the orders they count.
 #![allow(
     clippy::unwrap_used,
@@ -580,9 +580,9 @@ fn margin_columns_follow_their_group() {
     });
 }
 
-/// An order in another currency than the company's makes the report refuse, never add.
+/// Sales converts each order at its recorded rate; Purchase retains its company-currency restriction.
 #[test]
-fn a_foreign_currency_order_is_refused_by_name() {
+fn sales_converts_foreign_orders_while_purchase_rejects_them() {
     run(async {
         let f = setup().await;
         let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
@@ -595,28 +595,53 @@ fn a_foreign_currency_order_is_refused_by_name() {
             .await
             .unwrap();
         let foreign: i64 = foreign.first().expect("a second currency").get(0);
-        for (table, order) in [("sale_order", f.o_own), ("purchase_order", f.po_late)] {
-            tx.execute(
-                &format!("UPDATE {table} SET currency_id = $1 WHERE id = $2"),
-                &[&foreign, &order],
-            )
-            .await
-            .unwrap();
-        }
+        tx.execute(
+            "UPDATE sale_order SET currency_id=$1, currency_rate=0.80 WHERE id=$2",
+            &[&foreign, &f.o_own],
+        )
+        .await
+        .unwrap();
+        tx.execute(
+            "UPDATE purchase_order SET currency_id=$1 WHERE id=$2",
+            &[&foreign, &f.po_late],
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         drop(tx);
-        for (user, report, name) in [
-            (f.seller, f.sales, "Sales Report"),
-            (f.buyer, f.purchases, "Purchase Report"),
+
+        let (mut tx, env) = as_user(&f, f.seller).await;
+        let opts = options(&f, &env, &mut tx, f.sales).await;
+        let top = lines(&runtime::report_lines(&env, &mut tx, &opts).await.unwrap());
+        let customer = ends_with(&top, &partner_suffix(f.azure)).unwrap();
+        let detail = lines(
+            &runtime::report_expand(&env, &mut tx, &opts, customer["id"].as_str().unwrap(), 0)
+                .await
+                .unwrap(),
+        );
+        let fx = ends_with(&detail, &order_suffix("sale.order", f.o_own)).unwrap();
+        for (col, field) in [
+            ("untaxed", "amount_untaxed"),
+            ("total", "amount_total"),
+            ("margin", "margin"),
         ] {
-            let (mut tx, env) = as_user(&f, user).await;
-            let opts = options(&f, &env, &mut tx, report).await;
-            refused(
-                runtime::report_lines(&env, &mut tx, &opts).await,
-                &format!("The {name} has orders in another currency than the company's"),
-            );
-            tx.rollback().await.unwrap();
+            let index = column(&opts, col);
+            let converted =
+                (orm_sum(&mut tx, "sale.order", &[f.o_own], field).await / dec("0.80")).round_dp(2);
+            let domestic = orm_sum(&mut tx, "sale.order", &[f.o_none], field).await;
+            assert_eq!(amount(&fx, index), converted);
+            assert_eq!(amount(&customer, index), domestic + converted);
+            assert_eq!(amount(top.last().unwrap(), index), domestic + converted);
         }
+        tx.rollback().await.unwrap();
+        drop(tx);
+        let (mut tx, env) = as_user(&f, f.buyer).await;
+        let opts = options(&f, &env, &mut tx, f.purchases).await;
+        refused(
+            runtime::report_lines(&env, &mut tx, &opts).await,
+            "The Purchase Report has orders in another currency than the company's",
+        );
+        tx.rollback().await.unwrap();
         f.db.cleanup().await.unwrap();
     });
 }
