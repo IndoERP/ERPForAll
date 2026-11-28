@@ -101,8 +101,8 @@ export async function workspace(env: ClientActionEnvironment): Promise<ClientAct
     env.openDraft ? (name, definition) => env.run(() => env.openDraft!("ai_base.insight_action", {name,definition})) : undefined,
     (name, model, domain) => env.run(() => env.open({
       type:"ir.actions.act_window", name, res_model:model, domain,
-      context:{allowed_company_ids:[company]}, views:[[false,"list"],[false,"form"]], target:"current",
-    })));
+      views:[[false,"list"],[false,"form"]], target:"current",
+    }, { sourceCompanyId: company })));
   const panels = document.createElement("div");
   panels.className = "ai-workspace-switch";
   panels.setAttribute("role", "group");

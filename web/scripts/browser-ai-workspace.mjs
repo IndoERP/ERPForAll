@@ -26,7 +26,7 @@ const compiled = await build({
       if (active) return;
       sessionStorage.setItem("fixture.page","studio");
       active = await workspace({currentCompanyId:7,userId:19,csrfToken:"fixture",companies:[],rpc,host:document.querySelector("main"),
-        run,open: async action => {window.opened=action},action:{params:{company_id:7,sources:[],limit:10,history:limits}}});
+        run,open: async (action, options) => {window.opened=action; window.sourceCompany=options?.sourceCompanyId},action:{params:{company_id:7,sources:[],limit:10,history:limits}}});
     }
     const dock = assistantChat({rpc,userId:19,csrfToken:"fixture",context:{allowed_company_ids:[7]},run,
       navigate:async route=>{ if(route.action === "23") await openStudio(); }
@@ -171,6 +171,9 @@ try {
     await page.getByRole("button",{name:"Open Purchase orders by stage",exact:true}).click();
     await page.getByRole("button",{name:"Open source records"}).click();
     assert.equal(await page.evaluate(()=>window.opened.res_model),"purchase.order");
+    assert.equal(await page.evaluate(()=>Object.hasOwn(window.opened, "context")),false);
+    assert.deepEqual(await page.evaluate(()=>window.opened.domain),[]);
+    assert.equal(await page.evaluate(()=>window.sourceCompany),7);
     if (width < 800) await page.getByRole("button",{name:"Chat",exact:true}).click();
     await page.getByRole("button",{name:"Open Pilot milestones",exact:true}).click();
     await page.getByText("Validate master data",{exact:true}).waitFor();

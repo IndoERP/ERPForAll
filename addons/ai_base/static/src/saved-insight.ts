@@ -56,7 +56,7 @@ async function panel(env: ClientActionEnvironment, raw: unknown, company: number
   const drillDown = (extra: unknown[]) => {
     if (signal.aborted) return;
     env.run(() => env.open({ type: "ir.actions.act_window", name: title, res_model: model, views: [[false, "list"], [false, "form"]],
-      domain: [...domain, ...extra], context, target: "current" }));
+      domain: [...domain, ...extra], target: "current" }, { sourceCompanyId: company }));
   };
   source.onclick = () => drillDown([]);
   const provenance = element("div"); provenance.className = "ai-insight-source";

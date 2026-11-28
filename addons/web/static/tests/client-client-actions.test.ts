@@ -150,7 +150,9 @@ test("a record opened in the page from a client action keeps a link back to that
     return { dispose() {} };
   } });
   const baseFetch = fetchMock({ 30: "demo.origin_link" });
+  const contexts: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    if (["erp_normalize_action_result", "get_views", "web_read"].some(method => path.endsWith(method))) contexts.push(JSON.parse(String(init?.body)).context);
     if (path.endsWith("erp_normalize_action_result")) return json({ wire_major: 1, result: {
       kind: "current_window", name: "Journal entry", model: "account.move", res_id: 42,
       views: [{ id: null, type: "form" }], domain: [["id", "=", 42]], context: {}
@@ -166,10 +168,14 @@ test("a record opened in the page from a client action keeps a link back to that
     if (path.endsWith("account.move/web_read")) return json([{ id: 42, name: "INV/42" }]);
     return baseFetch(path, init);
   }));
-  app = new HumanApp(host(), bootstrap);
+  app = new HumanApp(host(), { ...bootstrap, companies: [...bootstrap.companies, { id: 2, name: "Jakarta" }],
+    allowed_company_ids: [1, 2], active_company_ids: [1, 2] });
   await app.start();
   expect(mounts).toBe(1);
-  await screen!.open({ type: "ir.actions.act_window" });
+  await expect(screen!.open({ type: "ir.actions.act_window" }, { sourceCompanyId: 2 })).rejects.toThrow("original company");
+  await screen!.open({ type: "ir.actions.act_window" }, { sourceCompanyId: 1 });
+  expect(contexts.length).toBeGreaterThanOrEqual(3);
+  for (const context of contexts) expect(context.allowed_company_ids).toEqual([1]);
   await vi.waitFor(() => expect(new URL(location.href).searchParams.get("id")).toBe("42"));
   const crumb = await vi.waitFor(() => {
     const link = document.querySelector<HTMLButtonElement>(".breadcrumb-origin");

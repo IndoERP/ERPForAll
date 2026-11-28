@@ -126,7 +126,7 @@ export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   /** What `captureState` returned when the user left this action, or `null` on a first opening. */
   restored: unknown;
   /** Run an action result (an existing record form, a related list or another client action) through the normal navigation; the screen stays in the breadcrumb. */
-  open(result: unknown): Promise<void>;
+  open(result: unknown, options?: { sourceCompanyId: number }): Promise<void>;
   /** Open an authorized modal action by XML id; resolves true on a completed action and false on dismissal. */
   openWizard?(xmlId: string): Promise<boolean>;
   /** Open an unsaved form through its installed window action, after shell navigation guards. */

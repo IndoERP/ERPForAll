@@ -62,14 +62,21 @@ fn ident(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
+fn valid_id_list(value: &Json, max_rows: usize) -> bool {
+    value.as_array().is_some_and(|ids| {
+        !ids.is_empty()
+            && ids.len() <= max_rows
+            && ids.iter().all(|id| id.as_i64().is_some_and(|n| n > 0))
+    })
+}
 /// A provider tool with a closed schema for direct scalar searches.
 ///
 /// # Errors
 /// Returns a programming error for an invalid built-in declaration.
 pub fn search_records_spec() -> Result<ToolSpec> {
-    let scalar = json!({"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]});
+    let operand = json!({"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"type":"integer","minimum":1}}]});
     let Json::Object(schema) = json!({"type":"object","additionalProperties":false,
-      "properties":{"model":{"type":"string"},"domain":{"type":"array","description":"AND list of [field, operator, scalar value] conditions","items":{"type":"array","items":scalar}},
+      "properties":{"model":{"type":"string"},"domain":{"type":"array","description":"AND conditions. For exact records use [id, in, [positive IDs]] within the configured row limit.","items":{"type":"array","items":operand}},
       "fields":{"type":"array","items":{"type":"string"}},"limit":{"type":"integer"},"order":{"type":"string"}},
       "required":["model","domain","fields","limit","order"]})
     else {
@@ -230,7 +237,8 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<SearchPlan
         .and_then(Json::as_u64)
         .and_then(|v| usize::try_from(v).ok())
         .ok_or_else(invalid)?;
-    if limit == 0 || limit > crate::catalog::limit(tx, ROWS).await? {
+    let max_rows = crate::catalog::limit(tx, ROWS).await?;
+    if limit == 0 || limit > max_rows {
         return Err(Error::validation(
             "search_records limit exceeds ai_base.search_rows or is zero.",
         ));
@@ -270,6 +278,12 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<SearchPlan
         let [Json::String(field), Json::String(op), rhs] = triple.as_slice() else {
             return Err(invalid());
         };
+        if field == "id" && op == "in" {
+            if !valid_id_list(rhs, max_rows) {
+                return Err(invalid());
+            }
+            continue;
+        }
         if !ident(field) || !matches!(op.as_str(), "=" | "!=" | ">" | "<" | ">=" | "<=" | "ilike") {
             return Err(invalid());
         }
@@ -297,7 +311,7 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<SearchPlan
                     && s.related.is_none()
                     && s.inherited.is_none()
                     && !s.is_generated()
-                    && s.compute.is_none()
+                    && (s.compute.is_none() || (model == "product.product" && field == "lst_price"))
                     && matches!(
                         s.ty,
                         FieldType::Id
@@ -345,6 +359,21 @@ pub async fn prepare(tx: &mut Transaction, call: &ToolCall) -> Result<SearchPlan
 mod tests {
     use super::*;
     use erp_sdk::ai::ToolCallId;
+
+    #[test]
+    fn id_filters_accept_only_bounded_positive_ids() {
+        assert!(valid_id_list(&json!([83, 5, 120]), 3));
+        for invalid in [
+            json!([]),
+            json!([1, 2, 3, 4]),
+            json!([0]),
+            json!(["1"]),
+            json!([[1]]),
+            json!([1.5]),
+        ] {
+            assert!(!valid_id_list(&invalid, 3));
+        }
+    }
 
     #[test]
     fn byte_limit_includes_escaped_text_and_provenance() {

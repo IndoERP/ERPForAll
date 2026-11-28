@@ -354,11 +354,25 @@ impl Analysis {
             .is_some_and(|d| d.value()["records"].as_array().is_some_and(|r| r.len() > 1));
         let automatic = self.cards.is_empty();
         let chart = self.wants_chart || (!self.skip_chart && automatic && grouped);
-        let table = self.wants_details || (automatic && many && self.details_match());
+        let catalog_prices = self
+            .search
+            .data
+            .as_ref()
+            .is_some_and(|data| data.value()["price_basis"].is_string());
+        let table =
+            self.wants_details || catalog_prices || (automatic && many && self.details_match());
         let mut notices = Vec::new();
         for (kind, needed, label) in [
             ("chart", chart, "Chart"),
-            ("table", table, "Supporting records"),
+            (
+                "table",
+                table,
+                if catalog_prices {
+                    "Product catalog prices"
+                } else {
+                    "Supporting records"
+                },
+            ),
         ] {
             if !needed || self.has(kind) {
                 continue;

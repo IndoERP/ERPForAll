@@ -43,7 +43,8 @@ it("loads the saved definition, reads live groups and opens contributing records
   expect(host.querySelector("tbody")?.textContent).toContain("sale");
   host.querySelector<HTMLButtonElement>("tbody button")!.click();
   expect(open).toHaveBeenCalledWith(expect.objectContaining({ res_model: "sale.order",
-    domain: [["active", "=", true], ["state", "=", "sale"]], context: { allowed_company_ids: [1] } }));
+    domain: [["active", "=", true], ["state", "=", "sale"]] }), { sourceCompanyId: 1 });
+  expect(open.mock.calls[0]![0]).not.toHaveProperty("context");
   handle.dispose();
   expect(host.childElementCount).toBe(0);
 });
@@ -73,7 +74,7 @@ it("preserves both axes of flat groups and omits the lookahead row", async () =>
   expect(host.querySelector("tbody")?.textContent).toBe("saleJanuary3");
   expect(host.textContent).toContain("Showing the first 1 group.");
   host.querySelector<HTMLButtonElement>("tbody button")!.click();
-  expect(open).toHaveBeenCalledWith(expect.objectContaining({domain:[...query.args.domain,...drill]}));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({domain:[...query.args.domain,...drill]}), { sourceCompanyId: 1 });
 });
 
 it("renders a saved chart from the current viewer's results", async () => {

@@ -18,7 +18,7 @@ const MAX_STORED = 1024 * 1024;
 const MAX_TITLE = 512;
 
 interface Stored { readonly id: string; readonly title: string; readonly url: string; readonly form: boolean }
-interface StoredAction { readonly result: unknown; readonly context: Record<string, unknown>; readonly origin: string; readonly label: string }
+interface StoredAction { readonly result: unknown; readonly context: Record<string, unknown>; readonly origin: string; readonly label: string; readonly sourceCompanyId?: number }
 
 const MAX_CONTEXT_TEXT = 4096;
 const scalar = (value: unknown): boolean => typeof value === "string" && value.length <= MAX_CONTEXT_TEXT
@@ -51,14 +51,16 @@ function crumb(raw: unknown): BreadcrumbItem | undefined {
  *  through the same decoder as a server answer; the server admits it again before it opens. */
 function methodAction(raw: unknown): MethodAction | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw) || JSON.stringify(raw).length > MAX_METHOD_ACTION_BYTES) return undefined;
-  const { result, context, origin, label } = raw as Record<string, unknown>;
+  const { result, context, origin, label, sourceCompanyId } = raw as Record<string, unknown>;
+  if (sourceCompanyId !== undefined && (typeof sourceCompanyId !== "number" || !Number.isSafeInteger(sourceCompanyId) || sourceCompanyId <= 0)) return undefined;
   const route = address(origin);
   if (!route || !title(label) || typeof context !== "object" || context === null || Array.isArray(context) || Object.keys(context).length > 64) return undefined;
   // Each value goes into the server's admission and every request of the list: only the kinds this client writes there.
   if (!Object.entries(context).every(([key, value]) => CONTEXT_KEY.test(key) && contextValue(value))) return undefined;
   try {
     const decoded = actionResult({ wire_major: 1, result });
-    return decoded.kind === "current_window" ? { result: decoded, context: context as Record<string, unknown>, origin: route, originLabel: label } : undefined;
+    return decoded.kind === "current_window" ? { result: decoded, context: context as Record<string, unknown>, origin: route, originLabel: label,
+      ...(sourceCompanyId === undefined ? {} : { sourceCompanyId }) } : undefined;
   } catch { return undefined; }
 }
 const METHOD_ACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[1-9][0-9]{0,15}$/;
@@ -136,7 +138,8 @@ export class NavigationStore {
   private write(): void {
     if (this.ended) return;
     const trails = [...this.trails].map(([index, items]) => [index, items.map((item): Stored => ({ id: item.id, title: item.title, url: item.url, form: item.isFormView === true }))]);
-    const actions = [...this.actions].map(([id, entry]) => [id, { result: entry.result, context: entry.context, origin: routeUrl(entry.origin), label: entry.originLabel } satisfies StoredAction]);
+    const actions = [...this.actions].map(([id, entry]) => [id, { result: entry.result, context: entry.context, origin: routeUrl(entry.origin), label: entry.originLabel,
+      ...(entry.sourceCompanyId === undefined ? {} : { sourceCompanyId: entry.sourceCompanyId }) } satisfies StoredAction]);
     let text = JSON.stringify({ v: 1, uid: this.uid, trails, actions });
     // The oldest related lists, then the oldest trails, give way until the store fits its bound. Each entry's own length
     // (and its comma) is taken off, so the whole store is written out once more, not once per entry.

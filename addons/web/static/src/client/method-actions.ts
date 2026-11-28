@@ -7,6 +7,7 @@ export type CurrentWindow = Extract<ActionResult, { kind: "current_window" }>;
 export interface MethodAction {
   readonly result: CurrentWindow;
   readonly context: Record<string, unknown>;
+  readonly sourceCompanyId?: number;
   readonly origin: Route;
   /** The source record's name for the breadcrumb back to it ("Products › Mouse › Product Variants"). */
   readonly originLabel: string;

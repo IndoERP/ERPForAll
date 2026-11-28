@@ -80,6 +80,12 @@ test("a kept related list is read back only when every context value is of a kin
   }
 });
 
+test("restores the original company of a source drilldown", () => {
+  const store = new NavigationStore(2, 32, () => {});
+  store.saveAction(ID, { ...related({ allowed_company_ids: [1] }), sourceCompanyId: 1 });
+  expect(new NavigationStore(2, 32, () => {}).action(ID)?.sourceCompanyId).toBe(1);
+});
+
 test("after the session ends the store writes nothing back", () => {
   const store = new NavigationStore(2, 32, () => {});
   store.saveAction(ID, related({ lang: "en_US" }));

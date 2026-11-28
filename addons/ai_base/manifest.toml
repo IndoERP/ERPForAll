@@ -5,6 +5,6 @@ summary = "Role-based ERP assistance, implementation projects, live reports and 
 category = "Technical"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "0.5.1"
+version = "0.5.2"
 depends = ["base"]
 data = ["security/implementation.xml", "security/ir.access.csv", "data/ai_defaults.xml", "views/configuration.xml", "views/workspace.xml", "views/insights.xml", "views/implementation.xml"]

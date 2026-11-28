@@ -22,6 +22,9 @@ pub struct AiSubmission {
     pub owner_user_id: Option<RecId>,
     #[field(uuid, required = true)]
     pub request_id: Option<Uuid>,
+    /// Successful read definition. Never includes result rows or assistant text.
+    #[field(json)]
+    pub read_query: Option<Json>,
 }
 
 const VOLATILE_ANSWER: &str =
@@ -122,6 +125,28 @@ pub async fn begin(
     Ok(id)
 }
 
+/// Read the query from the latest completed interactive turn in this conversation.
+///
+/// # Errors
+/// Rejects a foreign session or an unreadable receipt.
+pub async fn previous_read(tx: &mut Transaction, id: i64) -> Result<Option<Json>> {
+    check(tx, id, true).await?;
+    let rows = tx.query(
+        "SELECT s.read_query::text FROM ai_session_event e
+         JOIN ai_submission s ON s.session_id=e.session_id AND s.request_id=e.turn_id
+         WHERE e.session_id=$1 AND e.kind='turn_end' AND e.payload->>'outcome'='interactive_completed'
+         ORDER BY e.seq DESC LIMIT 1",
+        &[&id],
+    ).await?;
+    rows.first()
+        .and_then(|r| r.get::<_, Option<String>>(0))
+        .map(|s| {
+            serde_json::from_str(&s)
+                .map_err(|_| Error::invariant("Invalid assistant read receipt."))
+        })
+        .transpose()
+}
+
 /// Record completion. Tool-derived text is volatile and is never replayed under older permissions.
 /// # Errors
 /// Returns access, capacity or persistence errors.
@@ -132,9 +157,18 @@ pub async fn finish(
     text: &str,
     rounds: i64,
     calls: i64,
+    read_query: Option<&Json>,
 ) -> Result<()> {
     check(tx, id, false).await?;
     let cap = crate::catalog::limit(tx, session::EVENT_BYTES).await?;
+    if let Some(query) = read_query {
+        let encoded = query.to_string();
+        let turn = turn.to_string();
+        tx.execute(
+            "UPDATE ai_submission SET read_query=$3::text::jsonb WHERE session_id=$1 AND request_id=$2::text::uuid",
+            &[&id, &turn, &encoded],
+        ).await?;
+    }
     let snapshot = if calls > 0 {
         VOLATILE_ANSWER
     } else if json!({"text":text}).to_string().len() > cap {

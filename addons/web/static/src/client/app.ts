@@ -2319,7 +2319,7 @@ export class HumanApp {
     catch (error) {
       const kept = error instanceof ExpiredMethodAction ? this.navigationStore.action(id) : undefined;
       if (!kept) throw error;
-      const { result } = kept, context = { ...kept.context, ...this.context };
+      const { result } = kept, context = { ...kept.context, ...this.clientSourceContext(kept.sourceCompanyId) };
       // One record goes back as itself (`res_id`, no domain); the server checks again that the user may read it.
       const input = { type: "ir.actions.act_window", name: result.name, res_model: result.model, target: "current",
         views: result.views.map(view => [view.id ?? false, view.type]),
@@ -5075,7 +5075,7 @@ export class HumanApp {
       csrfToken: text(object(this.headerBootstrap["csrf"])["logout"], "session token"),
       action: { id: result.id, name: result.name, tag: result.tag, params: result.params },
       restored: this.clientStates.get(key) ?? null,
-      open: input => this.openFromClientAction(input, generation, result.name),
+      open: (input, options) => this.openFromClientAction(input, generation, result.name, options?.sourceCompanyId),
       openWizard: async xmlId => {
         if (!this.live(generation) || this.wizard) return false;
         const action = object(await this.rpc.call("ir.actions.act_window", "erp_load_web_action_ref", { xml_id: xmlId, context: this.context }));
@@ -5126,14 +5126,24 @@ export class HumanApp {
     } catch (error) { this.reportError(error); }
   }
 
+  /** A source drilldown stays in the company which produced the report, including after reload. */
+  private clientSourceContext(sourceCompanyId?: number): Record<string, unknown> {
+    if (sourceCompanyId === undefined) return this.context;
+    if (sourceCompanyId !== this.activeCompanyIds[0]) throw new ClientError("validation", "Reopen the source in its original company.");
+    return { ...this.context, allowed_company_ids: [sourceCompanyId] };
+  }
+
   /** `open(result)` of a client action screen: a related list or another client action, through the normal navigation. */
-  private async openFromClientAction(input: unknown, generation: number, originLabel: string): Promise<void> {
+  private async openFromClientAction(input: unknown, generation: number, originLabel: string, sourceCompanyId?: number): Promise<void> {
     if (generation !== this.generation || this.expired) throw new ClientError("validation", "This screen is no longer the open action. Open it again.");
-    const normalized = actionResult(await this.rpc.call("res.users", "erp_normalize_action_result", { wire_major: 1, result: input, context: this.context }));
+    const context = this.clientSourceContext(sourceCompanyId);
+    const normalized = actionResult(await this.rpc.call("res.users", "erp_normalize_action_result", { wire_major: 1, result: input, context }));
     if (generation !== this.generation || this.expired) return;
+    if (sourceCompanyId !== undefined && normalized.kind !== "current_window") throw new ClientError("validation", "The source must open in the current window.");
     const origin = { ...this.current };
     if (normalized.kind === "current_window") {
-      const id = this.methodActions.add({ result: normalized, context: { ...this.context, ...normalized.context }, origin, originLabel });
+      const id = this.methodActions.add({ result: normalized, context: { ...context, ...normalized.context }, origin, originLabel,
+        ...(sourceCompanyId === undefined ? {} : { sourceCompanyId }) });
       try {
         await this.navigate({ action: origin.action, menu: origin.menu, cids: origin.cids, method_action: id, model: normalized.model,
           ...normalized.res_id === undefined ? { view_type: "list" } : { id: String(normalized.res_id), view_type: "form" } },
