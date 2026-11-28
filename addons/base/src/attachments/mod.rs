@@ -40,7 +40,7 @@ pub use service::{
     AdoptScope, UNLINK_HOOK, adopt, copy, create, create_unique, for_record, open, reattach,
     unlink_for_record, write_content,
 };
-pub use topology::verify_topology;
+pub use topology::{LiveNodeCount, LiveNodeCounter, verify_topology};
 pub use types::{
     AttachmentContent, AttachmentMeta, BlobHandle, ListOptions, MAX_BATCH, NAME_MAX_BYTES,
     NewAttachment, ParentRef, URL_MAX_BYTES, UploadId,

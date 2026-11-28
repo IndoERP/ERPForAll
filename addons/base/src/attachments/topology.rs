@@ -13,8 +13,35 @@
 //!
 //! The check runs when an upload starts and when the attachment schedules are ensured.
 
+use std::sync::Arc;
+
 use erp_sdk::blob::AttachmentRuntime;
 use erp_sdk::prelude::*;
+
+/// Counts live nodes in `erp_node` for [`verify`].
+///
+/// Split-role deployments revoke `erp_node` from the request database role and grant `SELECT` on
+/// `erp_node` to the node role; the server attaches a node-role counter as a generation attachment
+/// so request-path uploads verify deployment topology without widening request-role privileges.
+pub trait LiveNodeCount: Send + Sync {
+    /// Count non-stopped, unexpired rows in `erp_node`.
+    fn live_node_count(&self) -> erp_sdk::BoxFuture<'_, Result<i64>>;
+}
+
+/// Generation attachment wrapping a [`LiveNodeCount`] implementation.
+#[derive(Clone)]
+pub struct LiveNodeCounter(Arc<dyn LiveNodeCount>);
+
+impl LiveNodeCounter {
+    /// Wrap a node-role live node counter for registration via `OrmBuilder::generation_attachment`.
+    pub fn new(counter: Arc<dyn LiveNodeCount>) -> Self {
+        Self(counter)
+    }
+
+    async fn live_node_count(&self) -> Result<i64> {
+        self.0.live_node_count().await
+    }
+}
 
 /// Refuse a multi-node deployment whose attachment store is an unshared local directory.
 ///
@@ -27,17 +54,20 @@ pub(crate) async fn verify(tx: &mut Transaction, rt: &AttachmentRuntime) -> Resu
     if unshared.is_empty() {
         return Ok(());
     }
-    let rows = tx
-        .query(
-            "SELECT count(*) FROM erp_node WHERE state <> 'stopped' AND expires_at > now()",
-            &[],
-        )
-        .await?;
-    let live: i64 = rows
-        .first()
-        .ok_or_else(|| Error::db("the live node count is missing"))?
-        .try_get(0)
-        .map_err(|e| Error::db(format!("the live node count could not be read: {e}")))?;
+    let live: i64 = if let Ok(counter) = tx.env().generation_attachment::<LiveNodeCounter>() {
+        counter.live_node_count().await?
+    } else {
+        let rows = tx
+            .query(
+                "SELECT count(*) FROM erp_node WHERE state <> 'stopped' AND expires_at > now()",
+                &[],
+            )
+            .await?;
+        rows.first()
+            .ok_or_else(|| Error::db("the live node count is missing"))?
+            .try_get(0)
+            .map_err(|e| Error::db(format!("the live node count could not be read: {e}")))?
+    };
     if live > 1 {
         return Err(Error::programming(format!(
             "The attachment store {} is a node-local directory but {live} nodes are live in this \

@@ -1405,12 +1405,36 @@ pub(crate) async fn grant_vacuum_role_async(args: &GrantVacuumRoleArgs) -> Resul
     ))
 }
 
+struct NodePoolLiveCounter(deadpool_postgres::Pool);
+
+impl erp_addon_base::attachments::LiveNodeCount for NodePoolLiveCounter {
+    fn live_node_count(&self) -> erp_orm::BoxFuture<'_, erp_fields::Result<i64>> {
+        Box::pin(async move {
+            let client = self
+                .0
+                .get()
+                .await
+                .map_err(|e| erp_fields::Error::db(format!("node topology pool error: {e}")))?;
+            let row = client
+                .query_one(
+                    "SELECT count(*) FROM erp_node WHERE state <> 'stopped' AND expires_at > now()",
+                    &[],
+                )
+                .await
+                .map_err(|e| erp_fields::Error::db(format!("live node count query failed: {e}")))?;
+            row.try_get(0)
+                .map_err(|e| erp_fields::Error::db(format!("live node count decode failed: {e}")))
+        })
+    }
+}
+
 struct RuntimeAuthConfig<'a> {
     smtp: crate::smtp::RelayConfig,
     loaded: &'a Orm,
     node: AuthConfig,
     job_policy_pool: deadpool_postgres::Pool,
     report_upload_pool: deadpool_postgres::Pool,
+    live_nodes: Arc<erp_addon_base::attachments::LiveNodeCounter>,
     run_jobs: bool,
 }
 
@@ -1447,11 +1471,19 @@ async fn runtime_auth(
             Arc::clone(registry),
             Arc::clone(&attachments),
         ))
+        .generation_attachment(erp_orm::GenerationAttachment::new(
+            Arc::clone(registry),
+            Arc::clone(&configuration.live_nodes),
+        ))
         .build()?;
     let smtp = Arc::new(configuration.smtp);
     let service =
         erp_addon_mail::outgoing::TransportService(Arc::new(crate::mail_outgoing::SmtpAdapter));
     let orm = server_request_orm_builder(loaded, runtime_pool, wasm_methods, checks, attachments)?
+        .generation_attachment(erp_orm::GenerationAttachment::new(
+            Arc::clone(registry),
+            Arc::clone(&configuration.live_nodes),
+        ))
         .generation_attachment(erp_orm::GenerationAttachment::new(
             Arc::clone(registry),
             smtp,
@@ -1544,6 +1576,14 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
                     config.runtime_connection(),
                     erp_orm::jobs::JobSettings::default().workers_per_db() as usize,
                 )?,
+                live_nodes: Arc::new(erp_addon_base::attachments::LiveNodeCounter::new(Arc::new(
+                    NodePoolLiveCounter(pool_with_size(
+                        config
+                            .node_connection()
+                            .map_err(|error| failed(error.to_string()))?,
+                        2,
+                    )?),
+                ))),
                 publication_pool,
                 installing: tokio::sync::Mutex::new(()),
                 asset_snapshot: tokio::sync::Mutex::new(None),
@@ -1638,6 +1678,7 @@ struct NativeLifecycle {
     policy_pool: deadpool_postgres::Pool,
     job_policy_pool: deadpool_postgres::Pool,
     report_upload_pool: deadpool_postgres::Pool,
+    live_nodes: Arc<erp_addon_base::attachments::LiveNodeCounter>,
     publication_pool: deadpool_postgres::Pool,
     installing: tokio::sync::Mutex<()>,
     /// Spaces out the rebuilds of the registry after one failed (review r1 M3).
@@ -1930,6 +1971,7 @@ impl NativeLifecycle {
                 node: self.config.auth(),
                 job_policy_pool: self.job_policy_pool.clone(),
                 report_upload_pool: self.report_upload_pool.clone(),
+                live_nodes: Arc::clone(&self.live_nodes),
                 run_jobs: self.config.jobs_run_in_app(),
             },
             baseline,
