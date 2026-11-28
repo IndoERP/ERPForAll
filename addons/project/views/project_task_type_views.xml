@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Stages: list, form and search, and the window action of the Configuration menu. Every project owns its
+     stages; a stage without a project is a default stage, copied into each new project. -->
+<erp>
+  <record id="project_task_type_view_list" model="ir.ui.view">
+    <field name="name">project.task.type.list</field>
+    <field name="model">project.task.type</field>
+    <field name="arch" type="xml">
+      <list string="Stages">
+        <field name="sequence" options="{'enable_formatting': False}"/>
+        <field name="name"/>
+        <field name="project_id"/>
+        <field name="fold"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="project_task_type_view_form" model="ir.ui.view">
+    <field name="name">project.task.type.form</field>
+    <field name="model">project.task.type</field>
+    <field name="arch" type="xml">
+      <form string="Stage">
+        <sheet>
+          <div class="oe_title">
+            <h1><field name="name" placeholder="Stage name"/></h1>
+          </div>
+          <group>
+            <group>
+              <field name="project_id" placeholder="Default stage for new projects"/>
+            </group>
+            <group>
+              <field name="sequence" options="{'enable_formatting': False}"/>
+              <field name="fold" widget="boolean_toggle"/>
+            </group>
+          </group>
+          <notebook>
+            <page name="description" string="Description">
+              <field name="description" placeholder="What this stage means and when a task belongs here"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="project_task_type_view_search" model="ir.ui.view">
+    <field name="name">project.task.type.search</field>
+    <field name="model">project.task.type</field>
+    <field name="arch" type="xml">
+      <search string="Stages">
+        <field name="name"/>
+        <field name="project_id"/>
+        <filter name="default_stages" string="Default stages" domain="[('project_id', '=', False)]"/>
+        <separator/>
+        <filter name="folded" string="Folded" domain="[('fold', '=', True)]"/>
+        <group>
+          <filter name="group_project" string="Project" context="{'group_by': 'project_id'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+
+  <record id="project_task_type_action" model="ir.actions.act_window">
+    <field name="name">Stages</field>
+    <field name="res_model">project.task.type</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="project_task_type_view_list"/>
+    <field name="search_view_id" ref="project_task_type_view_search"/>
+    <field name="context">{'search_default_group_project': 1}</field>
+  </record>
+</erp>

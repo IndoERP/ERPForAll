@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Tasks: the board (kanban) grouped by the stages of one project, list, form, calendar of deadlines and search,
+     and the window actions of the Tasks and My Tasks menus. -->
+<erp>
+  <record id="project_task_view_search" model="ir.ui.view">
+    <field name="name">project.task.search</field>
+    <field name="model">project.task</field>
+    <field name="arch" type="xml">
+      <search string="Tasks">
+        <field name="name"/>
+        <field name="project_id"/>
+        <field name="user_ids"/>
+        <field name="stage_id"/>
+        <field name="tag_ids"/>
+        <field name="partner_id"/>
+        <field name="parent_id"/>
+        <filter name="my_tasks" string="My Tasks" domain="[('user_ids', 'in', [uid])]"/>
+        <filter name="unassigned" string="Unassigned" domain="[('user_ids', '=', False)]"/>
+        <separator/>
+        <filter name="open" string="Open" domain="[('state', 'not in', ['done', 'cancelled'])]"/>
+        <filter name="closed" string="Closed" domain="[('state', 'in', ['done', 'cancelled'])]"/>
+        <separator/>
+        <filter name="changes_requested" string="Changes Requested" domain="[('state', '=', 'changes_requested')]"/>
+        <filter name="approved" string="Approved" domain="[('state', '=', 'approved')]"/>
+        <separator/>
+        <filter name="important" string="Important" domain="[('priority', '=', '1')]"/>
+        <separator/>
+        <filter name="overdue" string="Overdue" domain="[('date_deadline', '&lt;', 'today'), ('state', 'not in', ['done', 'cancelled'])]"/>
+        <separator/>
+        <filter name="inactive" string="Archived" domain="[('active', '=', False)]"/>
+        <group>
+          <filter name="group_project" string="Project" context="{'group_by': 'project_id'}"/>
+          <filter name="group_stage" string="Stage" context="{'group_by': 'stage_id'}"/>
+          <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+          <filter name="group_priority" string="Priority" context="{'group_by': 'priority'}"/>
+          <filter name="group_partner" string="Customer" context="{'group_by': 'partner_id'}"/>
+          <filter name="group_deadline" string="Deadline" context="{'group_by': 'date_deadline:month'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+
+  <!-- The board: one column per stage of the selected project, empty stages included; dragging a card to another
+       column moves the task to that stage. The card shows the title, project, customer and deadline, then
+       priority, tags, assignees and status along the bottom; the hidden color field tints the card's edge. -->
+  <record id="project_task_view_kanban" model="ir.ui.view">
+    <field name="name">project.task.kanban</field>
+    <field name="model">project.task</field>
+    <field name="arch" type="xml">
+      <kanban string="Tasks" default_group_by="stage_id" group_scope="project_id" records_draggable="1">
+        <progressbar field="state" colors='{"in_progress": "info", "changes_requested": "warning", "approved": "success", "done": "success", "cancelled": "muted"}'/>
+        <templates>
+          <t t-name="card">
+            <field name="color" invisible="1"/>
+            <main>
+              <field name="name"/>
+              <field name="project_id"/>
+              <field name="partner_id"/>
+              <field name="date_deadline"/>
+            </main>
+            <footer>
+              <field name="priority" widget="priority"/>
+              <field name="tag_ids" widget="many2many_tags"/>
+              <field name="user_ids" widget="many2many_tags"/>
+              <field name="state" widget="badge" options="{'tone_info': ['in_progress'], 'tone_warning': ['changes_requested'], 'tone_success': ['approved', 'done'], 'tone_muted': ['cancelled']}"/>
+            </footer>
+          </t>
+        </templates>
+      </kanban>
+    </field>
+  </record>
+
+  <record id="project_task_view_list" model="ir.ui.view">
+    <field name="name">project.task.list</field>
+    <field name="model">project.task</field>
+    <field name="arch" type="xml">
+      <list string="Tasks">
+        <field name="priority" widget="priority"/>
+        <field name="name"/>
+        <field name="project_id"/>
+        <field name="user_ids" widget="many2many_tags"/>
+        <field name="partner_id"/>
+        <field name="date_deadline"/>
+        <field name="tag_ids" widget="many2many_tags"/>
+        <field name="stage_id"/>
+        <field name="state" widget="badge" options="{'tone_info': ['in_progress'], 'tone_warning': ['changes_requested'], 'tone_success': ['approved', 'done'], 'tone_muted': ['cancelled']}"/>
+      </list>
+    </field>
+  </record>
+
+  <!-- The stage list offers the stages of the task's project only; a task without a project has no stage. The
+       server keeps the same rule, so a stage of another project is refused however it is written. The company is
+       the project's (choosing a project proposes it); only a task without a project chooses its own. -->
+  <record id="project_task_view_form" model="ir.ui.view">
+    <field name="name">project.task.form</field>
+    <field name="model">project.task</field>
+    <field name="arch" type="xml">
+      <form string="Task">
+        <sheet>
+          <widget name="web_ribbon" title="Archived" bg_color="bg-danger" invisible="active"/>
+          <div class="oe_title">
+            <h1><field name="name" placeholder="Task title"/></h1>
+          </div>
+          <group>
+            <group>
+              <field name="project_id"/>
+              <field name="stage_id" domain="[('project_id', '=', project_id)]" readonly="not project_id"/>
+              <field name="state"/>
+              <field name="user_ids" widget="many2many_tags"/>
+              <field name="partner_id"/>
+              <field name="parent_id"/>
+            </group>
+            <group>
+              <field name="priority" widget="priority"/>
+              <field name="date_deadline"/>
+              <field name="tag_ids" widget="many2many_tags"/>
+              <field name="color" widget="color_picker"/>
+              <field name="company_id" readonly="project_id"/>
+              <field name="date_last_stage_update" readonly="1"/>
+              <field name="active" invisible="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page name="description" string="Description">
+              <field name="description" widget="html"/>
+            </page>
+            <page name="subtasks" string="Subtasks">
+              <field name="child_ids"/>
+            </page>
+          </notebook>
+        </sheet>
+        <chatter/>
+      </form>
+    </field>
+  </record>
+
+  <!-- Deadlines by month, coloured by project; the side panel filters by project, stage, status and priority. -->
+  <record id="project_task_view_calendar" model="ir.ui.view">
+    <field name="name">project.task.calendar</field>
+    <field name="model">project.task</field>
+    <field name="arch" type="xml">
+      <calendar string="Tasks" date_start="date_deadline" color="project_id" mode="month">
+        <field name="project_id" filters="1"/>
+        <field name="stage_id" filters="1"/>
+        <field name="state" filters="1"/>
+        <field name="priority" filters="1"/>
+        <field name="user_ids"/>
+        <field name="partner_id"/>
+      </calendar>
+    </field>
+  </record>
+
+  <record id="project_task_action" model="ir.actions.act_window">
+    <field name="name">Tasks</field>
+    <field name="res_model">project.task</field>
+    <field name="view_mode">kanban,list,form,calendar</field>
+    <field name="view_id" ref="project_task_view_kanban"/>
+    <field name="search_view_id" ref="project_task_view_search"/>
+  </record>
+
+  <!-- My Tasks opens on the list: the tasks assigned to the current user across all projects. -->
+  <record id="project_task_action_my" model="ir.actions.act_window">
+    <field name="name">My Tasks</field>
+    <field name="res_model">project.task</field>
+    <field name="view_mode">list,kanban,form,calendar</field>
+    <field name="view_id" ref="project_task_view_list"/>
+    <field name="search_view_id" ref="project_task_view_search"/>
+    <field name="context">{'search_default_my_tasks': 1, 'search_default_open': 1}</field>
+  </record>
+</erp>

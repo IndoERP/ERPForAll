@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- The Project app's landing page: the task list with a row of counts above it (open tasks, the current user's
+     open tasks, overdue, waiting on changes, unassigned, important). It opens on the open tasks grouped by project;
+     each count is a link that filters the list. -->
+<erp>
+  <record id="project_task_overview_list" model="ir.ui.view">
+    <field name="name">project.task.overview.list</field>
+    <field name="model">project.task</field>
+    <field name="inherit_id" ref="project_task_view_list"/>
+    <field name="mode">primary</field>
+    <field name="priority" eval="90"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='priority']" position="before">
+        <dashboard>
+          <count name="open" string="Open tasks" filter="open" color="info"/>
+          <count name="my_open" string="My open tasks" domain="[('user_ids', 'in', [uid]), ('state', 'not in', ['done', 'cancelled'])]" color="success"/>
+          <count name="overdue" string="Overdue" filter="overdue" color="danger"/>
+          <count name="changes_requested" string="Changes requested" filter="changes_requested" color="warning"/>
+          <count name="unassigned" string="Open and unassigned" domain="[('user_ids', '=', False), ('state', 'not in', ['done', 'cancelled'])]"/>
+          <count name="important" string="Important and open" domain="[('priority', '=', '1'), ('state', 'not in', ['done', 'cancelled'])]"/>
+        </dashboard>
+      </xpath>
+    </field>
+  </record>
+
+  <record id="project_overview_action" model="ir.actions.act_window">
+    <field name="name">Project Overview</field>
+    <field name="res_model">project.task</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="project_task_overview_list"/>
+    <field name="search_view_id" ref="project_task_view_search"/>
+    <field name="context">{'search_default_open': 1, 'search_default_group_project': 1}</field>
+  </record>
+</erp>

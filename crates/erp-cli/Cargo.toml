@@ -59,6 +59,8 @@ erp-addon-stock_landed_costs.workspace = true
 erp-addon-valuation.workspace = true
 # human resources: job positions (spike)
 erp-addon-hr.workspace = true
+# projects: projects, tasks with per-project stages, tags
+erp-addon-project.workspace = true
 erp-server.workspace = true
 # `erp report-worker`: the render worker the report pool starts
 erp-report-typst.workspace = true

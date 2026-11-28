@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Projects: board (kanban), list, form and search, and the window action of the Projects menu. The form opens
+     the project's tasks from a stat button and edits the stages the project owns. -->
+<erp>
+  <record id="project_project_view_search" model="ir.ui.view">
+    <field name="name">project.project.search</field>
+    <field name="model">project.project</field>
+    <field name="arch" type="xml">
+      <search string="Projects">
+        <field name="name"/>
+        <field name="partner_id"/>
+        <field name="user_id"/>
+        <field name="tag_ids"/>
+        <filter name="my_projects" string="My Projects" domain="[('user_id', '=', uid)]"/>
+        <separator/>
+        <filter name="inactive" string="Archived" domain="[('active', '=', False)]"/>
+        <group>
+          <filter name="group_manager" string="Project Manager" context="{'group_by': 'user_id'}"/>
+          <filter name="group_partner" string="Customer" context="{'group_by': 'partner_id'}"/>
+          <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+
+  <!-- Project cards: name, customer and end date, the number of open tasks, then tags and the project manager; the
+       hidden color field tints the card's edge. -->
+  <record id="project_project_view_kanban" model="ir.ui.view">
+    <field name="name">project.project.kanban</field>
+    <field name="model">project.project</field>
+    <field name="arch" type="xml">
+      <kanban string="Projects">
+        <templates>
+          <t t-name="card">
+            <field name="color" invisible="1"/>
+            <main>
+              <field name="name"/>
+              <field name="partner_id"/>
+              <field name="date"/>
+            </main>
+            <aside>
+              <field name="open_task_count" string="Open tasks"/>
+            </aside>
+            <footer>
+              <field name="tag_ids" widget="many2many_tags"/>
+              <field name="user_id" widget="many2one_avatar"/>
+            </footer>
+          </t>
+        </templates>
+      </kanban>
+    </field>
+  </record>
+
+  <record id="project_project_view_list" model="ir.ui.view">
+    <field name="name">project.project.list</field>
+    <field name="model">project.project</field>
+    <field name="arch" type="xml">
+      <list string="Projects">
+        <field name="name"/>
+        <field name="partner_id"/>
+        <field name="user_id" widget="many2one_avatar"/>
+        <field name="date_start"/>
+        <field name="date"/>
+        <field name="open_task_count" string="Open Tasks"/>
+        <field name="tag_ids" widget="many2many_tags"/>
+        <field name="company_id"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="project_project_view_form" model="ir.ui.view">
+    <field name="name">project.project.form</field>
+    <field name="model">project.project</field>
+    <field name="arch" type="xml">
+      <form string="Project">
+        <sheet>
+          <div name="button_box" class="oe_button_box">
+            <button name="action_view_tasks" type="object" class="oe_stat_button" icon="lucide:list-todo">
+              <field name="task_count" widget="statinfo" string="Tasks"/>
+            </button>
+          </div>
+          <widget name="web_ribbon" title="Archived" bg_color="bg-danger" invisible="active"/>
+          <div class="oe_title">
+            <h1><field name="name" placeholder="Project name"/></h1>
+          </div>
+          <group>
+            <group>
+              <field name="partner_id"/>
+              <field name="user_id" widget="many2one_avatar"/>
+              <field name="tag_ids" widget="many2many_tags"/>
+              <field name="company_id"/>
+            </group>
+            <group>
+              <field name="date_start"/>
+              <field name="date"/>
+              <field name="sequence" options="{'enable_formatting': False}"/>
+              <field name="color" widget="color_picker"/>
+              <field name="active" invisible="1"/>
+            </group>
+          </group>
+          <notebook>
+            <!-- The project's own stages, in board order. A new project starts with copies of the default
+                 stages, a copied project with copies of the original's. Only managers configure stages, so
+                 only they see the page. -->
+            <page name="stages" string="Stages" groups="project.group_project_manager">
+              <field name="type_ids"/>
+            </page>
+            <page name="description" string="Description">
+              <field name="description" widget="html"/>
+            </page>
+          </notebook>
+        </sheet>
+        <chatter/>
+      </form>
+    </field>
+  </record>
+
+  <record id="project_project_action" model="ir.actions.act_window">
+    <field name="name">Projects</field>
+    <field name="res_model">project.project</field>
+    <field name="view_mode">kanban,list,form</field>
+    <field name="view_id" ref="project_project_view_kanban"/>
+    <field name="search_view_id" ref="project_project_view_search"/>
+  </record>
+</erp>

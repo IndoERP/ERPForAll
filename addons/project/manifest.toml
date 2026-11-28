@@ -1,0 +1,60 @@
+name = "Project"
+summary = "Projects, tasks, per-project stages and tags, with a task board for each project"
+description = """
+The Project app: organise work in projects and their tasks.
+
+- Projects (project.project) have a customer, a project manager, tags, a start and an end date, an \
+optional company and their own stages. A new project gets its own copies of the template stages (the \
+stages without a project), in board order; a project created with stages of its own keeps those, and a \
+copied project gets copies of the original's stages.
+- Tasks (project.task) belong to a project and have a stage of that project, assignees, a customer, \
+tags, a priority (normal or important), a status (in progress, changes requested, approved, done, \
+cancelled), a deadline, a description and subtasks.
+- A new task takes its project from its parent when none is given, its customer from its parent or \
+else its project, and starts in its project's first unfolded stage; an empty value counts as not \
+given. Explicit values and context defaults always win. A task without a project has no stage, \
+because every stage belongs to one project: a stage given without a project is refused.
+- Moving a task to another stage records when it entered the stage and puts an open task back to In \
+Progress; done and cancelled tasks keep their status. Moving a task to another project without a \
+stage puts it in that project's first unfolded stage. A stage never moves to another project, a task only uses \
+its own project's stages, and a task cannot be its own subtask.
+- Projects show their number of tasks and of open tasks, and a button opens their tasks.
+- Tag names are unique. Projects and tasks have a chatter: messages, followers, activities, and the \
+history of the project, stage, assignees, customer, priority, status and deadline of a task.
+- Views: an overview, the task board grouped by the selected project's stages, a task list, form, \
+search and a calendar of deadlines; projects have a board, a list, a form and a search; stages and \
+tags have a list and a form.
+- Security: the groups Project / User (works on projects and tasks, creates tags) and Project / \
+Manager (also creates and deletes projects, deletes tasks, and configures stages and tags). Settings \
+administrators are managers. Stages are readable with their project.
+- Default data: the template stages New, In Progress, Done and Cancelled (the last two folded).
+
+A project or task without a company is visible in every company; a project or task with a company is \
+visible only in that company. A task of a project always has the project's company, also after the \
+task moves or the project changes company; a task without a project gets the user's current company \
+unless another company, or none, is given.
+
+Not in this version: the board does not draw folded stages folded, and the task button of a project \
+opens a list and a form, not the board.
+"""
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+author = "ERPForAll"
+category = "Services/Project"
+application = true
+icon = "lucide:folder-kanban"
+depends = ["base", "web", "mail"]
+data = [
+    "security/project_security.xml",
+    "security/ir.access.csv",
+    "data/project_data.xml",
+    "views/project_tags_views.xml",
+    "views/project_task_type_views.xml",
+    "views/project_task_views.xml",
+    "views/project_project_views.xml",
+    "views/project_overview_views.xml",
+    "views/project_menus.xml",
+]
+demo = [
+    "demo/project_demo.xml",
+]

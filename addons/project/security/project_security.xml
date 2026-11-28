@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- The Project privilege and its two groups, from the least to the most access. A manager is also a user, and
+     Settings administrators are managers. -->
+<erp noupdate="1">
+  <record id="res_groups_privilege_project" model="res.groups.privilege">
+    <field name="name">Project</field>
+    <field name="description">Control who works on projects and tasks, and who configures them.</field>
+    <field name="placeholder">No project role</field>
+    <field name="sequence">40</field>
+  </record>
+
+  <record id="group_project_user" model="res.groups">
+    <field name="name">User</field>
+    <field name="sequence">10</field>
+    <field name="privilege_id" ref="res_groups_privilege_project"/>
+    <field name="implied_ids" eval="[Command.link(ref('base.group_user'))]"/>
+    <field name="comment">Works on projects and their tasks: creates and updates tasks, updates projects.</field>
+  </record>
+
+  <record id="group_project_manager" model="res.groups">
+    <field name="name">Manager</field>
+    <field name="sequence">20</field>
+    <field name="privilege_id" ref="res_groups_privilege_project"/>
+    <field name="implied_ids" eval="[Command.link(ref('project.group_project_user'))]"/>
+    <field name="implied_by_ids" eval="[Command.link(ref('base.group_system'))]"/>
+    <field name="comment">Also creates and deletes projects, deletes tasks, and configures stages and tags.</field>
+  </record>
+</erp>

@@ -1665,6 +1665,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "erp-addon-project"
+version = "0.1.0"
+dependencies = [
+ "erp-addon-base",
+ "erp-addon-mail",
+ "erp-addon-web",
+ "erp-sdk",
+ "erp-testkit",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "erp-addon-purchase"
 version = "0.1.0"
 dependencies = [
@@ -2161,6 +2174,7 @@ dependencies = [
  "erp-addon-product",
  "erp-addon-product-mail",
  "erp-addon-product_expiry",
+ "erp-addon-project",
  "erp-addon-purchase",
  "erp-addon-purchase-mail",
  "erp-addon-purchase-three-way-match",

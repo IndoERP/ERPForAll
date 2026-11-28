@@ -1,0 +1,21 @@
+[package]
+name = "erp-addon-project"
+description = "ERPForAll addon project: projects, tasks with per-project stages, tags"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+erp-addon-base.workspace = true
+erp-addon-web.workspace = true
+erp-addon-mail.workspace = true
+erp-testkit.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+toml.workspace = true
