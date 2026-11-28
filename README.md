@@ -207,8 +207,8 @@ Every financial and operational report shares one interactive tree-grid engine w
 | **Typed ORM** | Models, `_inherit` & extension mixins, relational/computed/related/binary/image fields, exact `Decimal` quantities & money, domains compiled to SQL, prefetch & cache, constraints, onchange, `read_group`, sequences, translations, multi-company |
 | **Addon Platform** | `manifest.toml` dependency graph, atomic install/upgrade/uninstall per database, `pre`/`post`/`end` migrations, data & demo XML/CSV loaders, data-only addons, sandboxed WebAssembly packages |
 | **Security** | Role & record rules compiled directly into SQL, field-level `groups`, company-scoped access, sessions, CSRF protection and API keys |
-| **Web Client** | List, form, kanban, pivot, graph, calendar and org views; search facets & group-by; rich-text editor; modal wizards; Settings pages; Chatter (messages, notes, followers, activities, attachments); light/dark & custom themes |
-| **Dynamic Reporting** | Unified interactive tree-grid engine with lazy unfolding, `totals_below`, period comparisons, locale dates & currency symbols, source drill-down, and PDF/XLSX exports |
+| **Web Client** | Operational app dashboards (**CRM Overview**, **Sales Overview**, **Purchase Overview**, **Contacts Overview**, **Approvals Overview**), declared sidebar/submenu icons, list/form/kanban/pivot/graph/calendar/org views; search facets & group-by; rich-text editor; modal wizards; guided CSV/XLSX import & export; **Discuss** workspace; Chatter with streaming HTTP uploads (up to 128 MiB); light/dark & custom themes |
+| **Dynamic Reporting** | Unified interactive tree-grid engine with lazy unfolding, `totals_below`, period comparisons, locale dates & currency symbols, per-order exchange-rate conversion, source drill-down, and PDF/XLSX exports |
 | **Printed Documents & Jobs** | QWeb PDF reports with company letterhead and paper formats; durable background jobs with deduplication and chunked steps |
 | **API & CLI** | JSON-2 RPC for every exposed model method under full access rules; unified `erp` CLI for databases, modules, scaffolding and server ops |
 
@@ -218,10 +218,11 @@ Every financial and operational report shares one interactive tree-grid engine w
 |---|---|
 | **Accounting & Reporting** | Customer invoices, vendor bills, credit notes & refunds, multi-currency payments & partial write-offs, bank statements & reconciliation, follow-up levels, fixed assets, analytic accounting & budgets, recurring/deferred entries, fiscal periods & locks, and full Dynamic Reports (**Partner Ledger, General Ledger, Trial Balance, Balance Sheet, Profit & Loss, Cash Flow, Aged Receivable/Payable, Tax, Analytic, Executive Summary**). |
 | **Inventory & Warehouse** | Multi-step receipts, deliveries & internal transfers, routes & putaway rules, storage categories, packages & packagings, lots/serials with expiry dates, physical inventory & cycle counts, replenishment rules, returns, scrap, backorders, landed costs, stock valuation, **Barcode scanning**, **Quality Control** checks and **Transport Dispatch**. |
-| **Sales** | Multi-currency pricelists, quotation templates, optional products, send by email & pro-forma PDFs, online customer signature, discounts & loyalty/coupons, down-payment invoicing with automatic deduction, exact-decimal profit margins, sales team targets dashboard, Kanban/Calendar/Pivot/Graph views and **Sales Dynamic Reports**. |
-| **Purchase** | RFQs & email sending, vendor pricelists, purchase agreements (blanket orders & calls for tenders), alternative RFQ comparison, receipt reminders, 3-way matching, vendor on-time delivery rate, Kanban/Calendar/Pivot/Graph views and **Purchase Dynamic Reports**. |
-| **Human Resources** | Employee directory & department hierarchy, contracts & history, job positions, work schedules, skills & certifications, resume entries, headcount analysis and departure tracking. |
-| **Products, Contacts & Mail** | Product variants, barcodes, packaging & UoM conversions; companies/contacts directory; integrated Chatter with messages, internal notes, followers, activities and file attachments across documents. |
+| **CRM & Sales** | **CRM Overview** dashboard with one-click **Submit Lead** modal, lead scoring & assignment rules, opportunity pipeline Kanban, quotas & forecasting, direct quotation creation (`sale_crm`), multi-currency pricelists, quotation templates, optional products, send by email & pro-forma PDFs, online customer signature, discounts & loyalty/coupons, down-payment invoicing, exact-decimal profit margins, Kanban/Calendar/Pivot/Graph views and **Sales Dynamic Reports**. |
+| **Purchase** | **Purchase Overview** dashboard, RFQs & email sending, vendor pricelists, purchase agreements (blanket orders & calls for tenders), alternative RFQ comparison, receipt reminders, 3-way matching, vendor on-time delivery rate, Kanban/Calendar/Pivot/Graph views and **Purchase Dynamic Reports**. |
+| **Human Resources** | Employee directory & department hierarchy, interactive org chart, contracts & history, job positions, work schedules, skills & certifications, resume entries, headcount analysis and departure tracking. |
+| **AI Assistant & Approvals** | **AI Assistant** with formatted replies, role-scoped ERP actions, **Canvas Studio**, **Saved Insights**, and **Implementation Projects**; native **Approvals** with multistage workflows, immutable policy revisions, and an activity inbox. |
+| **Products, Contacts & Mail** | Product variants, barcodes, packaging & UoM conversions; companies/contacts directory (**Contacts Overview**, List & Kanban); **Discuss** real-time workspace, outbound SMTP email, and integrated Chatter with messages, internal notes, followers, activities and streaming HTTP attachments across documents. |
 
 ---
 
@@ -311,8 +312,8 @@ See [docs/install.md](docs/install.md) for manual setup, custom PostgreSQL serve
 
 ## Roadmap
 
-- **Now:** polish daily UX across Accounting, Inventory, Sales, Purchase and HR; expand test coverage and localization hooks.
-- **Next:** additional views (Gantt, Map), Manufacturing (MRP), CRM pipeline and Project management addons.
+- **Now:** polish daily UX across CRM, Accounting, Inventory, Sales, Purchase, HR, Approvals, and AI Assistant; expand test coverage and localization hooks.
+- **Next:** additional views (Gantt, Map), Manufacturing (MRP), and Project management addons.
 - **Later:** continuous performance profiling, multi-node clustering enhancements and ecosystem addon packaging.
 
 ---
@@ -322,7 +323,7 @@ See [docs/install.md](docs/install.md) for manual setup, custom PostgreSQL serve
 | Path | Description |
 |---|---|
 | [`crates/`](crates/) | Core Rust framework: typed ORM, registry, module system, data loader, security engine, HTTP/RPC server, QWeb/PDF reports, addon SDK and `erp` CLI. |
-| [`addons/`](addons/) | Built-in applications: `base`, `web`, `uom`, `contacts`, `product`, `mail`, `reporting`, `account`, `account_reporting`, `stock`, `stock_account`, `stock_barcode`, `quality_control`, `sale`, `purchase`, `hr`, bridges and `sample_library`. |
+| [`addons/`](addons/) | Built-in applications: `base`, `web`, `uom`, `contacts`, `product`, `mail`, `reporting`, `account`, `account_reporting`, `stock`, `stock_account`, `stock_barcode`, `quality_control`, `crm`, `sale`, `sale_crm`, `purchase`, `hr`, `approvals`, `ai_base`, bridges and `sample_library`. |
 | [`web/`](web/) | Web client runtime (TypeScript) and browser benchmark/verification scripts. |
 | [`docs/`](docs/) | Guides ([install](docs/install.md), [development](docs/development.md), [deployment](docs/deployment.md)) and the [full-cycle media showcase](docs/showcase/README.md). |
 | [`examples/`](examples/) & [`wit/`](wit/) | Sandboxed WebAssembly addon examples and WIT component interfaces. |
