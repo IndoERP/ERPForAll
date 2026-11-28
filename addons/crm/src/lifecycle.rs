@@ -316,7 +316,8 @@ impl CrmLead {
         let wants = |field: &str| fields.iter().any(|f| f == field);
         let env = this.env();
         if wants("user_id")
-            && env.context().get("crm_personal_form") == Some(Value::Bool(true))
+            && env.context().get("crm_personal_form") != Some(Value::Bool(false))
+            && env.context().get("import_file") != Some(Value::Bool(true))
             && !env.su()
             && !tx
                 .has_group(env, "sales_team.group_sale_salesman_all_leads")

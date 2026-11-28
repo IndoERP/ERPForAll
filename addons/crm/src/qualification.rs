@@ -99,7 +99,7 @@ impl PartnerMatching {
             .await?;
         let id = partner.int()?;
         Ok(Value::Json(Arc::new(
-            json!({"type":"ir.actions.act_window","name":"Opportunities","res_model":"crm.lead","target":"current","views":[[false,"list"],[false,"form"]],"domain":["&",["kind","=","opportunity"],"|",["partner_id","=",id],["contact_role_ids.partner_id","=",id]],"context":{"default_kind":"opportunity","default_partner_id":id,"crm_personal_form":true}}),
+            json!({"type":"ir.actions.act_window","name":"Opportunities","res_model":"crm.lead","target":"current","views":[[false,"list"],[false,"form"]],"domain":["&",["kind","=","opportunity"],"|",["partner_id","=",id],["contact_role_ids.partner_id","=",id]],"context":{"default_kind":"opportunity","default_partner_id":id}}),
         )))
     }
 }
